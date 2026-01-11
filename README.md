@@ -1,36 +1,62 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Notion AI Chat Assistant
 
-## Getting Started
+A premium AI-powered web application that allows users to chat with their Notion databases. Users can authenticate using their Google accounts to interact with their Notion data through a sleek, modern interface powered by Gemini 1.5 Flash.
 
-First, run the development server:
+## 🌟 Purpose
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+The **Notion AI Chat Assistant** is designed to bridge the gap between static Notion documentation and interactive information retrieval. Instead of manually searching through rows and pages, users can ask natural language questions and receive accurate, context-aware answers derived directly from their personal or shared Notion databases.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## ✨ Features
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+-   **Google OAuth Login**: Seamless authentication using `next-auth`.
+-   **Notion Integration**: Real-time content fetching from Notion databases using the official SDK.
+-   **Gemini AI Engine**: Leveraging Google's Gemini 1.5 Flash for high-speed, intelligent responses.
+-   **Premium Design**: A high-end dark mode interface built with Tailwind CSS and glassmorphism.
+-   **Context-Aware**: AI responses are strictly grounded in your Notion database content.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 🚀 Getting Started
 
-## Learn More
+### Prerequisites
 
-To learn more about Next.js, take a look at the following resources:
+You will need the following API keys:
+-   **Google Cloud Console**: For OAuth Client ID and Secret.
+-   **Notion Integrations**: For the Internal Integration Token.
+-   **Google AI Studio**: For the Gemini API Key.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Installation
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/navgurukul/notion-chat-app.git
+    cd notion-chat-app
+    ```
 
-## Deploy on Vercel
+2.  Install dependencies:
+    ```bash
+    npm install
+    ```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+3.  Setup Environment Variables:
+    Copy `.env.example` to `.env.local` and fill in your keys:
+    ```bash
+    cp .env.example .env.local
+    ```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+4.  Run the development server:
+    ```bash
+    npm run dev
+    ```
+
+5.  Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+## 🛠 Tech Stack
+
+-   **Framework**: [Next.js](https://nextjs.org/) (App Router)
+-   **Authentication**: [NextAuth.js](https://next-auth.js.org/)
+-   **AI**: [Google Gemini SDK](https://ai.google.dev/)
+-   **Database API**: [@notionhq/client](https://www.npmjs.com/package/@notionhq/client)
+-   **Styling**: Tailwind CSS & Lucide Icons
+
+## 📜 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
