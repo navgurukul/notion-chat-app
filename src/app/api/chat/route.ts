@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { getDatabaseContent } from "@/lib/notion";
-import { getChatResponse } from "@/lib/gemini";
+import { getChatStream } from "@/lib/gemini";
 
 export async function POST(req: NextRequest) {
     try {
@@ -18,9 +18,22 @@ export async function POST(req: NextRequest) {
         const databaseId = process.env.NOTION_DATABASE_ID!;
         const notionContext = await getDatabaseContent(databaseId);
 
-        const aiResponse = await getChatResponse(message, notionContext);
+        const stream = await getChatStream(message, notionContext);
 
-        return NextResponse.json({ response: aiResponse });
+        const encoder = new TextEncoder();
+        const readableStream = new ReadableStream({
+            async start(controller) {
+                for await (const chunk of stream) {
+                    const text = chunk.text();
+                    controller.enqueue(encoder.encode(text));
+                }
+                controller.close();
+            },
+        });
+
+        return new Response(readableStream, {
+            headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
     } catch (error) {
         console.error("Chat API Error:", error);
         return NextResponse.json({ error: "Failed to get response" }, { status: 500 });
