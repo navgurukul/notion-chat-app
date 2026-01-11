@@ -1,63 +1,200 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useSession, signOut } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState, useRef } from "react";
+import { Send, LogOut, MessageSquare, Bot, User, Loader2 } from "lucide-react";
+
+interface Message {
+  role: "user" | "bot";
+  content: string;
+}
+
+export default function ChatPage() {
+  const { data: session, status } = useSession();
+  const router = useRouter();
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      router.push("/login");
+    }
+  }, [status, router]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isLoading) return;
+
+    const userMessage = input.trim();
+    setInput("");
+    setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
+    setIsLoading(true);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: userMessage }),
+      });
+
+      const data = await response.json();
+      if (data.response) {
+        setMessages((prev) => [...prev, { role: "bot", content: data.response }]);
+      } else {
+        setMessages((prev) => [...prev, { role: "bot", content: "Sorry, I encountered an error." }]);
+      }
+    } catch (error) {
+      setMessages((prev) => [...prev, { role: "bot", content: "Failed to connect to the server." }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] text-white">
+        <Loader2 className="animate-spin h-10 w-10 text-blue-500" />
+      </div>
+    );
+  }
+
+  if (!session) return null;
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="flex h-screen bg-[#0a0a0a] text-white overflow-hidden">
+      {/* Sidebar */}
+      <aside className="w-80 bg-white/5 border-r border-white/10 backdrop-blur-xl flex flex-col">
+        <div className="p-6 border-b border-white/10">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="p-2 rounded-lg bg-blue-600">
+              <MessageSquare className="w-6 h-6" />
+            </div>
+            <h1 className="text-xl font-bold tracking-tight">Notion AI</h1>
+          </div>
+
+          <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
+            {session.user?.image ? (
+              <img src={session.user.image} alt="User" className="w-10 h-10 rounded-full" />
+            ) : (
+              <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-bold">
+                {session.user?.name?.[0]}
+              </div>
+            )}
+            <div className="flex-1 overflow-hidden">
+              <p className="text-sm font-medium truncate">{session.user?.name}</p>
+              <p className="text-xs text-white/40 truncate">{session.user?.email}</p>
+            </div>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+
+        <div className="flex-1 p-4 overflow-y-auto">
+          {/* Recent chats placeholder or database info */}
+          <div className="text-xs font-semibold text-white/30 uppercase tracking-wider mb-4 px-2">
+            Active Connection
+          </div>
+          <div className="p-3 rounded-lg bg-blue-600/10 border border-blue-500/20 text-blue-400 text-sm flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+            Connected to Notion Database
+          </div>
+        </div>
+
+        <div className="p-4 border-t border-white/10">
+          <button
+            onClick={() => signOut()}
+            className="w-full p-3 rounded-xl flex items-center gap-3 text-white/60 hover:text-white hover:bg-white/5 transition-colors"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+            <LogOut className="w-5 h-5" />
+            Sign Out
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Chat Area */}
+      <main className="flex-1 flex flex-col relative">
+        {/* Header */}
+        <header className="h-16 border-b border-white/10 flex items-center px-8 bg-[#0a0a0a]/50 backdrop-blur-md z-10">
+          <h2 className="text-lg font-medium">Chat Assistant</h2>
+        </header>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-8 space-y-8 scroll-smooth">
+          {messages.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto">
+              <div className="p-6 rounded-3xl bg-blue-600/10 mb-6">
+                <Bot className="w-12 h-12 text-blue-500" />
+              </div>
+              <h3 className="text-2xl font-bold mb-2">How can I help you?</h3>
+              <p className="text-white/40">
+                Ask me anything about the content in your Notion database. I can summarize, find details, and answer specific questions.
+              </p>
+            </div>
+          ) : (
+            messages.map((msg, idx) => (
+              <div
+                key={idx}
+                className={`flex gap-4 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}
+              >
+                <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${msg.role === "user" ? "bg-white text-black" : "bg-blue-600 text-white"
+                  }`}>
+                  {msg.role === "user" ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
+                </div>
+                <div className={`max-w-[80%] p-4 rounded-2xl ${msg.role === "user"
+                    ? "bg-white/10 border border-white/10 rounded-tr-none"
+                    : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
+                  }`}>
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                </div>
+              </div>
+            ))
+          )}
+          {isLoading && (
+            <div className="flex gap-4">
+              <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center">
+                <Bot className="w-5 h-5" />
+              </div>
+              <div className="p-4 rounded-2xl bg-blue-600/10 border border-blue-500/10 rounded-tl-none">
+                <div className="flex gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce [animation-delay:-0.3s]" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce [animation-delay:-0.15s]" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce" />
+                </div>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Input Area */}
+        <div className="p-8">
+          <form
+            onSubmit={handleSend}
+            className="max-w-4xl mx-auto relative group"
+          >
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Ask anything..."
+              className="w-full p-4 pr-14 rounded-2xl bg-white/5 border border-white/10 focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.07] transition-all placeholder:text-white/20"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            <button
+              type="submit"
+              disabled={!input.trim() || isLoading}
+              className="absolute right-2 top-2 p-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 transition-all"
+            >
+              <Send className="w-5 h-5" />
+            </button>
+          </form>
+          <p className="text-center text-[10px] text-white/20 mt-4 uppercase tracking-[0.2em]">
+            Powered by Notion & Gemini AI
+          </p>
         </div>
       </main>
     </div>
