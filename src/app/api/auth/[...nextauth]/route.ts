@@ -15,35 +15,14 @@ const handler = NextAuth({
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-      authorization: {
-        params: {
-          prompt: "consent",
-          access_type: "offline",
-          response_type: "code"
-        }
-      }
     }),
   ],
   pages: {
     signIn: "/login",
-    error: "/login",
   },
-  debug: true,
-  useSecureCookies: true, // Force secure cookies in production
   callbacks: {
     async session({ session, token }) {
       return session;
-    },
-  },
-  logger: {
-    error(code, metadata) {
-      console.error("NextAuth Error:", code, metadata);
-    },
-    warn(code) {
-      console.warn("NextAuth Warning:", code);
-    },
-    debug(code, metadata) {
-      console.log("NextAuth Debug:", code, metadata);
     },
   },
 });
