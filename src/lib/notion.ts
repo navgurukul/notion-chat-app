@@ -2,12 +2,12 @@ import { Client } from "@notionhq/client";
 
 // ✅ Your existing working function - UNCHANGED
 export async function getPageContext(pageId: string) {
-  if (!process.env.NOTION_TOKEN) {
+  if (!process.env.NEXT_PUBLIC_NOTION_TOKEN) {
     throw new Error("NOTION_TOKEN is not configured");
   }
 
   const notion = new Client({
-    auth: process.env.NOTION_TOKEN,
+    auth: process.env.NEXT_PUBLIC_NOTION_TOKEN,
   });
 
   // 1️⃣ Get page metadata
@@ -57,17 +57,17 @@ ${pageContent}
 // 🚀 NEW: Get all documents from All Docs database
 export async function getAllDocuments() {
   try {
-    if (!process.env.NOTION_TOKEN) {
+    if (!process.env.NEXT_PUBLIC_NOTION_TOKEN) {
       throw new Error("NOTION_TOKEN is not configured");
     }
 
     const notion = new Client({
-      auth: process.env.NOTION_TOKEN,
+      auth: process.env.NEXT_PUBLIC_NOTION_TOKEN,
     });
 
     // ✅ Use environment variable instead of hardcoded ID
     const allDocsResponse = await notion.databases.query({
-      database_id: process.env.NOTION_DATABASE_ID!,
+      database_id: process.env.NEXT_PUBLIC_NOTION_DATABASE_ID!,
       page_size: 100,
     });
 
