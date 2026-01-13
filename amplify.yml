@@ -1,0 +1,22 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - npm ci
+    build:
+      commands:
+        - npm run build
+  artifacts:
+    baseDirectory: .next
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*
+      - .next/cache/**/*
+backend:
+  phases:
+    build:
+      commands:
+        - env | grep -e NEXTAUTH_SECRET -e NEXTAUTH_URL -e GOOGLE_CLIENT_ID -e GOOGLE_CLIENT_SECRET -e NOTION_TOKEN -e NOTION_DATABASE_ID -e GEMINI_API_KEY
