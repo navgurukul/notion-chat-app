@@ -1,46 +1,59 @@
+
+ 
 import { Client } from "@notionhq/client";
 
-export async function getDatabaseContent(databaseId: string) {
-  try {
-    if (!process.env.NOTION_TOKEN) {
-      throw new Error("NOTION_TOKEN is not configured");
-    }
-
-    const notion = new Client({
-      auth: process.env.NOTION_TOKEN,
-    });
-
-    // Use search API to get database pages
-    const response = await notion.search({
-      filter: {
-        property: "object",
-        value: "page",
-      },
-      page_size: 100,
-    });
-
-    // Extract text content from the database rows
-    // This is a simplified version; in a real app, you'd handle different property types
-    const content = response.results
-      .map((page: any) => {
-        const properties = page.properties;
-        return Object.values(properties)
-          .map((prop: any) => {
-            if (prop.type === "title") return prop.title[0]?.plain_text || "";
-            if (prop.type === "rich_text")
-              return prop.rich_text[0]?.plain_text || "";
-            if (prop.type === "select") return prop.select?.name || "";
-            if (prop.type === "multi_select")
-              return prop.multi_select.map((s: any) => s.name).join(", ");
-            return "";
-          })
-          .join(" | ");
-      })
-      .join("\n");
-
-    return content;
-  } catch (error) {
-    console.error("Notion Error:", error);
-    throw error;
+export async function getPageContext(pageId: string) {
+  if (!process.env.NOTION_TOKEN) {
+    throw new Error("NOTION_TOKEN is not configured");
   }
+
+  const notion = new Client({
+    auth: process.env.NOTION_TOKEN,
+  });
+
+  // 1️⃣ Get page metadata
+  const page = await notion.pages.retrieve({ page_id: pageId });
+
+  const title =
+    page.properties?.Name?.title
+      ?.map((t: any) => t.plain_text)
+      .join("") || "Untitled";
+
+  const owner =
+    page.properties?.Owner?.people
+      ?.map((p: any) => p.name)
+      .join(", ") || "Not specified";
+
+  const createdDate = new Date(page.created_time).toLocaleString();
+
+  // 2️⃣ Get page content (blocks)
+  const blocks = await notion.blocks.children.list({
+    block_id: pageId,
+    page_size: 100,
+  });
+
+  const pageContent = blocks.results
+    .map((block: any) => {
+      const type = block.type;
+      const richText = block[type]?.rich_text;
+      if (!richText) return "";
+
+      return richText.map((t: any) => t.plain_text).join("");
+    })
+    .filter(Boolean)
+    .join("\n");
+
+  // 3️⃣ Build FINAL context (this is what Gemini sees)
+  const context = `
+DOCUMENT METADATA
+Title: ${title}
+Owner: ${owner}
+Created date: ${createdDate}
+
+DOCUMENT CONTENT
+${pageContent}
+`;
+
+  return context;
 }
+

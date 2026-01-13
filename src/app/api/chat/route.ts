@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
-import { getDatabaseContent } from "@/lib/notion";
+import { getPageContext } from "@/lib/notion";
 import { getChatStream } from "@/lib/gemini";
 
 export async function POST(req: NextRequest) {
@@ -18,10 +18,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const databaseId = process.env.NOTION_DATABASE_ID!;
-    const notionContext = await getDatabaseContent(databaseId);
+  const pageId = process.env.NOTION_DATABASE_ID!;
+const context = await getPageContext(pageId);
 
-    const stream = await getChatStream(message, notionContext);
+const stream = await getChatStream(message, context);
 
     const encoder = new TextEncoder();
     const readableStream = new ReadableStream({
