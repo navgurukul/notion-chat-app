@@ -11,7 +11,7 @@ export async function getPageContext(pageId: string) {
   });
 
   // 1️⃣ Get page metadata
-  const page = await notion.pages.retrieve({ page_id: pageId });
+  const page: any = await notion.pages.retrieve({ page_id: pageId });
 
   const title =
     page.properties?.Name?.title?.map((t: any) => t.plain_text).join("") ||
@@ -149,7 +149,6 @@ export async function getMultiDocumentContext(documentIds: string[]) {
 
   return contexts.join("\n\n--- NEXT DOCUMENT ---\n\n");
 }
-
 
 // 🚀 Smart context builder that always uses all document data
 export async function getSmartContext(userQuestion: string) {

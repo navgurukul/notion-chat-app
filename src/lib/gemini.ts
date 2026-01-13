@@ -7,9 +7,6 @@ export async function getChatResponse(prompt: string, context: string) {
   try {
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
-      generationConfig: {
-        apiVersion: "v1",
-      },
     });
 
     const systemPrompt = `
