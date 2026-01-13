@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
+// ✅ Your existing working function - UNCHANGED
 export async function getChatResponse(prompt: string, context: string) {
   try {
     const model = genAI.getGenerativeModel({
@@ -12,7 +13,7 @@ export async function getChatResponse(prompt: string, context: string) {
     });
 
     const systemPrompt = `
-      You are an AI assistant that answers questions based on a Notion database. 
+      You are an AI assistant that answers questions based on NavGurukul's Notion documentation. 
       Below is the content extracted from the database:
       
       ---
@@ -31,12 +32,13 @@ export async function getChatResponse(prompt: string, context: string) {
   }
 }
 
+// ✅ Your existing working function - UNCHANGED
 export async function getChatStream(prompt: string, context: string) {
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
     const systemPrompt = `
-      You are an AI assistant that answers questions based on a Notion database. 
+      You are an AI assistant that answers questions based on NavGurukul's Notion documentation. 
       Below is the content extracted from the database:
       
       ---

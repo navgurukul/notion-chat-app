@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
-import { getPageContext } from "@/lib/notion";
+import { getSmartContext } from "@/lib/notion";
 import { getChatStream } from "@/lib/gemini";
 
 export async function POST(req: NextRequest) {
@@ -18,10 +18,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-  const pageId = process.env.NOTION_DATABASE_ID!;
-const context = await getPageContext(pageId);
+    // 🚀 Use smart context to find and fetch relevant documents
+    const notionContext = await getSmartContext(message);
 
-const stream = await getChatStream(message, context);
+    const stream = await getChatStream(message, notionContext);
 
     const encoder = new TextEncoder();
     const readableStream = new ReadableStream({
