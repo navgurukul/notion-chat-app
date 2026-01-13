@@ -1,10 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  // Remove standalone for Amplify deployment
 };
 
 export default nextConfig;
-
-
-

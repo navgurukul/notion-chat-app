@@ -11,10 +11,23 @@ const handler = NextAuth({
   ],
   pages: {
     signIn: "/login",
+    error: "/login", // Redirect to login page on error
   },
+  debug: true, // Enable debug mode
   callbacks: {
     async session({ session, token }) {
       return session;
+    },
+  },
+  logger: {
+    error(code, metadata) {
+      console.error("NextAuth Error:", code, metadata);
+    },
+    warn(code) {
+      console.warn("NextAuth Warning:", code);
+    },
+    debug(code, metadata) {
+      console.log("NextAuth Debug:", code, metadata);
     },
   },
 });
