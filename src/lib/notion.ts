@@ -1,13 +1,13 @@
 import { Client } from "@notionhq/client";
 
-// ✅ Your existing working function - UNCHANGED
+//  Your existing working function - UNCHANGED
 export async function getPageContext(pageId: string) {
-  if (!process.env.NEXT_PUBLIC_NOTION_TOKEN) {
+  if (!process.env.NOTION_TOKEN) {
     throw new Error("NOTION_TOKEN is not configured");
   }
 
   const notion = new Client({
-    auth: process.env.NEXT_PUBLIC_NOTION_TOKEN,
+    auth: process.env.NOTION_TOKEN,
   });
 
   // 1️⃣ Get page metadata
@@ -57,17 +57,17 @@ ${pageContent}
 // 🚀 NEW: Get all documents from All Docs database
 export async function getAllDocuments() {
   try {
-    if (!process.env.NEXT_PUBLIC_NOTION_TOKEN) {
+    if (!process.env.NOTION_TOKEN) {
       throw new Error("NOTION_TOKEN is not configured");
     }
 
     const notion = new Client({
-      auth: process.env.NEXT_PUBLIC_NOTION_TOKEN,
+      auth: process.env.NOTION_TOKEN,
     });
 
     // ✅ Use environment variable instead of hardcoded ID
     const allDocsResponse = await notion.databases.query({
-      database_id: process.env.NEXT_PUBLIC_NOTION_DATABASE_ID!,
+      database_id: process.env.NOTION_DATABASE_ID!,
       page_size: 100,
     });
 
@@ -143,7 +143,7 @@ export async function getMultiDocumentContext(documentIds: string[]) {
       const context = await getPageContext(docId);
       contexts.push(context);
     } catch (error) {
-      console.error(`❌ Failed to fetch document ${docId}:`, error);
+      console.error(` Failed to fetch document ${docId}:`, error);
     }
   }
 
@@ -183,7 +183,7 @@ ${allDocs.length > 10 ? `\n... and ${allDocs.length - 10} more documents` : ""}
 Try asking about specific topics, people, or projects mentioned in these documents.`;
     }
   } catch (error) {
-    console.error("❌ Error in smart context:", error);
+    console.error(" Error in smart context:", error);
     throw error; // Let the error bubble up instead of using fallback
   }
 }
