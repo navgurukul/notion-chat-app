@@ -10,6 +10,8 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-agent-runtime": "^3.968.0",
+    "@aws-sdk/credential-providers": "^3.968.0",
     "@google/generative-ai": "^0.24.1",
     "@notionhq/client": "^2.2.15",
     "@tailwindcss/typography": "^0.5.19",
