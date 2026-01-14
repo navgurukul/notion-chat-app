@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Remove standalone for Amplify deployment
 };
 
 export default nextConfig;
