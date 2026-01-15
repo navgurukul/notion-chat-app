@@ -3,7 +3,7 @@
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
-import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X } from "lucide-react";
+import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle } from "lucide-react";
 import { saveMessage, getMessages, clearMessages } from "@/lib/db";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -20,6 +20,8 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -101,6 +103,32 @@ export default function ChatPage() {
     signOut();
   };
 
+  const handleSync = async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    setSyncStatus('idle');
+
+    try {
+      const response = await fetch("/api/sync", {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "Failed to sync");
+      }
+
+      setSyncStatus('success');
+      setTimeout(() => setSyncStatus('idle'), 5000);
+    } catch (error) {
+      console.error("Sync error:", error);
+      setSyncStatus('error');
+      setTimeout(() => setSyncStatus('idle'), 5000);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   if (status === "loading") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] text-white">
@@ -177,10 +205,42 @@ export default function ChatPage() {
           <div className="text-xs font-semibold text-white/30 uppercase tracking-wider mb-4 px-2">
             Active Connection
           </div>
-          <div className="p-3 rounded-lg bg-blue-600/10 border border-blue-500/20 text-blue-400 text-sm flex items-center gap-2">
+          <div className="p-3 rounded-lg bg-blue-600/10 border border-blue-500/20 text-blue-400 text-sm flex items-center mb-6 gap-2">
             <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
             Connected to Notion Database
           </div>
+
+          <div className="text-xs font-semibold text-white/30 uppercase tracking-wider mb-4 px-2">
+            Database Sync
+          </div>
+          <button
+            onClick={handleSync}
+            disabled={isSyncing}
+            className={`w-full p-4 rounded-xl border flex flex-col items-center gap-3 transition-all ${isSyncing
+              ? "bg-white/5 border-white/10"
+              : syncStatus === 'success'
+                ? "bg-green-500/10 border-green-500/50 text-green-400"
+                : syncStatus === 'error'
+                  ? "bg-red-500/10 border-red-500/50 text-red-400"
+                  : "bg-white/5 border-white/10 hover:bg-white/[0.08] text-white/70 hover:text-white"
+              }`}
+          >
+            {isSyncing ? (
+              <RefreshCw className="w-6 h-6 animate-spin text-blue-500" />
+            ) : syncStatus === 'success' ? (
+              <CheckCircle className="w-6 h-6" />
+            ) : syncStatus === 'error' ? (
+              <XCircle className="w-6 h-6" />
+            ) : (
+              <RefreshCw className="w-6 h-6" />
+            )}
+            <div className="text-center">
+              <span className="text-sm font-bold block">
+                {isSyncing ? "Syncing..." : syncStatus === 'success' ? "Sync Success" : syncStatus === 'error' ? "Sync Failed" : "Sync Database"}
+              </span>
+              <span className="text-[10px] opacity-40 uppercase tracking-widest mt-1">Notion → Bedrock</span>
+            </div>
+          </button>
         </div>
 
         <div className="p-4 border-t border-white/10">
@@ -224,8 +284,8 @@ export default function ChatPage() {
                   {msg.role === "user" ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
                 </div>
                 <div className={`max-w-[80%] p-4 rounded-2xl ${msg.role === "user"
-                    ? "bg-white/10 border border-white/10 rounded-tr-none"
-                    : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
+                  ? "bg-white/10 border border-white/10 rounded-tr-none"
+                  : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
                   }`}>
                   <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
