@@ -21,6 +21,8 @@ export async function retrieveNotionContext(query: string) {
 
     const response = await client.send(command);
 
+    console.log(`📡 Bedrock returned ${response.retrievalResults?.length || 0} chunks`);
+
     const context = response.retrievalResults
       ?.map((result) => result.content?.text)
       .filter(Boolean)

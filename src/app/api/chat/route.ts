@@ -21,6 +21,12 @@ export async function POST(req: NextRequest) {
     // 🚀 Use AWS Bedrock Knowledge Base for scalable RAG
     const notionContext = await retrieveNotionContext(message);
 
+    console.log("🔍 Search Query:", message);
+    console.log("📄 Retrieved Context Length:", notionContext?.length || 0);
+    if (!notionContext) {
+      console.warn("⚠️ Warning: Notion context is empty! The AI might not have enough data to answer.");
+    }
+
     const stream = await getChatStream(message, notionContext);
 
     const encoder = new TextEncoder();

@@ -6,7 +6,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 export async function getChatResponse(prompt: string, context: string) {
   try {
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
+      model: "gemini-1.5-flash",
     });
 
     const systemPrompt = `
@@ -32,7 +32,7 @@ export async function getChatResponse(prompt: string, context: string) {
 //  Your existing working function - UNCHANGED
 export async function getChatStream(prompt: string, context: string) {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
     const systemPrompt = `
       You are an AI assistant that answers questions based on NavGurukul's Notion documentation. 
