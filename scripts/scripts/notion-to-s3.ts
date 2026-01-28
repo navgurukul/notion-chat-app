@@ -53,7 +53,7 @@ async function fetchBlocksRecursively(blockId: string): Promise<string[]> {
       const text = extractText(block);
       if (text) texts.push(text);
 
-      if (block.has_children) {
+      if ("has_children" in block && block.has_children) {
         const childTexts = await fetchBlocksRecursively(block.id);
         texts.push(...childTexts);
       }
@@ -106,6 +106,7 @@ async function run() {
 
     for (const item of res.results) {
       if (item.object !== "page") continue;
+      if (!("last_edited_time" in item)) continue;
 
       const pageId = item.id;
       const title = getPageTitle(item);
