@@ -14,7 +14,9 @@ if (!process.env.S3_BUCKET_NAME) {
   throw new Error("❌ S3_BUCKET_NAME missing in .env");
 }
 
-console.log("Using Notion token:", process.env.NOTION_TOKEN.slice(0, 10));
+console.log("✅ Using Notion token:", process.env.NOTION_TOKEN.slice(0, 15) + "...");
+console.log("✅ Using S3 bucket:", process.env.S3_BUCKET_NAME);
+console.log("");
 
 /* --------------------
    CLIENTS
@@ -30,23 +32,26 @@ const s3 = new S3Client({
 const BUCKET = process.env.S3_BUCKET_NAME;
 
 /* --------------------
-   HELPERS
+   HELPER: Extract Text from Blocks
 -------------------- */
 function extractText(block: any): string {
   const type = block.type;
   
-  // Handle different block types
+  // Handle code blocks with syntax highlighting info
   if (type === 'code') {
     const rt = block.code?.rich_text;
     if (!rt) return "";
     const code = rt.map((t: any) => t.plain_text).join("");
-    return `\`\`\`${block.code?.language || ''}\n${code}\n\`\`\``;
+    const language = block.code?.language || 'text';
+    return `\`\`\`${language}\n${code}\n\`\`\``;
   }
   
+  // Handle equations
   if (type === 'equation') {
     return `Equation: ${block.equation?.expression || ''}`;
   }
   
+  // Handle table rows
   if (type === 'table_row') {
     const cells = block.table_row?.cells || [];
     return cells.map((cell: any[]) => 
@@ -54,15 +59,61 @@ function extractText(block: any): string {
     ).join(' | ');
   }
   
-  // Handle media blocks
+  // Handle numbered lists
+  if (type === 'numbered_list_item') {
+    const rt = block.numbered_list_item?.rich_text;
+    if (!rt) return "";
+    return rt.map((t: any) => t.plain_text).join("");
+  }
+  
+  // Handle bulleted lists
+  if (type === 'bulleted_list_item') {
+    const rt = block.bulleted_list_item?.rich_text;
+    if (!rt) return "";
+    return "• " + rt.map((t: any) => t.plain_text).join("");
+  }
+  
+  // Handle to-do lists
+  if (type === 'to_do') {
+    const rt = block.to_do?.rich_text;
+    const checked = block.to_do?.checked ? '[x]' : '[ ]';
+    if (!rt) return "";
+    return `${checked} ${rt.map((t: any) => t.plain_text).join("")}`;
+  }
+  
+  // Handle toggle blocks
+  if (type === 'toggle') {
+    const rt = block.toggle?.rich_text;
+    if (!rt) return "";
+    return "▶ " + rt.map((t: any) => t.plain_text).join("");
+  }
+  
+  // Handle quotes
+  if (type === 'quote') {
+    const rt = block.quote?.rich_text;
+    if (!rt) return "";
+    return "> " + rt.map((t: any) => t.plain_text).join("");
+  }
+  
+  // Handle callouts
+  if (type === 'callout') {
+    const rt = block.callout?.rich_text;
+    const icon = block.callout?.icon?.emoji || '💡';
+    if (!rt) return "";
+    return `${icon} ${rt.map((t: any) => t.plain_text).join("")}`;
+  }
+  
+  // Handle media blocks with captions
   if (type === 'image') {
     const caption = block.image?.caption?.map((t: any) => t.plain_text).join('') || '';
-    return caption ? `[Image: ${caption}]` : '[Image]';
+    const url = block.image?.file?.url || block.image?.external?.url || '';
+    return caption ? `[Image: ${caption}]` : `[Image: ${url}]`;
   }
   
   if (type === 'video') {
     const caption = block.video?.caption?.map((t: any) => t.plain_text).join('') || '';
-    return caption ? `[Video: ${caption}]` : '[Video]';
+    const url = block.video?.file?.url || block.video?.external?.url || '';
+    return caption ? `[Video: ${caption}]` : `[Video: ${url}]`;
   }
   
   if (type === 'file') {
@@ -109,17 +160,39 @@ function extractText(block: any): string {
     return '[Breadcrumb]';
   }
   
-  // Unsupported or unknown block types - return empty string to avoid crash
+  // Skip unsupported blocks silently
   if (type === 'unsupported' || type === 'transcription' || type === 'synced_block') {
     return '';
   }
   
-  // Default rich_text extraction for standard blocks
+  // Handle headings with proper formatting
+  if (type === 'heading_1') {
+    const rt = block.heading_1?.rich_text;
+    if (!rt) return "";
+    return "# " + rt.map((t: any) => t.plain_text).join("");
+  }
+  
+  if (type === 'heading_2') {
+    const rt = block.heading_2?.rich_text;
+    if (!rt) return "";
+    return "## " + rt.map((t: any) => t.plain_text).join("");
+  }
+  
+  if (type === 'heading_3') {
+    const rt = block.heading_3?.rich_text;
+    if (!rt) return "";
+    return "### " + rt.map((t: any) => t.plain_text).join("");
+  }
+  
+  // Default: extract rich_text from standard blocks (paragraph, etc.)
   const rt = block?.[type]?.rich_text;
   if (!rt) return "";
   return rt.map((t: any) => t.plain_text).join("");
 }
 
+/* --------------------
+   HELPER: Extract Property Values
+-------------------- */
 function extractPropertyValue(prop: any): string | null {
   if (!prop) return null;
   
@@ -173,9 +246,13 @@ function extractPropertyValue(prop: any): string | null {
   }
 }
 
-async function fetchBlocksRecursively(blockId: string): Promise<string[]> {
+/* --------------------
+   HELPER: Fetch All Blocks Recursively
+-------------------- */
+async function fetchBlocksRecursively(blockId: string, depth: number = 0): Promise<string[]> {
   let texts: string[] = [];
   let cursor: string | undefined = undefined;
+  const indent = "  ".repeat(depth); // For nested content visualization
 
   do {
     try {
@@ -187,16 +264,20 @@ async function fetchBlocksRecursively(blockId: string): Promise<string[]> {
 
       for (const block of res.results) {
         const text = extractText(block);
-        if (text) texts.push(text);
+        if (text) {
+          // Add indentation for nested content
+          texts.push(indent + text);
+        }
 
+        // Recursively fetch child blocks
         if ("has_children" in block && block.has_children) {
           try {
-            const childTexts = await fetchBlocksRecursively(block.id);
+            const childTexts = await fetchBlocksRecursively(block.id, depth + 1);
             texts.push(...childTexts);
           } catch (childError: any) {
             // Skip unsupported child blocks
             if (childError.code === 'validation_error') {
-              console.warn(`⚠️  Skipping unsupported child block: ${childError.message}`);
+              console.warn(`   ⚠️  Skipping unsupported child block: ${childError.message}`);
             } else {
               throw childError;
             }
@@ -208,10 +289,10 @@ async function fetchBlocksRecursively(blockId: string): Promise<string[]> {
     } catch (error: any) {
       // Skip unsupported blocks but log the warning
       if (error.code === 'validation_error' && error.message.includes('not supported via the API')) {
-        console.warn(`⚠️  Skipping unsupported block type: ${error.message}`);
-        break; // Stop processing this branch but continue with the page
+        console.warn(`   ⚠️  Skipping unsupported block type: ${error.message}`);
+        break;
       } else {
-        throw error; // Re-throw other errors
+        throw error;
       }
     }
   } while (cursor);
@@ -219,6 +300,9 @@ async function fetchBlocksRecursively(blockId: string): Promise<string[]> {
   return texts;
 }
 
+/* --------------------
+   HELPER: Upload to S3
+-------------------- */
 async function uploadToS3(key: string, data: any) {
   await s3.send(
     new PutObjectCommand({
@@ -228,10 +312,11 @@ async function uploadToS3(key: string, data: any) {
       ContentType: "application/json",
     })
   );
+  console.log(`   ✅ Uploaded to S3: ${key}`);
 }
 
 /* --------------------
-   TITLE EXTRACTION
+   HELPER: Get Page Title
 -------------------- */
 function getPageTitle(page: any): string {
   const props = page.properties || {};
@@ -244,13 +329,17 @@ function getPageTitle(page: any): string {
 }
 
 /* --------------------
-   MAIN EXPORT
+   MAIN EXPORT FUNCTION
 -------------------- */
 async function run() {
-  console.log("🔍 Searching entire Notion workspace...");
+  console.log("🚀 Starting Notion Export to S3");
+  console.log("=" .repeat(70));
+  console.log("");
 
   let cursor: string | undefined = undefined;
   let total = 0;
+  let failed = 0;
+  const exportedPages: string[] = [];
 
   do {
     const res = await notion.search({
@@ -259,47 +348,67 @@ async function run() {
     });
 
     for (const item of res.results) {
+      // Only process pages
       if (item.object !== "page") continue;
       if (!("last_edited_time" in item)) continue;
 
       const pageId = item.id;
       const title = getPageTitle(item);
 
-      console.log(`📄 Exporting: ${title}`);
+      console.log(`\n📄 Processing: "${title}"`);
+      console.log(`   ID: ${pageId}`);
 
       try {
+        // Fetch all content blocks recursively
+        console.log(`   🔍 Fetching content blocks...`);
         const contentBlocks = await fetchBlocksRecursively(pageId);
+        console.log(`   ✅ Found ${contentBlocks.length} content blocks`);
 
-        // Build enriched content that includes title for better embedding
-        let enrichedContent = `Title: ${title}\n\n`;
+        // Build enriched content with clear document identification
+        let enrichedContent = "";
         
-        // Add page metadata (created by, created time, etc.)
+        // === DOCUMENT HEADER (for identification) ===
+        enrichedContent += `=== DOCUMENT START ===\n`;
+        enrichedContent += `DOCUMENT_ID: ${pageId}\n`;
+        enrichedContent += `DOCUMENT_TITLE: ${title}\n`;
+        enrichedContent += `DOCUMENT_URL: ${item.url}\n`;
+        enrichedContent += `\n`;
+        
+        // === METADATA SECTION ===
+        enrichedContent += `=== METADATA ===\n`;
+        
         if ('created_by' in item) {
           const createdBy = item.created_by?.type === 'person' 
             ? (item.created_by as any).person?.name || (item.created_by as any).name || (item.created_by as any).id
             : 'Unknown';
           enrichedContent += `Created by: ${createdBy}\n`;
         }
+        
         if ('created_time' in item) {
           enrichedContent += `Created on: ${new Date(item.created_time).toLocaleDateString()}\n`;
         }
+        
         if ('last_edited_by' in item) {
           const editedBy = item.last_edited_by?.type === 'person'
             ? (item.last_edited_by as any).person?.name || (item.last_edited_by as any).name || (item.last_edited_by as any).id
             : 'Unknown';
           enrichedContent += `Last edited by: ${editedBy}\n`;
         }
+        
         if ('last_edited_time' in item) {
           enrichedContent += `Last edited: ${new Date(item.last_edited_time).toLocaleDateString()}\n`;
         }
         
-        enrichedContent += '\n';
+        enrichedContent += `\n`;
         
-        // Add ALL properties
+        // === PROPERTIES SECTION ===
         if (item.properties) {
           const props: string[] = [];
           
           for (const [key, val] of Object.entries(item.properties)) {
+            // Skip title property as it's already included
+            if ((val as any).type === 'title') continue;
+            
             const value = extractPropertyValue(val as any);
             if (value) {
               props.push(`${key}: ${value}`);
@@ -307,18 +416,28 @@ async function run() {
           }
           
           if (props.length) {
+            enrichedContent += `=== PROPERTIES ===\n`;
             enrichedContent += props.join('\n') + '\n\n';
           }
         }
         
-        // Add content blocks
+        // === MAIN CONTENT SECTION ===
+        enrichedContent += `=== CONTENT ===\n`;
+        enrichedContent += `[DOCUMENT: ${title}]\n\n`;
+        
         if (contentBlocks.length) {
           enrichedContent += contentBlocks.join("\n");
         } else {
-          // For pages with no content, add a default description
           enrichedContent += `This is a Notion page titled "${title}". No detailed content available.`;
         }
+        
+        enrichedContent += `\n\n`;
+        
+        // === DOCUMENT FOOTER ===
+        enrichedContent += `=== DOCUMENT END ===\n`;
+        enrichedContent += `[End of ${title}]\n`;
 
+        // Create payload for S3
         const payload = {
           id: pageId,
           title,
@@ -326,15 +445,20 @@ async function run() {
           lastEdited: item.last_edited_time,
           source: "notion",
           url: item.url,
+          exportedAt: new Date().toISOString(),
         };
 
+        // Upload to S3
         const s3Key = `notion/pages/${pageId}.json`;
         await uploadToS3(s3Key, payload);
 
         total++;
+        exportedPages.push(title);
+        
       } catch (pageError: any) {
-        console.error(`❌ Failed to export page "${title}": ${pageError.message}`);
-        // Continue with next page instead of stopping entire export
+        console.error(`   ❌ Failed to export: ${pageError.message}`);
+        failed++;
+        // Continue with next page
         continue;
       }
     }
@@ -342,10 +466,29 @@ async function run() {
     cursor = res.has_more ? res.next_cursor! : undefined;
   } while (cursor);
 
-  console.log(`✅ Export completed. Total pages exported: ${total}`);
+  // Final Summary
+  console.log("\n" + "=".repeat(70));
+  console.log("📊 EXPORT SUMMARY");
+  console.log("=".repeat(70));
+  console.log(`✅ Successfully exported: ${total} pages`);
+  console.log(`❌ Failed to export: ${failed} pages`);
+  console.log(`📁 S3 Bucket: ${BUCKET}`);
+  console.log(`📂 S3 Path: notion/pages/`);
+  console.log("");
+  
+  if (exportedPages.length > 0) {
+    console.log("📋 Exported Pages:");
+    exportedPages.forEach((title, index) => {
+      console.log(`   ${index + 1}. ${title}`);
+    });
+  }
+  
+  console.log("\n✅ Export completed successfully!");
 }
 
+// Run the export
 run().catch((err) => {
-  console.error("❌ Export failed:", err);
+  console.error("\n❌ Export failed with error:");
+  console.error(err);
   process.exit(1);
 });
