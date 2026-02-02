@@ -14,7 +14,7 @@ export async function retrieveNotionContext(query: string) {
       },
       retrievalConfiguration: {
         vectorSearchConfiguration: {
-          numberOfResults: 5,
+          numberOfResults: 20,  // Increased to cast wider net
         },
       },
     });
