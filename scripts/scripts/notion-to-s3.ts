@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Client } from "@notionhq/client";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import * as dotenv from "dotenv";
@@ -268,7 +269,7 @@ async function fetchBlocksRecursively(
   blockId: string,
   depth: number = 0,
 ): Promise<string[]> {
-  let texts: string[] = [];
+  const texts: string[] = [];
   let cursor: string | undefined = undefined;
   const indent = "  ".repeat(depth); // For nested content visualization
 

@@ -3,7 +3,7 @@
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
-import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle } from "lucide-react";
+import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { saveMessage, getMessages, clearMessages } from "@/lib/db";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -13,16 +13,67 @@ interface Message {
   content: string;
 }
 
+type ThinkingStatus = "idle" | "retrieving" | "generating";
+
+type ThinkingEntry = {
+  summary: string;
+  status: ThinkingStatus;
+  isStreaming: boolean;
+  isCollapsed: boolean;
+};
+
+type ThinkingByMessage = { [key: number]: ThinkingEntry };
+
+const STREAM_TAGS = {
+  thinkingStart: "[[THINKING]]",
+  thinkingEnd: "[[/THINKING]]",
+  answerStart: "[[ANSWER]]",
+  answerEnd: "[[/ANSWER]]",
+};
+
+const STREAM_TAG_LIST = Object.values(STREAM_TAGS);
+const MAX_STREAM_TAG_LENGTH = Math.max(
+  ...STREAM_TAG_LIST.map((tag) => tag.length),
+);
+const STREAM_TAG_SEARCH_LIMIT = 800;
+const STREAM_TAG_PATTERN = /\[\[(?:\/)?(?:THINKING|ANSWER)\]\]/g;
+
+function findNextStreamTag(text: string) {
+  let nextIndex = -1;
+  let nextTag = "";
+
+  for (const tag of STREAM_TAG_LIST) {
+    const index = text.indexOf(tag);
+    if (index !== -1 && (nextIndex === -1 || index < nextIndex)) {
+      nextIndex = index;
+      nextTag = tag;
+    }
+  }
+
+  if (nextIndex === -1) return null;
+  return { index: nextIndex, tag: nextTag };
+}
+
+function containsStreamTag(text: string) {
+  return STREAM_TAG_LIST.some((tag) => text.includes(tag));
+}
+
+function stripStreamTags(text: string) {
+  return text.replace(STREAM_TAG_PATTERN, "");
+}
+
 export default function ChatPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [thinkingByMessage, setThinkingByMessage] = useState<ThinkingByMessage>({});
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const botMessageIndexRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -44,6 +95,20 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  const toggleThinkingCollapse = (index: number) => {
+    setThinkingByMessage((prev) => {
+      const entry = prev[index];
+      if (!entry) return prev;
+      return {
+        ...prev,
+        [index]: {
+          ...entry,
+          isCollapsed: !entry.isCollapsed,
+        },
+      };
+    });
+  };
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
@@ -56,50 +121,199 @@ export default function ChatPage() {
     await saveMessage(newUserMsg);
 
     setIsLoading(true);
+    botMessageIndexRef.current = null;
 
     try {
+      const history = messages.slice(-8);
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userMessage }),
+        body: JSON.stringify({ message: userMessage, history }),
       });
 
       if (!response.ok) throw new Error("Failed to get response");
 
       const reader = response.body?.getReader();
+      if (!reader) throw new Error("Response stream unavailable");
       const decoder = new TextDecoder();
-      let botContent = "";
+
+      let answerText = "";
+      let thinkingText = "";
+      let buffer = "";
+      let parseMode: "searching" | "tagged" | "untagged" = "searching";
+      let activeSection: "thinking" | "answer" | null = null;
+      let hasReceivedChunk = false;
 
       const botMsgPlaceholder: Message = { role: "bot", content: "" };
+      const botIndex = messages.length + 1;
       setMessages((prev) => [...prev, botMsgPlaceholder]);
+      botMessageIndexRef.current = botIndex;
+      setThinkingByMessage((prev) => ({
+        ...prev,
+        [botIndex]: {
+          summary: "",
+          status: "retrieving",
+          isStreaming: true,
+          isCollapsed: false,
+        },
+      }));
+
+      const updateThinkingSummary = (summary: string) => {
+        const trimmedSummary = summary.trim();
+        setThinkingByMessage((prev) => {
+          const entry = prev[botIndex];
+          if (!entry) return prev;
+          if (entry.summary === trimmedSummary) return prev;
+          return {
+            ...prev,
+            [botIndex]: {
+              ...entry,
+              summary: trimmedSummary,
+            },
+          };
+        });
+      };
+
+      const updateMessageContent = () => {
+        setMessages((prev) => {
+          const targetIndex = botMessageIndexRef.current;
+          if (targetIndex === null || !prev[targetIndex]) return prev;
+          const next = [...prev];
+          next[targetIndex] = { role: "bot", content: answerText };
+          return next;
+        });
+      };
+
+      const appendToSection = (text: string) => {
+        if (!text) return;
+
+        if (activeSection === "thinking") {
+          thinkingText += text;
+          updateThinkingSummary(thinkingText.trim());
+          return;
+        }
+
+        if (activeSection === "answer") {
+          answerText += text;
+        }
+      };
+
+      const parseTaggedBuffer = () => {
+        while (true) {
+          const nextTag = findNextStreamTag(buffer);
+          if (!nextTag) {
+            if (activeSection) {
+              const safeLength = Math.max(0, buffer.length - (MAX_STREAM_TAG_LENGTH - 1));
+              if (safeLength > 0) {
+                const safeText = buffer.slice(0, safeLength);
+                appendToSection(safeText);
+                buffer = buffer.slice(safeLength);
+              }
+            }
+            break;
+          }
+
+          const before = buffer.slice(0, nextTag.index);
+          appendToSection(before);
+          buffer = buffer.slice(nextTag.index + nextTag.tag.length);
+
+          if (nextTag.tag === STREAM_TAGS.thinkingStart) {
+            activeSection = "thinking";
+          } else if (nextTag.tag === STREAM_TAGS.thinkingEnd) {
+            activeSection = null;
+          } else if (nextTag.tag === STREAM_TAGS.answerStart) {
+            activeSection = "answer";
+          } else if (nextTag.tag === STREAM_TAGS.answerEnd) {
+            activeSection = null;
+          }
+        }
+      };
 
       while (true) {
-        const { done, value } = await reader!.read();
+        const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        botContent += chunk;
+        if (!hasReceivedChunk) {
+          hasReceivedChunk = true;
+          setThinkingByMessage((prev) => {
+            const entry = prev[botIndex];
+            if (!entry || entry.status !== "retrieving") return prev;
+            return {
+              ...prev,
+              [botIndex]: {
+                ...entry,
+                status: "generating",
+              },
+            };
+          });
+        }
 
-        setMessages((prev) => {
-          const newMessages = [...prev];
-          newMessages[newMessages.length - 1] = { role: "bot", content: botContent };
-          return newMessages;
-        });
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+
+        if (parseMode === "searching") {
+          if (containsStreamTag(buffer)) {
+            parseMode = "tagged";
+          } else if (buffer.length >= STREAM_TAG_SEARCH_LIMIT) {
+            parseMode = "untagged";
+          }
+        }
+
+        if (parseMode === "untagged") {
+          answerText += buffer;
+          buffer = "";
+        } else if (parseMode === "tagged") {
+          parseTaggedBuffer();
+        }
+
+        updateMessageContent();
       }
 
-      await saveMessage({ role: "bot", content: botContent });
+      if (parseMode === "searching") {
+        answerText += buffer;
+        buffer = "";
+      } else if (parseMode === "tagged") {
+        if (activeSection) {
+          appendToSection(buffer);
+        }
+        buffer = "";
+      }
 
-    } catch (error) {
+      const cleanedAnswer = stripStreamTags(answerText);
+      if (cleanedAnswer !== answerText) {
+        answerText = cleanedAnswer;
+        updateMessageContent();
+      }
+
+      await saveMessage({ role: "bot", content: cleanedAnswer });
+
+    } catch {
       const failMsg: Message = { role: "bot", content: "Failed to connect to the server." };
       setMessages((prev) => [...prev, failMsg]);
       await saveMessage(failMsg);
     } finally {
       setIsLoading(false);
+      setThinkingByMessage((prev) => {
+        const targetIndex = botMessageIndexRef.current;
+        if (targetIndex === null) return prev;
+        const entry = prev[targetIndex];
+        if (!entry) return prev;
+        return {
+          ...prev,
+          [targetIndex]: {
+            ...entry,
+            status: "idle",
+            isStreaming: false,
+          },
+        };
+      });
+      botMessageIndexRef.current = null;
     }
   };
 
   const handleLogout = async () => {
     await clearMessages();
+    setThinkingByMessage({});
     signOut();
   };
 
@@ -188,6 +402,7 @@ export default function ChatPage() {
 
           <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
             {session.user?.image ? (
+              // eslint-disable-next-line @next/next/no-img-element
               <img src={session.user.image} alt="User" className="w-10 h-10 rounded-full" />
             ) : (
               <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-bold">
@@ -274,27 +489,78 @@ export default function ChatPage() {
               </p>
             </div>
           ) : (
-            messages.map((msg, idx) => (
-              <div
-                key={idx}
-                className={`flex gap-4 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}
-              >
-                <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${msg.role === "user" ? "bg-white text-black" : "bg-blue-600 text-white"
-                  }`}>
-                  {msg.role === "user" ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
-                </div>
-                <div className={`max-w-[80%] p-4 rounded-2xl ${msg.role === "user"
-                  ? "bg-white/10 border border-white/10 rounded-tr-none"
-                  : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
-                  }`}>
-                  <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {msg.content}
-                    </ReactMarkdown>
+            messages.map((msg, idx) => {
+              const thinkingEntry = thinkingByMessage[idx];
+              const showThinking = msg.role === "bot" && Boolean(thinkingEntry);
+              const thinkingSummary = thinkingEntry?.summary?.trim() || "";
+              const thinkingBody = thinkingSummary
+                ? thinkingSummary
+                : thinkingEntry?.isStreaming
+                  ? "Generating summary..."
+                  : "Summary not available";
+
+              return (
+                <div
+                  key={idx}
+                  className={`flex gap-4 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}
+                >
+                  <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${msg.role === "user" ? "bg-white text-black" : "bg-blue-600 text-white"
+                    }`}>
+                    {msg.role === "user" ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
+                  </div>
+                  <div className={`max-w-[80%] p-4 rounded-2xl ${msg.role === "user"
+                    ? "bg-white/10 border border-white/10 rounded-tr-none"
+                    : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
+                    }`}>
+                    {showThinking && thinkingEntry && (
+                      <div className="mb-4 rounded-2xl border border-blue-500/40 bg-blue-500/10 p-4 text-blue-50/90 shadow-[0_0_0_1px_rgba(59,130,246,0.08)]">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-blue-200">
+                            {thinkingEntry.isStreaming ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <CheckCircle className="h-3.5 w-3.5" />
+                            )}
+                            <span>
+                              {thinkingEntry.isStreaming
+                                ? thinkingEntry.status === "retrieving"
+                                  ? "Retrieving context"
+                                  : "Generating response"
+                                : "Thinking Summary"}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => toggleThinkingCollapse(idx)}
+                            aria-expanded={!thinkingEntry.isCollapsed}
+                            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold text-blue-100/90 transition-colors hover:bg-blue-500/10 hover:text-white"
+                          >
+                            {thinkingEntry.isCollapsed ? (
+                              <ChevronDown className="h-4 w-4" />
+                            ) : (
+                              <ChevronUp className="h-4 w-4" />
+                            )}
+                            <span>
+                              {thinkingEntry.isCollapsed ? "Expand Thinking" : "Collapse Thinking"}
+                            </span>
+                          </button>
+                        </div>
+                        {!thinkingEntry.isCollapsed && (
+                          <div className="mt-3 text-sm leading-relaxed text-blue-50/90 whitespace-pre-wrap">
+                            {thinkingBody}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {msg.content}
+                      </ReactMarkdown>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
           {isLoading && messages[messages.length - 1]?.role !== 'bot' && (
             <div className="flex gap-4">

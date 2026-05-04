@@ -1,10 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { syncBedrockKnowledgeBase } from "@/lib/aws";
+import { authOptions } from "@/lib/auth";
 
-export async function POST(req: NextRequest) {
+export async function POST() {
     try {
-        const session = await getServerSession();
+        const session = await getServerSession(authOptions);
         if (!session) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
@@ -16,10 +17,10 @@ export async function POST(req: NextRequest) {
             jobId: ingestionJob?.ingestionJobId,
             status: ingestionJob?.status,
         });
-    } catch (error: any) {
+    } catch (error) {
         console.error("Sync API Error:", error);
         return NextResponse.json(
-            { error: error.message || "Failed to trigger sync" },
+            { error: error instanceof Error ? error.message : "Failed to trigger sync" },
             { status: 500 }
         );
     }

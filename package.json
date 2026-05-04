@@ -7,7 +7,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "export:notion": "tsx scripts/scripts/notion-to-s3.ts",
+    "search:s3": "tsx scripts/search-s3.ts",
+    "test:bedrock": "tsx scripts/test-bedrock.ts",
+    "benchmark:chatbot": "tsx scripts/benchmark-chatbot.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-agent": "^3.969.0",
@@ -35,6 +39,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }
