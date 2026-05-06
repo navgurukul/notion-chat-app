@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
-import { retrieveNotionContext } from "@/lib/aws";
 import { getChatStream } from "@/lib/gemini";
 import { authOptions } from "@/lib/auth";
 import { buildContextualSearchQuery, sanitizeChatHistory } from "@/lib/chat";
+import { parseQuery } from "@/lib/query-router";
+import { handleMetadataQuery } from "@/lib/metadata-search";
+import { semanticSearch } from "@/lib/vector-search";
+
+const MAX_MESSAGE_LENGTH = 2000;
 
 export async function POST(req: NextRequest) {
   try {
@@ -14,30 +18,41 @@ export async function POST(req: NextRequest) {
 
     const { message, history } = await req.json();
     if (typeof message !== "string" || !message.trim()) {
-      return NextResponse.json(
-        { error: "Message is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Message is required" }, { status: 400 });
     }
 
+    const trimmedMessage = message.trim().slice(0, MAX_MESSAGE_LENGTH);
     const chatHistory = sanitizeChatHistory(history);
-    const searchQuery = buildContextualSearchQuery(message.trim(), chatHistory);
 
-    // 🚀 Use AWS Bedrock Knowledge Base for scalable RAG
-    const notionContext = await retrieveNotionContext(searchQuery);
+    // --- Layer 2: Route the query ---
+    const parsed = parseQuery(trimmedMessage);
+
+    // Property-based queries: answer directly from SQL, no AI needed
+    if (parsed.kind !== "semantic") {
+      const directAnswer = await handleMetadataQuery(parsed);
+      if (directAnswer) {
+        return new Response(directAnswer, {
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+      }
+      // If metadata handler returns null (couldn't extract target), fall through to semantic
+    }
+
+    // Semantic queries: use clean message for DB search, contextual query only for LLM
+    const notionContext = await semanticSearch(trimmedMessage);
+    const searchQuery = buildContextualSearchQuery(trimmedMessage, chatHistory);
 
     if (process.env.NODE_ENV !== "production") {
-      console.log("Retrieved context length:", notionContext?.length || 0);
+      console.log(`[chat] mode=semantic context_chars=${notionContext.length}`);
     }
 
-    const stream = await getChatStream(message.trim(), notionContext, chatHistory);
+    const stream = await getChatStream(searchQuery, notionContext, chatHistory);
 
     const encoder = new TextEncoder();
     const readableStream = new ReadableStream({
       async start(controller) {
         for await (const chunk of stream) {
-          const text = chunk.text();
-          controller.enqueue(encoder.encode(text));
+          controller.enqueue(encoder.encode(chunk.text()));
         }
         controller.close();
       },
@@ -48,9 +63,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error("Chat API Error:", error);
-    return NextResponse.json(
-      { error: "Failed to get response" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to get response" }, { status: 500 });
   }
 }

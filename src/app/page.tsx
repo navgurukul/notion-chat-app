@@ -293,21 +293,23 @@ export default function ChatPage() {
       await saveMessage(failMsg);
     } finally {
       setIsLoading(false);
-      setThinkingByMessage((prev) => {
-        const targetIndex = botMessageIndexRef.current;
-        if (targetIndex === null) return prev;
-        const entry = prev[targetIndex];
-        if (!entry) return prev;
-        return {
-          ...prev,
-          [targetIndex]: {
-            ...entry,
-            status: "idle",
-            isStreaming: false,
-          },
-        };
-      });
+      // Capture index before clearing the ref — React state updaters run async
+      const finalBotIndex = botMessageIndexRef.current;
       botMessageIndexRef.current = null;
+      if (finalBotIndex !== null) {
+        setThinkingByMessage((prev) => {
+          const entry = prev[finalBotIndex];
+          if (!entry) return prev;
+          return {
+            ...prev,
+            [finalBotIndex]: {
+              ...entry,
+              status: "idle",
+              isStreaming: false,
+            },
+          };
+        });
+      }
     }
   };
 
@@ -491,7 +493,10 @@ export default function ChatPage() {
           ) : (
             messages.map((msg, idx) => {
               const thinkingEntry = thinkingByMessage[idx];
-              const showThinking = msg.role === "bot" && Boolean(thinkingEntry);
+              const showThinking =
+                msg.role === "bot" &&
+                Boolean(thinkingEntry) &&
+                (thinkingEntry.isStreaming || Boolean(thinkingEntry.summary?.trim()));
               const thinkingSummary = thinkingEntry?.summary?.trim() || "";
               const thinkingBody = thinkingSummary
                 ? thinkingSummary
@@ -553,7 +558,16 @@ export default function ChatPage() {
                       </div>
                     )}
                     <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          a: ({ href, children }) => (
+                            <a href={href} target="_blank" rel="noopener noreferrer">
+                              {children}
+                            </a>
+                          ),
+                        }}
+                      >
                         {msg.content}
                       </ReactMarkdown>
                     </div>

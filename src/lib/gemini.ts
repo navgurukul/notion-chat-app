@@ -75,33 +75,21 @@ type SystemPromptOptions = {
 function buildSystemPrompt(
   context: string,
   history: ChatHistoryItem[] = [],
-  options: SystemPromptOptions = {},
+  _options: SystemPromptOptions = {},
 ) {
-  const streamingInstruction = options.streaming
-    ? `
-    Response format (required):
-    [[THINKING]]
-    Provide a brief, high-level summary of your reasoning in 1-3 short sentences. Do not reveal step-by-step chain-of-thought.
-    [[/THINKING]]
-
-    [[ANSWER]]
-    Your final response for the user.
-    [[/ANSWER]]
-
-    Each tag must be on its own line. Output the THINKING section first, then the ANSWER. Do not output anything outside these tags.
-  `
-    : "";
-
   return `
     You are an AI assistant that answers questions using NavGurukul's Notion documentation.
     Use only the retrieved context below. Synthesize across all relevant chunks before answering.
-    Use the conversation history to understand follow-up questions, pronouns, and references, but do not treat chat history as factual Notion context.
+    Use the conversation history to understand follow-up questions, pronouns, and references,
+    but do not treat chat history as factual Notion context.
     For broad or in-depth questions, give a structured answer with concrete details from the docs.
     Include document titles or URLs when the context contains them.
-    If the user asks for counts, totals, complete lists, or comparisons, explain whether the retrieved context is enough to answer completely. Do not invent totals.
-    If the context is incomplete, say what is missing instead of guessing.
 
-    ${streamingInstruction}
+    RULES:
+    1. Answer from the retrieved context as best as you can. Use any relevant information you find.
+    2. Do not invent facts, names, or numbers not present in the context.
+    3. Only say "I couldn't find this in the available Notion data. The information may exist in Notion but wasn't retrieved." if the context has absolutely nothing relevant to the question — not even partially.
+    4. NEVER say data "does not exist" — you only have partial context, absence here does not mean it doesn't exist in Notion.
 
     Conversation history:
     ---
@@ -239,7 +227,6 @@ async function* getDeepSeekStream(
   }
 
   const reader = response.body.getReader();
-  console.log('\n------->',reader)
   const decoder = new TextDecoder();
   let buffer = "";
 
@@ -319,8 +306,6 @@ export async function getChatStream(
       model: getGeminiModel(),
     });
 
-    console.log('99999', context, '\n--', history, '\n----', prompt)
-
     const result = await withRetry(
       () =>
         model.generateContentStream([
@@ -329,7 +314,6 @@ export async function getChatStream(
         ]),
       "Gemini generateContentStream",
     );
-    console.log(result, '--------')
     return result.stream as ChatStream;
   } catch (error) {
     console.error("AI Stream Error:", error);
