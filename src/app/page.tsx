@@ -63,6 +63,7 @@ function stripStreamTags(text: string) {
 }
 
 export default function ChatPage() {
+  const LAST_SYNC_STORAGE_KEY = "notion_last_synced_at";
   const { data: session, status } = useSession();
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -72,6 +73,8 @@ export default function ChatPage() {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [syncClock, setSyncClock] = useState(Date.now());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const botMessageIndexRef = useRef<number | null>(null);
 
@@ -88,8 +91,15 @@ export default function ChatPage() {
     };
     if (status === "authenticated") {
       loadMessages();
+      const stored = localStorage.getItem(LAST_SYNC_STORAGE_KEY);
+      if (stored) setLastSyncedAt(stored);
     }
   }, [status]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setSyncClock(Date.now()), 60000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -293,21 +303,21 @@ export default function ChatPage() {
       await saveMessage(failMsg);
     } finally {
       setIsLoading(false);
+      const finalBotIndex = botMessageIndexRef.current;
+      botMessageIndexRef.current = null;
       setThinkingByMessage((prev) => {
-        const targetIndex = botMessageIndexRef.current;
-        if (targetIndex === null) return prev;
-        const entry = prev[targetIndex];
+        if (finalBotIndex === null) return prev;
+        const entry = prev[finalBotIndex];
         if (!entry) return prev;
         return {
           ...prev,
-          [targetIndex]: {
+          [finalBotIndex]: {
             ...entry,
             status: "idle",
             isStreaming: false,
           },
         };
       });
-      botMessageIndexRef.current = null;
     }
   };
 
@@ -327,9 +337,14 @@ export default function ChatPage() {
         method: "POST",
       });
 
+      const data = await response.json();
       if (!response.ok) {
-        const data = await response.json();
         throw new Error(data.error || "Failed to sync");
+      }
+
+      if (typeof data?.synced_at === "string" && data.synced_at) {
+        setLastSyncedAt(data.synced_at);
+        localStorage.setItem(LAST_SYNC_STORAGE_KEY, data.synced_at);
       }
 
       setSyncStatus('success');
@@ -341,6 +356,25 @@ export default function ChatPage() {
     } finally {
       setIsSyncing(false);
     }
+  };
+
+  const formatRelativeSyncTime = (isoTime: string | null) => {
+    if (!isoTime) return "Last synced: never";
+    const syncTime = new Date(isoTime).getTime();
+    if (!Number.isFinite(syncTime)) return "Last synced: unknown";
+
+    const now = syncClock;
+    const diffMs = Math.max(0, now - syncTime);
+    const diffMins = Math.floor(diffMs / 60000);
+
+    if (diffMins < 1) return "Last synced: just now";
+    if (diffMins < 60) return `Last synced: ${diffMins} min ago`;
+
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `Last synced: ${diffHours} hr ago`;
+
+    const diffDays = Math.floor(diffHours / 24);
+    return `Last synced: ${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
   };
 
   if (status === "loading") {
@@ -453,7 +487,7 @@ export default function ChatPage() {
               <span className="text-sm font-bold block">
                 {isSyncing ? "Syncing..." : syncStatus === 'success' ? "Sync Success" : syncStatus === 'error' ? "Sync Failed" : "Sync Database"}
               </span>
-              <span className="text-[10px] opacity-40 uppercase tracking-widest mt-1">Notion → Bedrock</span>
+              <span className="text-[10px] opacity-40 uppercase tracking-widest mt-1">Notion → PostgreSQL</span>
             </div>
           </button>
         </div>
@@ -466,6 +500,7 @@ export default function ChatPage() {
             <LogOut className="w-5 h-5" />
             Sign Out
           </button>
+          <p className="text-[11px] text-white/40 mt-3 px-1">{formatRelativeSyncTime(lastSyncedAt)}</p>
         </div>
       </aside>
 
@@ -491,7 +526,10 @@ export default function ChatPage() {
           ) : (
             messages.map((msg, idx) => {
               const thinkingEntry = thinkingByMessage[idx];
-              const showThinking = msg.role === "bot" && Boolean(thinkingEntry);
+              const showThinking =
+                msg.role === "bot" &&
+                Boolean(thinkingEntry) &&
+                (thinkingEntry?.isStreaming || Boolean(thinkingEntry?.summary?.trim()));
               const thinkingSummary = thinkingEntry?.summary?.trim() || "";
               const thinkingBody = thinkingSummary
                 ? thinkingSummary
@@ -553,7 +591,16 @@ export default function ChatPage() {
                       </div>
                     )}
                     <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          a: ({ href, children }) => (
+                            <a href={href} target="_blank" rel="noopener noreferrer">
+                              {children}
+                            </a>
+                          ),
+                        }}
+                      >
                         {msg.content}
                       </ReactMarkdown>
                     </div>

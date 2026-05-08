@@ -101,6 +101,12 @@ function buildSystemPrompt(
     If the user asks for counts, totals, complete lists, or comparisons, explain whether the retrieved context is enough to answer completely. Do not invent totals.
     If the context is incomplete, say what is missing instead of guessing.
 
+    RULES:
+    1. Answer from the retrieved context as best as you can. Use any relevant information you find.
+    2. Do not invent facts, names, counts, or dates not present in the context.
+    3. Only say "I couldn't find this in the available Notion data. The information may exist in Notion but wasn't retrieved." if the context has absolutely nothing relevant to the question.
+    4. NEVER say data "does not exist" or "there are no documents" because this context can be partial.
+
     ${streamingInstruction}
 
     Conversation history:
@@ -239,7 +245,6 @@ async function* getDeepSeekStream(
   }
 
   const reader = response.body.getReader();
-  console.log('\n------->',reader)
   const decoder = new TextDecoder();
   let buffer = "";
 
@@ -319,8 +324,6 @@ export async function getChatStream(
       model: getGeminiModel(),
     });
 
-    console.log('99999', context, '\n--', history, '\n----', prompt)
-
     const result = await withRetry(
       () =>
         model.generateContentStream([
@@ -329,7 +332,6 @@ export async function getChatStream(
         ]),
       "Gemini generateContentStream",
     );
-    console.log(result, '--------')
     return result.stream as ChatStream;
   } catch (error) {
     console.error("AI Stream Error:", error);
