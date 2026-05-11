@@ -28,6 +28,10 @@ export async function POST(req: NextRequest) {
     const chatHistory = sanitizeChatHistory(history);
     const parsed = parseQuery(trimmedMessage);
 
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[chat] parsed_query=", parsed);
+    }
+
     if (parsed.kind !== "semantic") {
       const directAnswer = await handleMetadataQuery(parsed);
       if (directAnswer) {

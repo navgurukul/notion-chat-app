@@ -3,8 +3,10 @@ export type QueryKind =
   | "owner_of"
   | "created_by_list"
   | "created_by_of"
+  | "assigned_list"
   | "assigned_to_of"
   | "worked_on_list"
+  | "project_manager_of"
   | "topic_list"
   | "type_of"
   | "status_of"
@@ -24,9 +26,10 @@ function normalize(text: string) {
 function stripDocWords(value: string) {
   return value
     .replace(
-      /\b(page|doc|document|docs|pages|project|projects|task|tasks|work|worked|the|a|an|all|every|some|any)\b/gi,
+      /\b(page|doc|document|docs|pages|project|projects|task|tasks|work|worked|assigned|assign|assignee|given|got|to|the|a|an|all|every|some|any|only|one)\b/gi,
       "",
     )
+    .replace(/^(what|which|who|where|when|why|how|was|is)\s+/i, "")
     .replace(/[?!.,;]/g, "")
     .replace(/'s\b/gi, "")
     .replace(/\s+/g, " ")
@@ -37,7 +40,7 @@ function cleanPersonName(value: string | null) {
   if (!value) return null;
   const cleaned = stripDocWords(value);
   if (!cleaned) return null;
-  if (/^(what|which|who|when|where|why|how|task|tasks|project|projects|work)$/i.test(cleaned)) {
+  if (/^(what|which|who|when|where|why|how|is|was|are|were|task|tasks|project|projects|work|manager|lead|only|one)$/i.test(cleaned)) {
     return null;
   }
   return cleaned;
@@ -53,6 +56,37 @@ function extractAfter(text: string, patterns: RegExp[]): string | null {
 
 export function parseQuery(question: string): ParsedQuery {
   const q = normalize(question);
+
+  if (/\bwho\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm|owner)\s+(?:of|for|on)\b/i.test(q)) {
+    const docTitle = extractAfter(question, [
+      /who\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm|owner)\s+(?:of|for|on)\s+(.+?)(?:\?|$)/i,
+    ]);
+    return { kind: "project_manager_of", docTitle: docTitle ?? undefined, raw: question };
+  }
+
+  const topicAssignedToPersonMatch = question.match(
+    /^(?:only\s+one\s+|one\s+|single\s+)?(?:tasks?|projects?|work|data|docs?|documents?|pages?)?\s*(?:of|for|in|on|about|related to)?\s*(.+?)\s+(?:assigned|assign|given)\s+to\s+(.+?)(?:\?|$)/i,
+  );
+  if (topicAssignedToPersonMatch?.[1] && topicAssignedToPersonMatch?.[2]) {
+    return {
+      kind: "assigned_list",
+      docTitle: stripDocWords(topicAssignedToPersonMatch[1]),
+      personName: cleanPersonName(topicAssignedToPersonMatch[2]) ?? undefined,
+      raw: question,
+    };
+  }
+
+  const personAssignedTopicMatch = question.match(
+    /(?:assigned|assign|given)\s+to\s+(.+?)\s+(?:for|in|on|about|related to)\s+(.+?)(?:\?|$)/i,
+  );
+  if (personAssignedTopicMatch?.[1] && personAssignedTopicMatch?.[2]) {
+    return {
+      kind: "assigned_list",
+      personName: cleanPersonName(personAssignedTopicMatch[1]) ?? undefined,
+      docTitle: stripDocWords(personAssignedTopicMatch[2]),
+      raw: question,
+    };
+  }
 
   // owner list: "show all docs owned by X"
   if (
@@ -93,6 +127,18 @@ export function parseQuery(question: string): ParsedQuery {
     /\btasks?\s+\w+\s+worked\b/i.test(q) ||
     /\bwhat\s+\w+\s+(worked|did|does|has)\b/i.test(q)
   ) {
+    const topicTaskPersonMatch = question.match(
+      /^(?:what\s+(?:was|is)\s+)?(.+?)\s+(?:tasks?|projects?|work)\s+(.+?)\s+(?:has\s+been\s+|have\s+been\s+|is\s+|are\s+)?(?:worked|workd|working|works|work)(?:\s+on)?/i,
+    );
+    if (topicTaskPersonMatch?.[1] && topicTaskPersonMatch?.[2]) {
+      return {
+        kind: "worked_on_list",
+        docTitle: stripDocWords(topicTaskPersonMatch[1]),
+        personName: cleanPersonName(topicTaskPersonMatch[2]) ?? undefined,
+        raw: question,
+      };
+    }
+
     const possessiveWorkedOnMatch = question.match(
       /(?:give me|show|list|provide)?\s*(?:\b(?:data|docs?|tasks?|projects?)\b)?\s*(?:of|about)?\s*(.+?)'s\s+(?:worked|workd|working|work|works)\s+(?:on\s+)?(.+?)(?:\?|$)/i,
     );

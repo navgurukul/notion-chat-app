@@ -93,6 +93,15 @@ export default function ChatPage() {
       loadMessages();
       const stored = localStorage.getItem(LAST_SYNC_STORAGE_KEY);
       if (stored) setLastSyncedAt(stored);
+      fetch("/api/sync")
+        .then((response) => (response.ok ? response.json() : null))
+        .then((data) => {
+          if (typeof data?.synced_at === "string" && data.synced_at) {
+            setLastSyncedAt(data.synced_at);
+            localStorage.setItem(LAST_SYNC_STORAGE_KEY, data.synced_at);
+          }
+        })
+        .catch((error) => console.error("Failed to load sync status:", error));
     }
   }, [status]);
 
@@ -333,7 +342,7 @@ export default function ChatPage() {
     setSyncStatus('idle');
 
     try {
-      const response = await fetch("/api/sync", {
+      const response = await fetch("/api/sync?refreshContent=true&embed=false", {
         method: "POST",
       });
 
@@ -344,6 +353,7 @@ export default function ChatPage() {
 
       if (typeof data?.synced_at === "string" && data.synced_at) {
         setLastSyncedAt(data.synced_at);
+        setSyncClock(Date.now());
         localStorage.setItem(LAST_SYNC_STORAGE_KEY, data.synced_at);
       }
 
@@ -375,6 +385,20 @@ export default function ChatPage() {
 
     const diffDays = Math.floor(diffHours / 24);
     return `Last synced: ${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
+  };
+
+  const formatFullSyncTime = (isoTime: string | null) => {
+    if (!isoTime) return "No sync completed yet";
+    const syncTime = new Date(isoTime);
+    if (!Number.isFinite(syncTime.getTime())) return "Sync time unavailable";
+
+    return syncTime.toLocaleString(undefined, {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   };
 
   if (status === "loading") {
@@ -490,6 +514,10 @@ export default function ChatPage() {
               <span className="text-[10px] opacity-40 uppercase tracking-widest mt-1">Notion → PostgreSQL</span>
             </div>
           </button>
+          <div className="mt-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-center">
+            <p className="text-[11px] font-medium text-white/60">{formatRelativeSyncTime(lastSyncedAt)}</p>
+            <p className="mt-1 text-[10px] text-white/35">{formatFullSyncTime(lastSyncedAt)}</p>
+          </div>
         </div>
 
         <div className="p-4 border-t border-white/10">
@@ -500,7 +528,6 @@ export default function ChatPage() {
             <LogOut className="w-5 h-5" />
             Sign Out
           </button>
-          <p className="text-[11px] text-white/40 mt-3 px-1">{formatRelativeSyncTime(lastSyncedAt)}</p>
         </div>
       </aside>
 

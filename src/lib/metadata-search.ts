@@ -10,6 +10,7 @@ type NotionPageRow = {
   last_edited_by: string | null;
   doc_type: string | null;
   status: string | null;
+  content?: string | null;
   match_source?: string | null;
 };
 
@@ -38,6 +39,15 @@ function formatListHeader(count: number, label: string) {
 
 function formatRows(rows: NotionPageRow[], formatter: (row: NotionPageRow) => string) {
   return rows.map((row) => `- ${formatter(row)}`).join("\n");
+}
+
+function contentSnippet(content?: string | null, maxLength = 450) {
+  const cleaned = (content || "")
+    .replace(/=== PROPERTIES ===|=== CONTENT ===/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return "";
+  return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength)}...` : cleaned;
 }
 
 async function lookupByTitle(title: string) {
@@ -101,6 +111,45 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     )}`;
   }
 
+  if (parsed.kind === "assigned_list" && person) {
+    const personTerm = `%${escapeLike(person)}%`;
+    const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
+    const normalizedTopic = docTitle ? normalizeTopic(docTitle) : "";
+    const topicTerm = normalizedTopic ? `%${escapeLike(normalizedTopic)}%` : null;
+    const rows = await query<NotionPageRow>(
+      `
+      SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
+      FROM notion_pages
+      WHERE
+        (
+          lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
+          OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+        )
+        AND (
+          $3::text IS NULL
+          OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
+          OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
+        )
+      ORDER BY title ASC
+      LIMIT 200
+      `,
+      [personTerm, fuzzyPersonTerm, topicTerm],
+    );
+    if (!rows.length) return null;
+    return `${formatListHeader(rows.length, `assigned to ${person}${docTitle ? ` and matching "${docTitle}"` : ""}`)}\n\n${formatRows(
+      rows,
+      (row) => {
+        const metadata = [
+          `owner/assignee: ${row.owner || "Unknown"}`,
+          row.status ? `status: ${row.status}` : "",
+          row.doc_type ? `type: ${row.doc_type}` : "",
+        ].filter(Boolean).join(" · ");
+        const snippet = docTitle ? contentSnippet(row.content) : "";
+        return `**${formatLink(row.title || "Untitled", row.url)}** — ${metadata}${snippet ? `\n  ${snippet}` : ""}`;
+      },
+    )}`;
+  }
+
   if (parsed.kind === "worked_on_list" && person) {
     const personTerm = `%${escapeLike(person)}%`;
     const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
@@ -117,6 +166,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         last_edited_by,
         doc_type,
         status,
+        content,
         CASE
           WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\' THEN 'owner'
           WHEN lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\' THEN 'created_by'
@@ -154,6 +204,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       [personTerm, fuzzyPersonTerm, topicTerm],
     );
     if (!rows.length) return null;
+    const includeDetails = Boolean(docTitle) || rows.length <= 20;
     return `${formatListHeader(rows.length, `associated with ${person}${docTitle ? ` and matching "${docTitle}"` : ""}`)}\n\n${formatRows(
       rows,
       (row) => {
@@ -167,7 +218,55 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
                 : row.match_source === "title"
                   ? "name mentioned in title"
                   : "name mentioned in content";
-        return `**${formatLink(row.title || "Untitled", row.url)}** — ${who}`;
+        const metadata = [
+          who,
+          row.status ? `status: ${row.status}` : "",
+          row.doc_type ? `type: ${row.doc_type}` : "",
+        ].filter(Boolean).join(" · ");
+        const snippet = includeDetails ? contentSnippet(row.content) : "";
+        return `**${formatLink(row.title || "Untitled", row.url)}** — ${metadata}${snippet ? `\n  ${snippet}` : ""}`;
+      },
+    )}`;
+  }
+
+  if (parsed.kind === "project_manager_of" && docTitle) {
+    const normalizedTopic = normalizeTopic(docTitle);
+    const topicTerm = `%${escapeLike(normalizedTopic || docTitle)}%`;
+    const rows = await query<NotionPageRow>(
+      `
+      SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
+      FROM notion_pages
+      WHERE
+        (
+          lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
+          OR lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
+        )
+        AND (
+          lower(coalesce(owner, '')) <> ''
+          OR lower(coalesce(content, '')) LIKE '%project manager%'
+          OR lower(coalesce(content, '')) LIKE '%project lead%'
+          OR lower(coalesce(content, '')) LIKE '%manager:%'
+          OR lower(coalesce(content, '')) LIKE '%pm:%'
+          OR lower(coalesce(content, '')) LIKE '%owner:%'
+        )
+      ORDER BY
+        CASE WHEN lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\' THEN 0 ELSE 1 END,
+        title ASC
+      LIMIT 20
+      `,
+      [topicTerm],
+    );
+    if (!rows.length) return null;
+    return `${formatListHeader(rows.length, `with possible project manager/lead info for "${docTitle}"`)}\n\n${formatRows(
+      rows,
+      (row) => {
+        const metadata = [
+          row.owner ? `owner/assignee: ${row.owner}` : "",
+          row.status ? `status: ${row.status}` : "",
+          row.doc_type ? `type: ${row.doc_type}` : "",
+        ].filter(Boolean).join(" · ");
+        const snippet = contentSnippet(row.content, 700);
+        return `**${formatLink(row.title || "Untitled", row.url)}**${metadata ? ` — ${metadata}` : ""}${snippet ? `\n  ${snippet}` : ""}`;
       },
     )}`;
   }

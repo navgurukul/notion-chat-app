@@ -5,12 +5,24 @@ import { ensureSchema, query } from "@/lib/postgres";
 
 const PAGE_SIZE = 100;
 const SYNC_CHUNK_SIZE = 20;
+const DEFAULT_PAGE_BUILD_CONCURRENCY = 3;
 const RETRYABLE_STATUS_CODES = new Set([408, 409, 429, 500, 502, 503, 504]);
+const RETRYABLE_NETWORK_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ECONNREFUSED",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "fetch_failed",
+]);
 
 export type SyncResult = {
   totalPages: number;
   upserted: number;
   skippedUnchanged: number;
+  failedPages: number;
   embeddingsFailed: number;
   synced_at: string;
 };
@@ -18,6 +30,14 @@ export type SyncResult = {
 type SyncRow = {
   id: string;
   synced_at: string;
+  has_embedding: boolean;
+  has_rich_content: boolean;
+};
+
+type SyncOptions = {
+  force?: boolean;
+  embed?: boolean;
+  refreshContent?: boolean;
 };
 
 type PageRecord = {
@@ -44,6 +64,35 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getPageBuildConcurrency() {
+  const parsed = Number.parseInt(process.env.NOTION_SYNC_CONCURRENCY ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_PAGE_BUILD_CONCURRENCY;
+  return Math.min(parsed, 5);
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+) {
+  const results: R[] = [];
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex]);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  );
+
+  return results;
+}
+
 function isRetryableNotionError(error: unknown) {
   if (!error || typeof error !== "object") return false;
   const status = (error as { status?: number; statusCode?: number }).status ??
@@ -51,13 +100,23 @@ function isRetryableNotionError(error: unknown) {
   if (typeof status === "number" && RETRYABLE_STATUS_CODES.has(status)) return true;
 
   const code = String((error as { code?: string }).code ?? "");
-  return code === "rate_limited" || code === "service_unavailable" || code === "internal_server_error";
+  if (
+    code === "rate_limited" ||
+    code === "service_unavailable" ||
+    code === "internal_server_error" ||
+    RETRYABLE_NETWORK_CODES.has(code)
+  ) {
+    return true;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  return /ECONNRESET|ETIMEDOUT|socket|network|fetch failed|terminated/i.test(message);
 }
 
 async function withRetry<T>(
   fn: () => Promise<T>,
   label: string,
-  maxAttempts = 4,
+  maxAttempts = 6,
   timeoutMs = 25000,
 ): Promise<T> {
   let lastError: unknown;
@@ -76,7 +135,7 @@ async function withRetry<T>(
       lastError = error;
       const timedOut = error instanceof Error && /timed out/i.test(error.message);
       if ((!isRetryableNotionError(error) && !timedOut) || attempt === maxAttempts) break;
-      const delayMs = 500 * 2 ** (attempt - 1);
+      const delayMs = 750 * 2 ** (attempt - 1);
       console.warn(`[sync] ${label} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delayMs}ms`);
       await sleep(delayMs);
     }
@@ -128,8 +187,20 @@ function extractPropertyValue(prop: any): string | null {
       return prop.email ?? null;
     case "phone_number":
       return prop.phone_number ?? null;
+    case "files":
+      return prop.files?.map((item: any) => item?.name || item?.file?.url || item?.external?.url).filter(Boolean).join(", ") || null;
+    case "formula":
+      return extractPropertyValue(prop.formula) || null;
+    case "relation":
+      return prop.relation?.length ? `${prop.relation.length} linked item(s)` : null;
+    case "rollup":
+      return extractPropertyValue(prop.rollup) || null;
+    case "created_time":
+      return prop.created_time ?? null;
     case "created_by":
       return prop.created_by?.name || prop.created_by?.id || null;
+    case "last_edited_time":
+      return prop.last_edited_time ?? null;
     case "last_edited_by":
       return prop.last_edited_by?.name || prop.last_edited_by?.id || null;
     default:
@@ -158,9 +229,30 @@ function extractDueDate(properties: Record<string, any>): string | null {
 function extractTextFromBlock(block: any): string {
   const type = block?.type;
   if (!type) return "";
+
+  if (type === "table_row") {
+    const cells = block.table_row?.cells || [];
+    return cells
+      .map((cell: any[]) => cell.map((item: any) => item?.plain_text ?? "").join(""))
+      .join(" | ")
+      .trim();
+  }
+
+  if (type === "code") {
+    const code = getTextFromRichText(block.code?.rich_text);
+    const language = block.code?.language || "text";
+    return code ? `\`\`\`${language}\n${code}\n\`\`\`` : "";
+  }
+
+  if (type === "equation") return block.equation?.expression ? `Equation: ${block.equation.expression}` : "";
+  if (type === "divider") return "---";
+  if (type === "table_of_contents") return "[Table of Contents]";
+  if (type === "breadcrumb") return "[Breadcrumb]";
+  if (type === "child_database") return block.child_database?.title ? `[Database: ${block.child_database.title}]` : "[Database]";
+  if (type === "child_page") return block.child_page?.title ? `[Page: ${block.child_page.title}]` : "[Page]";
+
   const rich = block?.[type]?.rich_text;
   const text = getTextFromRichText(rich).trim();
-  if (!text) return "";
 
   if (type === "heading_1") return `# ${text}`;
   if (type === "heading_2") return `## ${text}`;
@@ -169,7 +261,51 @@ function extractTextFromBlock(block: any): string {
   if (type === "numbered_list_item") return `1. ${text}`;
   if (type === "to_do") return `${block?.to_do?.checked ? "[x]" : "[ ]"} ${text}`;
   if (type === "quote") return `> ${text}`;
+  if (type === "callout") return text ? `${block.callout?.icon?.emoji || ""} ${text}`.trim() : "";
+  if (type === "toggle") return text ? `> ${text}` : "";
+  if (type === "image") {
+    const caption = getTextFromRichText(block.image?.caption);
+    const url = block.image?.file?.url || block.image?.external?.url || "";
+    return caption ? `[Image: ${caption}]` : url ? `[Image: ${url}]` : "";
+  }
+  if (type === "video") {
+    const caption = getTextFromRichText(block.video?.caption);
+    const url = block.video?.file?.url || block.video?.external?.url || "";
+    return caption ? `[Video: ${caption}]` : url ? `[Video: ${url}]` : "";
+  }
+  if (type === "file") {
+    const caption = getTextFromRichText(block.file?.caption);
+    const name = block.file?.name || block.file?.file?.url || block.file?.external?.url || "file";
+    return caption ? `[File: ${name} - ${caption}]` : `[File: ${name}]`;
+  }
+  if (type === "pdf") {
+    const caption = getTextFromRichText(block.pdf?.caption);
+    return caption ? `[PDF: ${caption}]` : "[PDF]";
+  }
+  if (type === "bookmark") {
+    const caption = getTextFromRichText(block.bookmark?.caption);
+    const url = block.bookmark?.url || "";
+    return caption ? `[Bookmark: ${caption} - ${url}]` : url ? `[Bookmark: ${url}]` : "";
+  }
+  if (type === "embed") return block.embed?.url ? `[Embed: ${block.embed.url}]` : "";
+  if (type === "link_preview") return block.link_preview?.url ? `[Link: ${block.link_preview.url}]` : "";
+  if (type === "audio") {
+    const caption = getTextFromRichText(block.audio?.caption);
+    return caption ? `[Audio: ${caption}]` : "[Audio]";
+  }
+
+  if (!text) return "";
   return text;
+}
+
+function buildPropertiesText(properties: Record<string, any>) {
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(properties)) {
+    if (value?.type === "title") continue;
+    const parsed = extractPropertyValue(value);
+    if (parsed?.trim()) lines.push(`${key}: ${parsed.trim()}`);
+  }
+  return lines;
 }
 
 async function fetchBlocksRecursively(
@@ -257,9 +393,19 @@ async function buildPageRecord(notion: Client, page: any): Promise<PageRecord> {
   const properties = (page?.properties ?? {}) as Record<string, any>;
   const title = getPageTitle(page);
   const contentLines = await fetchBlocksRecursively(notion, page.id);
-  const content = contentLines.length
-    ? contentLines.join("\n")
-    : `This is a Notion page titled "${title}".`;
+  const propertyLines = buildPropertiesText(properties);
+  const content = [
+    `Title: ${title}`,
+    page.url ? `URL: ${page.url}` : "",
+    page?.created_by?.name ? `Created by: ${page.created_by.name}` : "",
+    page?.last_edited_by?.name ? `Last edited by: ${page.last_edited_by.name}` : "",
+    propertyLines.length ? "=== PROPERTIES ===" : "",
+    ...propertyLines,
+    "=== CONTENT ===",
+    ...(contentLines.length ? contentLines : [`This is a Notion page titled "${title}".`]),
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return {
     id: page.id,
@@ -280,13 +426,26 @@ async function buildPageRecord(notion: Client, page: any): Promise<PageRecord> {
   };
 }
 
-export async function syncNotionToPostgres(): Promise<SyncResult> {
+export async function syncNotionToPostgres(options: SyncOptions = {}): Promise<SyncResult> {
+  const shouldForce = options.force ?? false;
+  const shouldEmbed = options.embed ?? true;
+  const shouldRefreshContent = options.refreshContent ?? false;
   await ensureSchema();
   const notion = getNotionClient();
   const syncedAt = new Date().toISOString();
 
-  const existingRows = await query<SyncRow>("SELECT id, synced_at FROM notion_pages");
+  const existingRows = await query<SyncRow>(
+    `
+    SELECT
+      id,
+      synced_at,
+      embedding IS NOT NULL AS has_embedding,
+      content LIKE '%=== CONTENT ===%' AS has_rich_content
+    FROM notion_pages
+    `,
+  );
   const existingSyncMap = new Map(existingRows.map((row) => [row.id, row.synced_at]));
+  const existingRowMap = new Map(existingRows.map((row) => [row.id, row]));
 
   const pages = await fetchAllPages(notion);
 
@@ -294,7 +453,13 @@ export async function syncNotionToPostgres(): Promise<SyncResult> {
   let skippedUnchanged = 0;
 
   for (const page of pages) {
-    if (shouldSkipPage(page, existingSyncMap)) {
+    const existingRow = existingRowMap.get(page.id);
+    const hasFreshContent =
+      shouldRefreshContent &&
+      existingRow?.has_rich_content &&
+      shouldSkipPage(page, existingSyncMap);
+
+    if (hasFreshContent || (!shouldForce && !shouldRefreshContent && shouldSkipPage(page, existingSyncMap))) {
       skippedUnchanged += 1;
       continue;
     }
@@ -303,10 +468,11 @@ export async function syncNotionToPostgres(): Promise<SyncResult> {
 
   let upserted = 0;
   let embeddingsFailed = 0;
+  let failedPages = 0;
 
   const totalChunks = Math.ceil(pagesToSync.length / SYNC_CHUNK_SIZE);
   console.log(
-    `[sync] total_pages=${pages.length} to_sync=${pagesToSync.length} skipped_unchanged=${skippedUnchanged} chunks=${totalChunks}`,
+    `[sync] total_pages=${pages.length} to_sync=${pagesToSync.length} skipped_unchanged=${skippedUnchanged} chunks=${totalChunks} force=${shouldForce} refresh_content=${shouldRefreshContent} embed=${shouldEmbed}`,
   );
 
   for (let i = 0; i < pagesToSync.length; i += SYNC_CHUNK_SIZE) {
@@ -314,29 +480,43 @@ export async function syncNotionToPostgres(): Promise<SyncResult> {
     const chunkIndex = Math.floor(i / SYNC_CHUNK_SIZE) + 1;
     console.log(`[sync] chunk ${chunkIndex}/${totalChunks}: building records for ${chunk.length} pages`);
 
-    const records: PageRecord[] = [];
-    for (const page of chunk) {
-      const record = await buildPageRecord(notion, page);
-      records.push(record);
-    }
-
-    const embeddingInputs = records.map((record) =>
-      buildEmbeddingText({
-        title: record.title,
-        owner: record.owner,
-        created_by: record.created_by,
-        last_edited_by: record.last_edited_by,
-        doc_type: record.doc_type,
-        status: record.status,
-        content: record.content,
-      }),
+    const recordResults = await mapWithConcurrency(
+      chunk,
+      getPageBuildConcurrency(),
+      async (page): Promise<PageRecord | null> => {
+        try {
+          return await buildPageRecord(notion, page);
+        } catch (error) {
+          failedPages += 1;
+          const title = getPageTitle(page);
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[sync] skipping page after failed content fetch: ${title} (${page.id}) - ${message}`);
+          return null;
+        }
+      },
     );
-    const embeddings = await embedBatch(embeddingInputs);
+    const records = recordResults.filter((record): record is PageRecord => Boolean(record));
+
+    const embeddings = shouldEmbed
+      ? await embedBatch(
+          records.map((record) =>
+            buildEmbeddingText({
+              title: record.title,
+              owner: record.owner,
+              created_by: record.created_by,
+              last_edited_by: record.last_edited_by,
+              doc_type: record.doc_type,
+              status: record.status,
+              content: record.content,
+            }),
+          ),
+        )
+      : records.map(() => null);
 
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index];
       const embedding = embeddings[index];
-      if (!embedding) embeddingsFailed += 1;
+      if (shouldEmbed && !embedding) embeddingsFailed += 1;
 
       await query(
         `
@@ -358,7 +538,7 @@ export async function syncNotionToPostgres(): Promise<SyncResult> {
           status = EXCLUDED.status,
           due_date = EXCLUDED.due_date,
           content = EXCLUDED.content,
-          embedding = EXCLUDED.embedding,
+          embedding = COALESCE(EXCLUDED.embedding, notion_pages.embedding),
           synced_at = EXCLUDED.synced_at
         `,
         [
@@ -389,6 +569,7 @@ export async function syncNotionToPostgres(): Promise<SyncResult> {
     totalPages: pages.length,
     upserted,
     skippedUnchanged,
+    failedPages,
     embeddingsFailed,
     synced_at: syncedAt,
   };
