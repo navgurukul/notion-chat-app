@@ -1,0 +1,144 @@
+import type { Session } from "next-auth";
+import { query } from "@/lib/postgres";
+
+export const CHAT_HISTORY_LIMIT = 30;
+
+export type ChatSessionRow = {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ChatMessageRow = {
+  id: string;
+  session_id: string;
+  role: "user" | "bot";
+  content: string;
+  created_at: string;
+};
+
+type UserRow = {
+  id: string;
+};
+
+function requireUserEmail(session: Session | null) {
+  const email = session?.user?.email?.trim();
+  if (!email) throw new Error("Authenticated user email is required");
+  return email;
+}
+
+function buildSessionTitle(message: string) {
+  const cleaned = message.replace(/\s+/g, " ").trim();
+  if (!cleaned) return "New Chat";
+  return cleaned.length > 48 ? `${cleaned.slice(0, 48)}...` : cleaned;
+}
+
+export async function getOrCreateUser(session: Session | null) {
+  const email = requireUserEmail(session);
+  const rows = await query<UserRow>(
+    `
+    INSERT INTO users (email, name, image_url, provider, last_login_at, updated_at)
+    VALUES ($1, $2, $3, 'google', now(), now())
+    ON CONFLICT (email) DO UPDATE SET
+      name = EXCLUDED.name,
+      image_url = EXCLUDED.image_url,
+      last_login_at = now(),
+      updated_at = now()
+    RETURNING id
+    `,
+    [email, session?.user?.name ?? null, session?.user?.image ?? null],
+  );
+  return rows[0];
+}
+
+export async function listChatSessions(userId: string) {
+  return query<ChatSessionRow>(
+    `
+    SELECT id, title, created_at::text, updated_at::text
+    FROM chat_sessions
+    WHERE user_id = $1
+    ORDER BY updated_at DESC
+    LIMIT 50
+    `,
+    [userId],
+  );
+}
+
+export async function createChatSession(userId: string, title = "New Chat") {
+  const rows = await query<ChatSessionRow>(
+    `
+    INSERT INTO chat_sessions (user_id, title)
+    VALUES ($1, $2)
+    RETURNING id, title, created_at::text, updated_at::text
+    `,
+    [userId, title],
+  );
+  return rows[0];
+}
+
+export async function ensureSessionBelongsToUser(sessionId: string, userId: string) {
+  const rows = await query<{ id: string }>(
+    `
+    SELECT id
+    FROM chat_sessions
+    WHERE id = $1 AND user_id = $2
+    LIMIT 1
+    `,
+    [sessionId, userId],
+  );
+  return Boolean(rows.length);
+}
+
+export async function listChatMessages(sessionId: string, limit = CHAT_HISTORY_LIMIT) {
+  return query<ChatMessageRow>(
+    `
+    SELECT id, session_id, role, content, created_at::text
+    FROM (
+      SELECT id, session_id, role, content, created_at
+      FROM chat_messages
+      WHERE session_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2
+    ) recent
+    ORDER BY created_at ASC
+    `,
+    [sessionId, limit],
+  );
+}
+
+export async function addChatMessage(sessionId: string, role: "user" | "bot", content: string) {
+  const rows = await query<ChatMessageRow>(
+    `
+    INSERT INTO chat_messages (session_id, role, content)
+    VALUES ($1, $2, $3)
+    RETURNING id, session_id, role, content, created_at::text
+    `,
+    [sessionId, role, content],
+  );
+
+  if (role === "user") {
+    await query(
+      `
+      UPDATE chat_sessions
+      SET
+        title = CASE WHEN title = 'New Chat' THEN $2 ELSE title END,
+        updated_at = now()
+      WHERE id = $1
+      `,
+      [sessionId, buildSessionTitle(content)],
+    );
+  } else {
+    await query("UPDATE chat_sessions SET updated_at = now() WHERE id = $1", [sessionId]);
+  }
+
+  return rows[0];
+}
+
+export async function clearChatMessages(sessionId: string) {
+  await query("DELETE FROM chat_messages WHERE session_id = $1", [sessionId]);
+  await query(
+    "UPDATE chat_sessions SET title = 'New Chat', updated_at = now() WHERE id = $1",
+    [sessionId],
+  );
+}

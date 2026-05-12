@@ -83,6 +83,41 @@ function simplifySearchQuery(searchQuery: string) {
   return keywords.join(" ").trim() || searchQuery.trim();
 }
 
+function escapeLike(value: string) {
+  return value.replace(/[%_]/g, "\\$&");
+}
+
+function titleCandidates(searchQuery: string) {
+  const normalized = searchQuery
+    .replace(/[“”]/g, "\"")
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const splitCandidates = normalized
+    .split(/\s+(?:—|–|-|:)\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 3);
+
+  const questionRemoved = normalized
+    .replace(/^(summarize|summary of|explain|describe|what is|what's|tell me about)\s+/i, "")
+    .replace(/\b(what is|what's|core idea|main idea|summary|explain)\b.*$/i, "")
+    .trim();
+
+  return Array.from(new Set([splitCandidates[0], questionRemoved, normalized].filter(Boolean))).slice(0, 3);
+}
+
+function titleKeywords(searchQuery: string) {
+  return simplifySearchQuery(searchQuery)
+    .replace(/\b(summarize|summary|explain|describe|details?|detail|about|document|proposal|core|idea|main)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length > 1)
+    .slice(0, 6);
+}
+
 function formatContext(rows: SearchRow[]) {
   const maxChars = getMaxContextChars();
   const sections: string[] = [];
@@ -163,6 +198,48 @@ async function vectorSearch(searchQuery: string) {
   return rows;
 }
 
+async function titleSearch(searchQuery: string) {
+  const candidates = titleCandidates(searchQuery);
+  for (const candidate of candidates) {
+    const rows = await query<SearchRow>(
+      `
+      SELECT id, title, url, owner, created_by, status, content, 100 AS rank
+      FROM notion_pages
+      WHERE lower(coalesce(title, '')) = lower($1)
+         OR lower(coalesce(title, '')) LIKE lower($2) ESCAPE '\\'
+      ORDER BY
+        CASE WHEN lower(coalesce(title, '')) = lower($1) THEN 0 ELSE 1 END,
+        length(coalesce(title, '')) ASC,
+        title ASC
+      LIMIT 5
+      `,
+      [candidate, `%${escapeLike(candidate)}%`],
+    );
+    if (rows.length) return rows;
+  }
+
+  const terms = titleKeywords(searchQuery);
+  if (terms.length < 2) return [];
+
+  return query<SearchRow>(
+    `
+    SELECT id, title, url, owner, created_by, status, content, 50 AS rank
+    FROM notion_pages
+    WHERE ${terms
+      .map((_, index) => `lower(coalesce(title, '')) LIKE lower($${index + 1}) ESCAPE '\\'`)
+      .join(" AND ")}
+    ORDER BY length(coalesce(title, '')) ASC, title ASC
+    LIMIT $${terms.length + 1}
+    `,
+    [...terms.map((term) => `%${escapeLike(term)}%`), 5],
+  );
+}
+
+function mergeSearchRows(primary: SearchRow[], secondary: SearchRow[]) {
+  const seen = new Set(primary.map((row) => row.id));
+  return [...primary, ...secondary.filter((row) => !seen.has(row.id))];
+}
+
 async function fullTextSearch(searchQuery: string) {
   const topK = getTopK();
   const cleanedQuery = simplifySearchQuery(searchQuery);
@@ -241,6 +318,7 @@ export async function semanticSearch(searchQuery: string): Promise<string> {
   if (!cleaned) return "";
 
   let rows: SearchRow[] = [];
+  const titleRows = await titleSearch(cleaned);
   const embeddingsAvailable = await hasEmbeddings();
 
   if (embeddingsAvailable) {
@@ -253,6 +331,8 @@ export async function semanticSearch(searchQuery: string): Promise<string> {
     }
     rows = await fullTextSearch(cleaned);
   }
+
+  rows = mergeSearchRows(titleRows, rows);
 
   if (!rows.length) return "";
   return formatContext(rows);

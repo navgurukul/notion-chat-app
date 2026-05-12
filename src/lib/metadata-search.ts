@@ -14,6 +14,8 @@ type NotionPageRow = {
   match_source?: string | null;
 };
 
+const SQL_RESULT_LIMIT = 20;
+
 function escapeLike(value: string) {
   return value.replace(/[%_]/g, "\\$&");
 }
@@ -38,7 +40,10 @@ function formatListHeader(count: number, label: string) {
 }
 
 function formatRows(rows: NotionPageRow[], formatter: (row: NotionPageRow) => string) {
-  return rows.map((row) => `- ${formatter(row)}`).join("\n");
+  const visibleRows = rows.slice(0, SQL_RESULT_LIMIT);
+  const renderedRows = visibleRows.map((row) => `- ${formatter(row)}`).join("\n");
+  if (rows.length <= SQL_RESULT_LIMIT) return renderedRows;
+  return `${renderedRows}\n\n_Showing top ${SQL_RESULT_LIMIT}. Please narrow the question for more specific results._`;
 }
 
 function contentSnippet(content?: string | null, maxLength = 450) {
@@ -63,7 +68,7 @@ async function lookupByTitle(title: string) {
       CASE WHEN lower(coalesce(title, '')) = lower($2) THEN 0 ELSE 1 END,
       ts_rank(to_tsvector('english', coalesce(title, '')), plainto_tsquery('english', $2)) DESC,
       title ASC
-    LIMIT 100
+    LIMIT 20
     `,
     [term, title],
   );
@@ -80,7 +85,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       FROM notion_pages
       WHERE lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
       ORDER BY title ASC
-      LIMIT 500
+      LIMIT 20
       `,
       [`%${escapeLike(person)}%`],
     );
@@ -99,7 +104,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       FROM notion_pages
       WHERE lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\'
       ORDER BY title ASC
-      LIMIT 500
+      LIMIT 20
       `,
       [`%${escapeLike(person)}%`],
     );
@@ -131,7 +136,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
           OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
         )
       ORDER BY title ASC
-      LIMIT 200
+      LIMIT 20
       `,
       [personTerm, fuzzyPersonTerm, topicTerm],
     );
@@ -199,7 +204,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
       )
       ORDER BY title ASC
-      LIMIT 700
+      LIMIT 20
       `,
       [personTerm, fuzzyPersonTerm, topicTerm],
     );
@@ -232,6 +237,22 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
   if (parsed.kind === "project_manager_of" && docTitle) {
     const normalizedTopic = normalizeTopic(docTitle);
     const topicTerm = `%${escapeLike(normalizedTopic || docTitle)}%`;
+    const exactRows = await query<NotionPageRow>(
+      `
+      SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
+      FROM notion_pages
+      WHERE lower(coalesce(title, '')) = lower($1)
+      LIMIT 1
+      `,
+      [normalizedTopic || docTitle],
+    );
+
+    if (exactRows.length) {
+      const row = exactRows[0];
+      if (row.owner?.trim()) return row.owner.trim();
+      return null;
+    }
+
     const rows = await query<NotionPageRow>(
       `
       SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
@@ -278,7 +299,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       FROM notion_pages
       WHERE lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
       ORDER BY title ASC
-      LIMIT 700
+      LIMIT 20
       `,
       [`%${escapeLike(docTitle)}%`],
     );

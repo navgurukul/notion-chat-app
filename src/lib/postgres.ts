@@ -29,6 +29,41 @@ export async function ensureSchema() {
   const client = await getPool().connect();
   try {
     await client.query("CREATE EXTENSION IF NOT EXISTS vector;");
+    await client.query("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email             TEXT NOT NULL UNIQUE,
+        name              TEXT,
+        image_url         TEXT,
+        provider          TEXT DEFAULT 'google',
+        provider_user_id  TEXT,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        last_login_at     TIMESTAMPTZ
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chat_sessions (
+        id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title       TEXT NOT NULL DEFAULT 'New Chat',
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        session_id  UUID NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+        role        TEXT NOT NULL CHECK (role IN ('user', 'bot')),
+        content     TEXT NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS notion_pages (
@@ -73,6 +108,21 @@ export async function ensureSchema() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS notion_pages_last_edited_by_idx
       ON notion_pages (lower(last_edited_by));
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS users_email_idx
+      ON users (email);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS chat_sessions_user_updated_idx
+      ON chat_sessions (user_id, updated_at DESC);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS chat_messages_session_created_idx
+      ON chat_messages (session_id, created_at ASC);
     `);
 
     schemaEnsured = true;

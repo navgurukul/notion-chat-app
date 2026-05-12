@@ -3,8 +3,7 @@
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
-import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
-import { saveMessage, getMessages, clearMessages } from "@/lib/db";
+import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -13,13 +12,19 @@ interface Message {
   content: string;
 }
 
+type ChatSession = {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+};
+
 type ThinkingStatus = "idle" | "retrieving" | "generating";
 
 type ThinkingEntry = {
   summary: string;
   status: ThinkingStatus;
   isStreaming: boolean;
-  isCollapsed: boolean;
 };
 
 type ThinkingByMessage = { [key: number]: ThinkingEntry };
@@ -67,6 +72,9 @@ export default function ChatPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [isLoadingChats, setIsLoadingChats] = useState(false);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [thinkingByMessage, setThinkingByMessage] = useState<ThinkingByMessage>({});
@@ -85,25 +93,76 @@ export default function ChatPage() {
   }, [status, router]);
 
   useEffect(() => {
-    const loadMessages = async () => {
-      const savedMessages = await getMessages();
-      setMessages(savedMessages.map(m => ({ role: m.role, content: m.content })));
-    };
-    if (status === "authenticated") {
-      loadMessages();
-      const stored = localStorage.getItem(LAST_SYNC_STORAGE_KEY);
-      if (stored) setLastSyncedAt(stored);
-      fetch("/api/sync")
-        .then((response) => (response.ok ? response.json() : null))
-        .then((data) => {
+    if (status !== "authenticated") return;
+
+    const loadInitialData = async () => {
+      setIsLoadingChats(true);
+      try {
+        const stored = localStorage.getItem(LAST_SYNC_STORAGE_KEY);
+        if (stored) setLastSyncedAt(stored);
+
+        const [syncResponse, chatsResponse] = await Promise.all([
+          fetch("/api/sync"),
+          fetch("/api/chats"),
+        ]);
+
+        if (syncResponse.ok) {
+          const data = await syncResponse.json();
           if (typeof data?.synced_at === "string" && data.synced_at) {
             setLastSyncedAt(data.synced_at);
             localStorage.setItem(LAST_SYNC_STORAGE_KEY, data.synced_at);
           }
-        })
-        .catch((error) => console.error("Failed to load sync status:", error));
-    }
+        }
+
+        if (!chatsResponse.ok) throw new Error("Failed to load chats");
+        const chatsData = await chatsResponse.json();
+        let sessions = Array.isArray(chatsData?.sessions) ? chatsData.sessions : [];
+
+        if (!sessions.length) {
+          const createResponse = await fetch("/api/chats", { method: "POST" });
+          if (!createResponse.ok) throw new Error("Failed to create chat");
+          const createData = await createResponse.json();
+          sessions = createData?.session ? [createData.session] : [];
+        }
+
+        setChatSessions(sessions);
+        setActiveSessionId(sessions[0]?.id ?? null);
+      } catch (error) {
+        console.error("Failed to load initial chat data:", error);
+      } finally {
+        setIsLoadingChats(false);
+      }
+    };
+
+    loadInitialData();
   }, [status]);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      setMessages([]);
+      return;
+    }
+
+    const loadSessionMessages = async () => {
+      try {
+        const response = await fetch(`/api/chats/${activeSessionId}/messages`);
+        if (!response.ok) throw new Error("Failed to load chat messages");
+        const data = await response.json();
+        const loadedMessages = Array.isArray(data?.messages) ? data.messages : [];
+        setMessages(
+          loadedMessages.map((message: Message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+        );
+        setThinkingByMessage({});
+      } catch (error) {
+        console.error("Failed to load chat messages:", error);
+      }
+    };
+
+    loadSessionMessages();
+  }, [activeSessionId]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setSyncClock(Date.now()), 60000);
@@ -114,36 +173,77 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const toggleThinkingCollapse = (index: number) => {
-    setThinkingByMessage((prev) => {
-      const entry = prev[index];
-      if (!entry) return prev;
-      return {
-        ...prev,
-        [index]: {
-          ...entry,
-          isCollapsed: !entry.isCollapsed,
-        },
-      };
+  const refreshChatSessions = async () => {
+    const response = await fetch("/api/chats");
+    if (!response.ok) return;
+    const data = await response.json();
+    if (Array.isArray(data?.sessions)) setChatSessions(data.sessions);
+  };
+
+  const saveServerMessage = async (sessionId: string, message: Message) => {
+    await fetch(`/api/chats/${sessionId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(message),
     });
+    refreshChatSessions().catch((error) => console.error("Failed to refresh chats:", error));
+  };
+
+  const createNewChat = async () => {
+    if (isLoading || isLoadingChats) return;
+    setIsLoadingChats(true);
+    try {
+      const response = await fetch("/api/chats", { method: "POST" });
+      if (!response.ok) throw new Error("Failed to create chat");
+      const data = await response.json();
+      if (data?.session) {
+        setChatSessions((prev) => [data.session, ...prev]);
+        setActiveSessionId(data.session.id);
+        setMessages([]);
+        setThinkingByMessage({});
+      }
+    } catch (error) {
+      console.error("Failed to create chat:", error);
+    } finally {
+      setIsLoadingChats(false);
+    }
+  };
+
+  const clearActiveChat = async () => {
+    if (!activeSessionId || isLoading) return;
+    try {
+      const response = await fetch(`/api/chats/${activeSessionId}/messages`, { method: "DELETE" });
+      if (!response.ok) throw new Error("Failed to clear chat");
+      setMessages([]);
+      setThinkingByMessage({});
+      await refreshChatSessions();
+    } catch (error) {
+      console.error("Failed to clear chat:", error);
+    }
   };
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || !activeSessionId) return;
 
     const userMessage = input.trim();
+    const sessionId = activeSessionId;
     setInput("");
 
     const newUserMsg: Message = { role: "user", content: userMessage };
     setMessages((prev) => [...prev, newUserMsg]);
-    await saveMessage(newUserMsg);
+    await saveServerMessage(sessionId, newUserMsg);
 
     setIsLoading(true);
     botMessageIndexRef.current = null;
 
     try {
-      const history = messages.slice(-8);
+      const history = messages
+        .slice(-8)
+        .map((message) => ({
+          role: message.role,
+          content: message.content.length > 1200 ? `${message.content.slice(0, 1200)}...` : message.content,
+        }));
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -173,7 +273,6 @@ export default function ChatPage() {
           summary: "",
           status: "retrieving",
           isStreaming: true,
-          isCollapsed: false,
         },
       }));
 
@@ -304,12 +403,12 @@ export default function ChatPage() {
         updateMessageContent();
       }
 
-      await saveMessage({ role: "bot", content: cleanedAnswer });
+      await saveServerMessage(sessionId, { role: "bot", content: cleanedAnswer });
 
     } catch {
       const failMsg: Message = { role: "bot", content: "Failed to connect to the server." };
       setMessages((prev) => [...prev, failMsg]);
-      await saveMessage(failMsg);
+      await saveServerMessage(sessionId, failMsg);
     } finally {
       setIsLoading(false);
       const finalBotIndex = botMessageIndexRef.current;
@@ -331,7 +430,6 @@ export default function ChatPage() {
   };
 
   const handleLogout = async () => {
-    await clearMessages();
     setThinkingByMessage({});
     signOut();
   };
@@ -428,7 +526,7 @@ export default function ChatPage() {
             </div>
             <h3 className="text-xl font-bold mb-2">Erase Chat History?</h3>
             <p className="text-white/60 text-sm mb-6 leading-relaxed">
-              For your privacy, chats are stored locally in your browser. Logging out will <span className="text-white font-semibold">permanently delete</span> all your chat history.
+              Your chats are now stored securely in PostgreSQL. Logging out will end this session, but it will not delete saved chat history.
             </p>
             <div className="flex gap-3">
               <button
@@ -441,7 +539,7 @@ export default function ChatPage() {
                 onClick={handleLogout}
                 className="flex-1 py-3 px-4 rounded-xl bg-red-500 hover:bg-red-600 transition-all font-medium active:scale-[0.98]"
               >
-                Logout & Clear
+                Sign Out
               </button>
             </div>
           </div>
@@ -475,6 +573,48 @@ export default function ChatPage() {
         </div>
 
         <div className="flex-1 p-4 overflow-y-auto">
+          <button
+            onClick={createNewChat}
+            disabled={isLoadingChats || isLoading}
+            className="w-full mb-3 p-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/[0.08] text-white/80 hover:text-white transition-colors flex items-center justify-center gap-2 text-sm font-semibold disabled:opacity-50"
+          >
+            <Plus className="w-4 h-4" />
+            New Chat
+          </button>
+
+          <div className="flex items-center justify-between mb-3 px-2">
+            <div className="text-xs font-semibold text-white/30 uppercase tracking-wider">
+              Recent Chats
+            </div>
+            <button
+              onClick={clearActiveChat}
+              disabled={!activeSessionId || isLoading}
+              className="text-white/35 hover:text-red-400 transition-colors disabled:opacity-40"
+              title="Clear current chat"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="space-y-2 mb-6">
+            {chatSessions.map((chat) => (
+              <button
+                key={chat.id}
+                onClick={() => setActiveSessionId(chat.id)}
+                className={`w-full text-left px-3 py-2 rounded-lg text-sm truncate transition-colors ${
+                  activeSessionId === chat.id
+                    ? "bg-blue-600/20 text-blue-200 border border-blue-500/30"
+                    : "bg-white/5 text-white/55 hover:bg-white/[0.08] hover:text-white"
+                }`}
+              >
+                {chat.title || "New Chat"}
+              </button>
+            ))}
+            {!chatSessions.length && (
+              <p className="text-xs text-white/35 px-2">No chats yet.</p>
+            )}
+          </div>
+
           <div className="text-xs font-semibold text-white/30 uppercase tracking-wider mb-4 px-2">
             Active Connection
           </div>
@@ -556,13 +696,11 @@ export default function ChatPage() {
               const showThinking =
                 msg.role === "bot" &&
                 Boolean(thinkingEntry) &&
-                (thinkingEntry?.isStreaming || Boolean(thinkingEntry?.summary?.trim()));
-              const thinkingSummary = thinkingEntry?.summary?.trim() || "";
-              const thinkingBody = thinkingSummary
-                ? thinkingSummary
-                : thinkingEntry?.isStreaming
-                  ? "Generating summary..."
-                  : "Summary not available";
+                Boolean(thinkingEntry?.isStreaming);
+              const thinkingLabel =
+                thinkingEntry?.status === "retrieving"
+                  ? "Searching Notion..."
+                  : "Generating answer...";
 
               return (
                 <div
@@ -578,43 +716,9 @@ export default function ChatPage() {
                     : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
                     }`}>
                     {showThinking && thinkingEntry && (
-                      <div className="mb-4 rounded-2xl border border-blue-500/40 bg-blue-500/10 p-4 text-blue-50/90 shadow-[0_0_0_1px_rgba(59,130,246,0.08)]">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-blue-200">
-                            {thinkingEntry.isStreaming ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <CheckCircle className="h-3.5 w-3.5" />
-                            )}
-                            <span>
-                              {thinkingEntry.isStreaming
-                                ? thinkingEntry.status === "retrieving"
-                                  ? "Retrieving context"
-                                  : "Generating response"
-                                : "Thinking Summary"}
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => toggleThinkingCollapse(idx)}
-                            aria-expanded={!thinkingEntry.isCollapsed}
-                            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold text-blue-100/90 transition-colors hover:bg-blue-500/10 hover:text-white"
-                          >
-                            {thinkingEntry.isCollapsed ? (
-                              <ChevronDown className="h-4 w-4" />
-                            ) : (
-                              <ChevronUp className="h-4 w-4" />
-                            )}
-                            <span>
-                              {thinkingEntry.isCollapsed ? "Expand Thinking" : "Collapse Thinking"}
-                            </span>
-                          </button>
-                        </div>
-                        {!thinkingEntry.isCollapsed && (
-                          <div className="mt-3 text-sm leading-relaxed text-blue-50/90 whitespace-pre-wrap">
-                            {thinkingBody}
-                          </div>
-                        )}
+                      <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-500/25 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-100/80">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <span>{thinkingLabel}</span>
                       </div>
                     )}
                     <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
@@ -663,12 +767,13 @@ export default function ChatPage() {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask anything..."
+              disabled={!activeSessionId || isLoadingChats}
+              placeholder={activeSessionId ? "Ask anything..." : "Creating chat..."}
               className="w-full p-4 pr-14 rounded-2xl bg-white/5 border border-white/10 focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.07] transition-all placeholder:text-white/20 text-white"
             />
             <button
               type="submit"
-              disabled={!input.trim() || isLoading}
+              disabled={!input.trim() || isLoading || !activeSessionId}
               className="absolute right-2 top-2 p-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 transition-all font-semibold"
             >
               <Send className="w-5 h-5" />
