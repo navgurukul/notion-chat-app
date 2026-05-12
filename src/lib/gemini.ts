@@ -188,6 +188,13 @@ function buildDeepSeekMessages(
   ];
 }
 
+function buildDeepSeekJsonMessages(systemPrompt: string, prompt: string) {
+  return [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: prompt },
+  ];
+}
+
 async function requestDeepSeek(payload: unknown) {
   const response = await fetch(DEEPSEEK_API_URL, {
     method: "POST",
@@ -307,6 +314,47 @@ export async function getChatResponse(
     console.error("AI Error:", error);
     throw error;
   }
+}
+
+export async function getJsonCompletion(systemPrompt: string, prompt: string) {
+  const provider = getAIProvider();
+
+  if (provider === "deepseek") {
+    const response = await withRetry(
+      () =>
+        requestDeepSeek({
+          model: getDeepSeekModel(),
+          messages: buildDeepSeekJsonMessages(systemPrompt, prompt),
+          response_format: { type: "json_object" },
+          temperature: 0,
+          max_tokens: 220,
+        }),
+      "DeepSeek JSON completion",
+    );
+
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) throw new Error("DeepSeek JSON response missing content.");
+    return content;
+  }
+
+  const model = getGeminiClient().getGenerativeModel({
+    model: getGeminiModel(),
+    generationConfig: {
+      temperature: 0,
+      maxOutputTokens: 220,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const result = await withRetry(
+    () => model.generateContent([systemPrompt, prompt]),
+    "Gemini JSON completion",
+  );
+  const response = await result.response;
+  return response.text();
 }
 
 export async function getChatStream(

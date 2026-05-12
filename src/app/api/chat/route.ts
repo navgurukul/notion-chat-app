@@ -4,6 +4,7 @@ import { getChatStream } from "@/lib/gemini";
 import { authOptions } from "@/lib/auth";
 import { buildContextualSearchQuery, sanitizeChatHistory } from "@/lib/chat";
 import { parseQuery } from "@/lib/query-router";
+import { verifyQueryWithAI } from "@/lib/query-verifier";
 import { handleMetadataQuery } from "@/lib/metadata-search";
 import { semanticSearch } from "@/lib/vector-search";
 
@@ -26,10 +27,11 @@ export async function POST(req: NextRequest) {
 
     const trimmedMessage = message.trim().slice(0, MAX_MESSAGE_LENGTH);
     const chatHistory = sanitizeChatHistory(history);
-    const parsed = parseQuery(trimmedMessage);
+    const parsedByRules = parseQuery(trimmedMessage);
+    const parsed = await verifyQueryWithAI(trimmedMessage, parsedByRules);
 
     if (process.env.NODE_ENV !== "production") {
-      console.log("[chat] parsed_query=", parsed);
+      console.log("[chat] parsed_query=", { rules: parsedByRules, final: parsed });
     }
 
     if (parsed.kind !== "semantic") {
