@@ -68,7 +68,7 @@ async function lookupByTitle(title: string) {
       CASE WHEN lower(coalesce(title, '')) = lower($2) THEN 0 ELSE 1 END,
       ts_rank(to_tsvector('english', coalesce(title, '')), plainto_tsquery('english', $2)) DESC,
       title ASC
-    LIMIT 20
+    LIMIT ${SQL_RESULT_LIMIT}
     `,
     [term, title],
   );
@@ -85,7 +85,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       FROM notion_pages
       WHERE lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
       ORDER BY title ASC
-      LIMIT 20
+      LIMIT ${SQL_RESULT_LIMIT}
       `,
       [`%${escapeLike(person)}%`],
     );
@@ -104,7 +104,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       FROM notion_pages
       WHERE lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\'
       ORDER BY title ASC
-      LIMIT 20
+      LIMIT ${SQL_RESULT_LIMIT}
       `,
       [`%${escapeLike(person)}%`],
     );
@@ -136,7 +136,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
           OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
         )
       ORDER BY title ASC
-      LIMIT 20
+      LIMIT ${SQL_RESULT_LIMIT}
       `,
       [personTerm, fuzzyPersonTerm, topicTerm],
     );
@@ -204,7 +204,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
       )
       ORDER BY title ASC
-      LIMIT 20
+      LIMIT ${SQL_RESULT_LIMIT}
       `,
       [personTerm, fuzzyPersonTerm, topicTerm],
     );
@@ -273,7 +273,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       ORDER BY
         CASE WHEN lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\' THEN 0 ELSE 1 END,
         title ASC
-      LIMIT 20
+      LIMIT ${SQL_RESULT_LIMIT}
       `,
       [topicTerm],
     );
@@ -299,7 +299,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       FROM notion_pages
       WHERE lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
       ORDER BY title ASC
-      LIMIT 20
+      LIMIT ${SQL_RESULT_LIMIT}
       `,
       [`%${escapeLike(docTitle)}%`],
     );

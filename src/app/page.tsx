@@ -180,15 +180,6 @@ export default function ChatPage() {
     if (Array.isArray(data?.sessions)) setChatSessions(data.sessions);
   };
 
-  const saveServerMessage = async (sessionId: string, message: Message) => {
-    await fetch(`/api/chats/${sessionId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(message),
-    });
-    refreshChatSessions().catch((error) => console.error("Failed to refresh chats:", error));
-  };
-
   const createNewChat = async () => {
     if (isLoading || isLoadingChats) return;
     setIsLoadingChats(true);
@@ -232,7 +223,6 @@ export default function ChatPage() {
 
     const newUserMsg: Message = { role: "user", content: userMessage };
     setMessages((prev) => [...prev, newUserMsg]);
-    await saveServerMessage(sessionId, newUserMsg);
 
     setIsLoading(true);
     botMessageIndexRef.current = null;
@@ -247,7 +237,7 @@ export default function ChatPage() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userMessage, history }),
+        body: JSON.stringify({ message: userMessage, history, sessionId }),
       });
 
       if (!response.ok) throw new Error("Failed to get response");
@@ -403,12 +393,11 @@ export default function ChatPage() {
         updateMessageContent();
       }
 
-      await saveServerMessage(sessionId, { role: "bot", content: cleanedAnswer });
+      refreshChatSessions().catch((error) => console.error("Failed to refresh chats:", error));
 
     } catch {
       const failMsg: Message = { role: "bot", content: "Failed to connect to the server." };
       setMessages((prev) => [...prev, failMsg]);
-      await saveServerMessage(sessionId, failMsg);
     } finally {
       setIsLoading(false);
       const finalBotIndex = botMessageIndexRef.current;

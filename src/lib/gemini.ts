@@ -23,6 +23,14 @@ class HttpError extends Error {
 
 let geminiClient: GoogleGenerativeAI | null = null;
 
+const AI_PROVIDER: AIProvider = (() => {
+  const provider = (process.env.AI_PROVIDER || "gemini").toLowerCase();
+  if (provider === "gemini" || provider === "deepseek") {
+    return provider;
+  }
+  throw new Error(`Unsupported AI_PROVIDER "${provider}". Use "gemini" or "deepseek".`);
+})();
+
 function requireEnv(name: string) {
   const value = process.env[name];
   if (!value) {
@@ -32,11 +40,7 @@ function requireEnv(name: string) {
 }
 
 function getAIProvider(): AIProvider {
-  const provider = (process.env.AI_PROVIDER || "gemini").toLowerCase();
-  if (provider === "gemini" || provider === "deepseek") {
-    return provider;
-  }
-  throw new Error(`Unsupported AI_PROVIDER "${provider}". Use "gemini" or "deepseek".`);
+  return AI_PROVIDER;
 }
 
 function getGeminiClient() {
@@ -61,7 +65,6 @@ function getDeepSeekModel() {
 function formatConversationHistory(history: ChatHistoryItem[] = []) {
   const recentHistory = history
     .filter((item) => item.content.trim())
-    .slice(-8)
     .map((item) => `${item.role === "user" ? "User" : "Assistant"}: ${item.content.trim()}`)
     .join("\n\n");
 

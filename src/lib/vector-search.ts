@@ -68,6 +68,7 @@ function simplifySearchQuery(searchQuery: string) {
     "to",
     "type",
     "what",
+    "with",
     "which",
     "who",
     "whose",
@@ -100,8 +101,11 @@ function titleCandidates(searchQuery: string) {
     .filter((part) => part.length >= 3);
 
   const questionRemoved = normalized
-    .replace(/^(summarize|summary of|explain|describe|what is|what's|tell me about)\s+/i, "")
-    .replace(/\b(what is|what's|core idea|main idea|summary|explain)\b.*$/i, "")
+    .replace(
+      /^(summarize|summary of|explain|describe|what is|what's|tell me about|provide me with|provide|give me|give all data of|give data of|show me|show)\s+/i,
+      "",
+    )
+    .replace(/\b(what is|what's|core idea|main idea|summary|explain|provide|details?)\b.*$/i, "")
     .trim();
 
   return Array.from(new Set([splitCandidates[0], questionRemoved, normalized].filter(Boolean))).slice(0, 3);
@@ -109,7 +113,8 @@ function titleCandidates(searchQuery: string) {
 
 function titleKeywords(searchQuery: string) {
   return simplifySearchQuery(searchQuery)
-    .replace(/\b(summarize|summary|explain|describe|details?|detail|about|document|proposal|core|idea|main)\b/gi, " ")
+    .replace(/\b(summarize|summary|summry|sumry|explain|describe|details?|detail|about|document|proposal|core|idea|main)\b/gi, " ")
+    .replace(/\b(provide|give|show|fetched|fetvhed|notion|link|project|data|info|inside|above)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim()
     .split(/\s+/)
@@ -219,15 +224,19 @@ async function titleSearch(searchQuery: string) {
   }
 
   const terms = titleKeywords(searchQuery);
-  if (terms.length < 2) return [];
+  if (!terms.length) return [];
 
   return query<SearchRow>(
     `
     SELECT id, title, url, owner, created_by, status, content, 50 AS rank
     FROM notion_pages
-    WHERE ${terms
-      .map((_, index) => `lower(coalesce(title, '')) LIKE lower($${index + 1}) ESCAPE '\\'`)
-      .join(" AND ")}
+    WHERE ${
+      terms.length === 1
+        ? `lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'`
+        : terms
+            .map((_, index) => `lower(coalesce(title, '')) LIKE lower($${index + 1}) ESCAPE '\\'`)
+            .join(" AND ")
+    }
     ORDER BY length(coalesce(title, '')) ASC, title ASC
     LIMIT $${terms.length + 1}
     `,

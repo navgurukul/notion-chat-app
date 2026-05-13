@@ -28,6 +28,9 @@ export async function ensureSchema() {
 
   const client = await getPool().connect();
   try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(2026051201);");
+
     await client.query("CREATE EXTENSION IF NOT EXISTS vector;");
     await client.query("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
 
@@ -125,8 +128,12 @@ export async function ensureSchema() {
       ON chat_messages (session_id, created_at ASC);
     `);
 
+    await client.query("COMMIT");
     schemaEnsured = true;
     console.log("Database schema ready");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
   } finally {
     client.release();
   }
