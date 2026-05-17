@@ -67,6 +67,21 @@ const CASES: Array<{
     expectKind: "activity_summary",
     mustInclude: ["komal", "Komal"],
   },
+  {
+    question: "in 2026 which project tamanna is working on?",
+    expectKind: "activity_summary",
+    mustInclude: ["tamanna", "2026", "no project assigned"],
+  },
+  {
+    question: "what project komal has worked in 2025",
+    expectKind: "activity_summary",
+    mustInclude: ["komal", "2025", "Reflection"],
+  },
+  {
+    question: "all the projects komal has worked in 2026",
+    expectKind: "activity_summary",
+    mustInclude: ["komal", "2026", "Reflection"],
+  },
 ];
 
 async function main() {

@@ -21,8 +21,22 @@ export type ParsedQuery = {
   kind: QueryKind;
   personName?: string;
   docTitle?: string;
+  /** Calendar year from phrases like "in 2026" */
+  year?: number;
   raw: string;
 };
+
+export function extractYearFromQuestion(question: string): number | undefined {
+  const match = question.match(/\b(20\d{2})\b/);
+  if (!match?.[1]) return undefined;
+  const year = Number.parseInt(match[1], 10);
+  return year >= 2020 && year <= 2099 ? year : undefined;
+}
+
+function withYear(question: string, partial: Omit<ParsedQuery, "raw" | "year">): ParsedQuery {
+  const year = extractYearFromQuestion(question);
+  return { ...partial, year, raw: question };
+}
 
 function normalize(text: string) {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
@@ -43,7 +57,9 @@ function stripDocWords(value: string) {
 
 function cleanPersonName(value: string | null) {
   if (!value) return null;
-  const cleaned = stripDocWords(value);
+  const cleaned = stripDocWords(value)
+    .replace(/\s+(?:has|have|had)\s*$/i, "")
+    .trim();
   if (!cleaned) return null;
   if (/^(what|which|who|when|where|why|how|is|was|are|were|task|tasks|project|projects|work|manager|lead|only|one)$/i.test(cleaned)) {
     return null;
@@ -61,6 +77,59 @@ function extractAfter(text: string, patterns: RegExp[]): string | null {
 
 /** Activity / recency questions — must run before the broad worked_on_list gate. */
 function parseActivityQuery(question: string, q: string): ParsedQuery | null {
+  const projectWorkedInYearMatch =
+    question.match(
+      /\b(?:all\s+(?:the\s+)?)?projects?\s+(.+?)\s+(?:has|have)\s+worked(?:\s+on)?(?:\s+in\s+(20\d{2}))?/i,
+    ) ??
+    question.match(
+      /\b(?:what|which)\s+projects?\s+(.+?)\s+(?:has|have)\s+worked(?:\s+on)?(?:\s+in\s+(20\d{2}))?/i,
+    ) ??
+    question.match(
+      /\b(?:what|which)\s+projects?\s+(.+?)\s+worked(?:\s+on)?\s+in\s+(20\d{2})/i,
+    ) ??
+    question.match(
+      /\b(?:what|which)\s+projects?\s+(?:did|does)\s+(.+?)\s+work\s+on\s+in\s+(20\d{2})/i,
+    );
+  if (projectWorkedInYearMatch?.[1]) {
+    const person = cleanPersonName(projectWorkedInYearMatch[1]);
+    if (person) {
+      const yearFromGroup = projectWorkedInYearMatch[2];
+      const year = yearFromGroup
+        ? Number.parseInt(yearFromGroup, 10)
+        : extractYearFromQuestion(question);
+      return withYear(question, {
+        kind: "activity_summary",
+        personName: person,
+        ...(year ? { year } : {}),
+      });
+    }
+  }
+
+  const yearProjectWorkingMatch =
+    question.match(
+      /(?:in\s+)?(20\d{2})\s+which\s+projects?\s+(.+?)\s+is\s+(?:working|work)(?:\s+on)?/i,
+    ) ??
+    question.match(
+      /which\s+projects?\s+(.+?)\s+is\s+(?:working|work)(?:\s+on)?(?:\s+in\s+(20\d{2}))?/i,
+    );
+  if (yearProjectWorkingMatch) {
+    const yearStr = yearProjectWorkingMatch[1]?.match(/^20\d{2}$/)
+      ? yearProjectWorkingMatch[1]
+      : yearProjectWorkingMatch[2];
+    const personRaw = yearProjectWorkingMatch[1]?.match(/^20\d{2}$/)
+      ? yearProjectWorkingMatch[2]
+      : yearProjectWorkingMatch[1];
+    const person = cleanPersonName(personRaw ?? "");
+    if (person) {
+      const year = yearStr ? Number.parseInt(yearStr, 10) : extractYearFromQuestion(question);
+      return withYear(question, {
+        kind: "activity_summary",
+        personName: person,
+        ...(year ? { year } : {}),
+      });
+    }
+  }
+
   const whichPersonWorkingMatch =
     question.match(
       /which\s+projects?\s+(.+?)\s+is\s+(?:working|work)(?:\s+on)?(?:\s+currently|\s+now)?/i,
@@ -71,7 +140,7 @@ function parseActivityQuery(question: string, q: string): ParsedQuery | null {
   if (whichPersonWorkingMatch?.[1]) {
     const person = cleanPersonName(whichPersonWorkingMatch[1]);
     if (person) {
-      return { kind: "activity_summary", personName: person, raw: question };
+      return withYear(question, { kind: "activity_summary", personName: person });
     }
   }
 
@@ -85,7 +154,7 @@ function parseActivityQuery(question: string, q: string): ParsedQuery | null {
   if (whatPersonWorkingMatch?.[1]) {
     const person = cleanPersonName(whatPersonWorkingMatch[1]);
     if (person) {
-      return { kind: "activity_summary", personName: person, raw: question };
+      return withYear(question, { kind: "activity_summary", personName: person });
     }
   }
 
@@ -105,7 +174,7 @@ function parseActivityQuery(question: string, q: string): ParsedQuery | null {
   if (projectIsPersonMatch?.[1]) {
     const person = cleanPersonName(projectIsPersonMatch[1]);
     if (person) {
-      return { kind: "activity_summary", personName: person, raw: question };
+      return withYear(question, { kind: "activity_summary", personName: person });
     }
   }
 
@@ -115,7 +184,7 @@ function parseActivityQuery(question: string, q: string): ParsedQuery | null {
   if (projectPersonMatch?.[1]) {
     const person = cleanPersonName(projectPersonMatch[1]);
     if (person) {
-      return { kind: "activity_summary", personName: person, raw: question };
+      return withYear(question, { kind: "activity_summary", personName: person });
     }
   }
 
@@ -125,12 +194,11 @@ function parseActivityQuery(question: string, q: string): ParsedQuery | null {
   if (personActiveInMatch?.[1]) {
     const person = cleanPersonName(personActiveInMatch[1]);
     if (person) {
-      return {
+      return withYear(question, {
         kind: "activity_summary",
         personName: person,
         docTitle: personActiveInMatch[2] ? stripDocWords(personActiveInMatch[2]) : undefined,
-        raw: question,
-      };
+      });
     }
   }
 
@@ -140,7 +208,7 @@ function parseActivityQuery(question: string, q: string): ParsedQuery | null {
   if (latestWorkMatch?.[1]) {
     const person = cleanPersonName(latestWorkMatch[1]);
     if (person) {
-      return { kind: "activity_summary", personName: person, raw: question };
+      return withYear(question, { kind: "activity_summary", personName: person });
     }
   }
 
@@ -151,7 +219,7 @@ function parseActivityQuery(question: string, q: string): ParsedQuery | null {
   if (personFromActiveMatch) {
     const person = cleanPersonName(personFromActiveMatch);
     if (person) {
-      return { kind: "activity_summary", personName: person, raw: question };
+      return withYear(question, { kind: "activity_summary", personName: person });
     }
   }
 
