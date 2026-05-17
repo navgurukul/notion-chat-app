@@ -11,7 +11,10 @@
     "export:notion": "tsx scripts/scripts/notion-to-s3.ts",
     "search:s3": "tsx scripts/search-s3.ts",
     "test:bedrock": "tsx scripts/test-bedrock.ts",
-    "benchmark:chatbot": "tsx scripts/benchmark-chatbot.ts"
+    "benchmark:chatbot": "tsx scripts/benchmark-chatbot.ts",
+    "sync:notion": "tsx scripts/sync-notion.ts",
+    "embed:missing": "tsx scripts/embed-missing.ts",
+    "backfill:notion-edited-at": "tsx scripts/backfill-notion-edited-at.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-agent": "^3.969.0",

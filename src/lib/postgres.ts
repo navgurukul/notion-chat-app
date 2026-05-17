@@ -81,14 +81,50 @@ export async function ensureSchema() {
         due_date        DATE,
         content         TEXT,
         embedding       vector(768),
-        synced_at       TIMESTAMPTZ DEFAULT now()
+        synced_at       TIMESTAMPTZ DEFAULT now(),
+        notion_edited_at TIMESTAMPTZ
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE notion_pages
+      ADD COLUMN IF NOT EXISTS notion_edited_at TIMESTAMPTZ;
     `);
 
     await client.query(`
       CREATE INDEX IF NOT EXISTS notion_pages_embedding_idx
       ON notion_pages USING ivfflat (embedding vector_cosine_ops)
       WITH (lists = 100);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS notion_chunks (
+        id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        page_id          TEXT NOT NULL REFERENCES notion_pages(id) ON DELETE CASCADE,
+        chunk_index      INT NOT NULL,
+        section_heading  TEXT,
+        content          TEXT NOT NULL,
+        embedding        vector(768),
+        fts              tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, ''))) STORED,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (page_id, chunk_index)
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS notion_chunks_page_id_idx
+      ON notion_chunks (page_id);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS notion_chunks_embedding_idx
+      ON notion_chunks USING ivfflat (embedding vector_cosine_ops)
+      WITH (lists = 100);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS notion_chunks_fts_idx
+      ON notion_chunks USING gin (fts);
     `);
 
     await client.query(`
@@ -111,6 +147,11 @@ export async function ensureSchema() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS notion_pages_last_edited_by_idx
       ON notion_pages (lower(last_edited_by));
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS notion_pages_notion_edited_at_idx
+      ON notion_pages (notion_edited_at DESC NULLS LAST);
     `);
 
     await client.query(`

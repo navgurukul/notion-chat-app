@@ -79,12 +79,16 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [thinkingByMessage, setThinkingByMessage] = useState<ThinkingByMessage>({});
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [showFullSyncConfirm, setShowFullSyncConfirm] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncMode, setSyncMode] = useState<"incremental" | "full" | null>(null);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [syncClock, setSyncClock] = useState(Date.now());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const botMessageIndexRef = useRef<number | null>(null);
+  /** Index of the next bot bubble; set when the user message is appended (setState updaters run later). */
+  const pendingBotMessageIndexRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -222,7 +226,11 @@ export default function ChatPage() {
     setInput("");
 
     const newUserMsg: Message = { role: "user", content: userMessage };
-    setMessages((prev) => [...prev, newUserMsg]);
+    setMessages((prev) => {
+      const next = [...prev, newUserMsg];
+      pendingBotMessageIndexRef.current = next.length;
+      return next;
+    });
 
     setIsLoading(true);
     botMessageIndexRef.current = null;
@@ -242,6 +250,40 @@ export default function ChatPage() {
 
       if (!response.ok) throw new Error("Failed to get response");
 
+      const contentType = response.headers.get("content-type") ?? "";
+
+      if (contentType.includes("application/json")) {
+        const data: unknown = await response.json();
+        const answer =
+          data &&
+          typeof data === "object" &&
+          "answer" in data &&
+          typeof (data as { answer: unknown }).answer === "string"
+            ? (data as { answer: string }).answer
+            : null;
+        if (answer !== null) {
+          setMessages((prev) => [...prev, { role: "bot", content: answer }]);
+          refreshChatSessions().catch((error) => console.error("Failed to refresh chats:", error));
+          return;
+        }
+        throw new Error("Invalid chat response");
+      }
+
+      const botIndex = pendingBotMessageIndexRef.current;
+      if (botIndex === null) {
+        throw new Error("Chat state was lost; please try again.");
+      }
+      botMessageIndexRef.current = botIndex;
+      setMessages((prev) => [...prev, { role: "bot", content: "" }]);
+      setThinkingByMessage((prev) => ({
+        ...prev,
+        [botIndex]: {
+          summary: "",
+          status: "retrieving",
+          isStreaming: true,
+        },
+      }));
+
       const reader = response.body?.getReader();
       if (!reader) throw new Error("Response stream unavailable");
       const decoder = new TextDecoder();
@@ -252,19 +294,6 @@ export default function ChatPage() {
       let parseMode: "searching" | "tagged" | "untagged" = "searching";
       let activeSection: "thinking" | "answer" | null = null;
       let hasReceivedChunk = false;
-
-      const botMsgPlaceholder: Message = { role: "bot", content: "" };
-      const botIndex = messages.length + 1;
-      setMessages((prev) => [...prev, botMsgPlaceholder]);
-      botMessageIndexRef.current = botIndex;
-      setThinkingByMessage((prev) => ({
-        ...prev,
-        [botIndex]: {
-          summary: "",
-          status: "retrieving",
-          isStreaming: true,
-        },
-      }));
 
       const updateThinkingSummary = (summary: string) => {
         const trimmedSummary = summary.trim();
@@ -301,9 +330,8 @@ export default function ChatPage() {
           return;
         }
 
-        if (activeSection === "answer") {
-          answerText += text;
-        }
+        // Text outside [[THINKING]]/[[ANSWER]] tags still belongs in the visible answer.
+        answerText += text;
       };
 
       const parseTaggedBuffer = () => {
@@ -372,13 +400,17 @@ export default function ChatPage() {
           buffer = "";
         } else if (parseMode === "tagged") {
           parseTaggedBuffer();
+        } else if (parseMode === "searching" && buffer.length > 0) {
+          answerText = stripStreamTags(buffer);
         }
 
         updateMessageContent();
       }
 
+      buffer += decoder.decode();
+
       if (parseMode === "searching") {
-        answerText += buffer;
+        answerText = stripStreamTags(buffer);
         buffer = "";
       } else if (parseMode === "tagged") {
         if (activeSection) {
@@ -390,8 +422,8 @@ export default function ChatPage() {
       const cleanedAnswer = stripStreamTags(answerText);
       if (cleanedAnswer !== answerText) {
         answerText = cleanedAnswer;
-        updateMessageContent();
       }
+      updateMessageContent();
 
       refreshChatSessions().catch((error) => console.error("Failed to refresh chats:", error));
 
@@ -423,16 +455,19 @@ export default function ChatPage() {
     signOut();
   };
 
-  const handleSync = async () => {
+  const runSync = async (mode: "incremental" | "full") => {
     if (isSyncing) return;
     setIsSyncing(true);
-    setSyncStatus('idle');
+    setSyncMode(mode);
+    setSyncStatus("idle");
+
+    const params =
+      mode === "full"
+        ? "force=true&refreshContent=true&embed=true"
+        : "refreshContent=true&embed=true";
 
     try {
-      const response = await fetch("/api/sync?refreshContent=true&embed=false", {
-        method: "POST",
-      });
-
+      const response = await fetch(`/api/sync?${params}`, { method: "POST" });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || "Failed to sync");
@@ -444,15 +479,23 @@ export default function ChatPage() {
         localStorage.setItem(LAST_SYNC_STORAGE_KEY, data.synced_at);
       }
 
-      setSyncStatus('success');
-      setTimeout(() => setSyncStatus('idle'), 5000);
+      setSyncStatus("success");
+      setTimeout(() => setSyncStatus("idle"), 5000);
     } catch (error) {
       console.error("Sync error:", error);
-      setSyncStatus('error');
-      setTimeout(() => setSyncStatus('idle'), 5000);
+      setSyncStatus("error");
+      setTimeout(() => setSyncStatus("idle"), 5000);
     } finally {
       setIsSyncing(false);
+      setSyncMode(null);
     }
+  };
+
+  const handleIncrementalSync = () => runSync("incremental");
+
+  const handleFullSync = () => {
+    setShowFullSyncConfirm(false);
+    runSync("full");
   };
 
   const formatRelativeSyncTime = (isoTime: string | null) => {
@@ -500,6 +543,41 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-screen bg-[#0a0a0a] text-white overflow-hidden relative">
+      {/* Full sync confirmation */}
+      {showFullSyncConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowFullSyncConfirm(false)}
+            role="presentation"
+          />
+          <div className="bg-[#1a1a1a] border border-white/10 p-8 rounded-2xl max-w-sm w-full relative z-10 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-3 text-amber-400 mb-4">
+              <AlertTriangle className="w-6 h-6" />
+              <h3 className="text-xl font-bold">Full rebuild?</h3>
+            </div>
+            <p className="text-white/60 text-sm mb-8 leading-relaxed">
+              This re-syncs every Notion page and can take hours. Use{" "}
+              <span className="text-white/80">Sync changes</span> for routine updates.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowFullSyncConfirm(false)}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleFullSync}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-medium transition-colors"
+              >
+                Rebuild all
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Logout Confirmation Modal */}
       {showLogoutConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -616,7 +694,7 @@ export default function ChatPage() {
             Database Sync
           </div>
           <button
-            onClick={handleSync}
+            onClick={handleIncrementalSync}
             disabled={isSyncing}
             className={`w-full p-4 rounded-xl border flex flex-col items-center gap-3 transition-all ${isSyncing
               ? "bg-white/5 border-white/10"
@@ -638,10 +716,28 @@ export default function ChatPage() {
             )}
             <div className="text-center">
               <span className="text-sm font-bold block">
-                {isSyncing ? "Syncing..." : syncStatus === 'success' ? "Sync Success" : syncStatus === 'error' ? "Sync Failed" : "Sync Database"}
+                {isSyncing
+                  ? syncMode === "full"
+                    ? "Full rebuild..."
+                    : "Syncing changes..."
+                  : syncStatus === "success"
+                    ? "Sync success"
+                    : syncStatus === "error"
+                      ? "Sync failed"
+                      : "Sync changes"}
               </span>
-              <span className="text-[10px] opacity-40 uppercase tracking-widest mt-1">Notion → PostgreSQL</span>
+              <span className="text-[10px] opacity-40 uppercase tracking-widest mt-1">
+                {isSyncing && syncMode === "full" ? "All pages" : "Updated pages only"}
+              </span>
             </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowFullSyncConfirm(true)}
+            disabled={isSyncing}
+            className="mt-2 w-full text-center text-[11px] text-white/40 hover:text-amber-400/90 disabled:opacity-30 transition-colors"
+          >
+            Full rebuild (all pages)…
           </button>
           <div className="mt-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-center">
             <p className="text-[11px] font-medium text-white/60">{formatRelativeSyncTime(lastSyncedAt)}</p>

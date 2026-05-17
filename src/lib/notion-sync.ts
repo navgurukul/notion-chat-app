@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Client } from "@notionhq/client";
+import { chunkPageContent } from "@/lib/chunk-page";
 import { buildEmbeddingText, embedBatch } from "@/lib/embeddings";
 import { ensureSchema, query } from "@/lib/postgres";
 
@@ -38,7 +39,15 @@ type SyncOptions = {
   force?: boolean;
   embed?: boolean;
   refreshContent?: boolean;
+  limit?: number;
 };
+
+function readSyncLimit(options: SyncOptions): number | undefined {
+  if (options.limit != null && options.limit > 0) return options.limit;
+  const parsed = Number.parseInt(process.env.SYNC_PAGE_LIMIT ?? "", 10);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  return undefined;
+}
 
 type PageRecord = {
   id: string;
@@ -375,6 +384,43 @@ function toVectorLiteral(values: number[] | null) {
   return `[${values.join(",")}]`;
 }
 
+async function replacePageChunks(record: PageRecord, shouldEmbed: boolean) {
+  await query(`DELETE FROM notion_chunks WHERE page_id = $1`, [record.id]);
+
+  const chunks = chunkPageContent({
+    id: record.id,
+    title: record.title,
+    content: record.content,
+    owner: record.owner,
+    status: record.status,
+    doc_type: record.doc_type,
+    created_by: record.created_by,
+    last_edited_by: record.last_edited_by,
+  });
+
+  const embeddings = shouldEmbed
+    ? await embedBatch(chunks.map((chunk) => chunk.content))
+    : chunks.map(() => null);
+
+  for (let i = 0; i < chunks.length; i += 1) {
+    const chunk = chunks[i];
+    const embedding = embeddings[i];
+    await query(
+      `
+      INSERT INTO notion_chunks (page_id, chunk_index, section_heading, content, embedding)
+      VALUES ($1, $2, $3, $4, CAST($5 AS vector))
+      `,
+      [
+        chunk.page_id,
+        chunk.chunk_index,
+        chunk.section_heading,
+        chunk.content,
+        toVectorLiteral(embedding),
+      ],
+    );
+  }
+}
+
 function shouldSkipPage(page: any, existingSyncMap: Map<string, string>) {
   const existingSyncedAt = existingSyncMap.get(page.id);
   if (!existingSyncedAt) return false;
@@ -459,24 +505,31 @@ export async function syncNotionToPostgres(options: SyncOptions = {}): Promise<S
       existingRow?.has_rich_content &&
       shouldSkipPage(page, existingSyncMap);
 
-    if (hasFreshContent || (!shouldForce && !shouldRefreshContent && shouldSkipPage(page, existingSyncMap))) {
+    if (
+      !shouldForce &&
+      (hasFreshContent || (!shouldRefreshContent && shouldSkipPage(page, existingSyncMap)))
+    ) {
       skippedUnchanged += 1;
       continue;
     }
     pagesToSync.push(page);
   }
 
+  const syncLimit = readSyncLimit(options);
+  const pagesToProcess =
+    syncLimit != null ? pagesToSync.slice(0, syncLimit) : pagesToSync;
+
   let upserted = 0;
   let embeddingsFailed = 0;
   let failedPages = 0;
 
-  const totalChunks = Math.ceil(pagesToSync.length / SYNC_CHUNK_SIZE);
+  const totalChunks = Math.ceil(pagesToProcess.length / SYNC_CHUNK_SIZE);
   console.log(
-    `[sync] total_pages=${pages.length} to_sync=${pagesToSync.length} skipped_unchanged=${skippedUnchanged} chunks=${totalChunks} force=${shouldForce} refresh_content=${shouldRefreshContent} embed=${shouldEmbed}`,
+    `[sync] total_pages=${pages.length} to_sync=${pagesToSync.length} processing=${pagesToProcess.length} limit=${syncLimit ?? "none"} skipped_unchanged=${skippedUnchanged} chunks=${totalChunks} force=${shouldForce} refresh_content=${shouldRefreshContent} embed=${shouldEmbed}`,
   );
 
-  for (let i = 0; i < pagesToSync.length; i += SYNC_CHUNK_SIZE) {
-    const chunk = pagesToSync.slice(i, i + SYNC_CHUNK_SIZE);
+  for (let i = 0; i < pagesToProcess.length; i += SYNC_CHUNK_SIZE) {
+    const chunk = pagesToProcess.slice(i, i + SYNC_CHUNK_SIZE);
     const chunkIndex = Math.floor(i / SYNC_CHUNK_SIZE) + 1;
     console.log(`[sync] chunk ${chunkIndex}/${totalChunks}: building records for ${chunk.length} pages`);
 
@@ -522,11 +575,11 @@ export async function syncNotionToPostgres(options: SyncOptions = {}): Promise<S
         `
         INSERT INTO notion_pages (
           id, title, url, owner, created_by, last_edited_by,
-          doc_type, status, due_date, content, embedding, synced_at
+          doc_type, status, due_date, content, embedding, synced_at, notion_edited_at
         )
         VALUES (
           $1, $2, $3, $4, $5, $6,
-          $7, $8, $9, $10, $11::vector, $12::timestamptz
+          $7, $8, $9, $10, $11::vector, $12::timestamptz, $13::timestamptz
         )
         ON CONFLICT (id) DO UPDATE SET
           title = EXCLUDED.title,
@@ -539,7 +592,8 @@ export async function syncNotionToPostgres(options: SyncOptions = {}): Promise<S
           due_date = EXCLUDED.due_date,
           content = EXCLUDED.content,
           embedding = COALESCE(EXCLUDED.embedding, notion_pages.embedding),
-          synced_at = EXCLUDED.synced_at
+          synced_at = EXCLUDED.synced_at,
+          notion_edited_at = COALESCE(EXCLUDED.notion_edited_at, notion_pages.notion_edited_at)
         `,
         [
           record.id,
@@ -554,8 +608,16 @@ export async function syncNotionToPostgres(options: SyncOptions = {}): Promise<S
           record.content,
           toVectorLiteral(embedding),
           syncedAt,
+          record.lastEditedTime,
         ],
       );
+
+      try {
+        await replacePageChunks(record, shouldEmbed);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[sync] chunk rows failed for page ${record.title} (${record.id}): ${message}`);
+      }
 
       upserted += 1;
     }

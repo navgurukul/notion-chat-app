@@ -16,6 +16,8 @@ const ALLOWED_KINDS = new Set<QueryKind>([
   "topic_list",
   "type_of",
   "status_of",
+  "activity_summary",
+  "page_about",
   "semantic",
 ]);
 
@@ -24,6 +26,7 @@ const INTENTS_REQUIRING_PERSON = new Set<QueryKind>([
   "created_by_list",
   "assigned_list",
   "worked_on_list",
+  "activity_summary",
 ]);
 
 const INTENTS_REQUIRING_TITLE = new Set<QueryKind>([
@@ -34,6 +37,7 @@ const INTENTS_REQUIRING_TITLE = new Set<QueryKind>([
   "topic_list",
   "type_of",
   "status_of",
+  "page_about",
 ]);
 
 type AiQueryIntent = {
@@ -68,6 +72,7 @@ function shouldVerifyQuery(question: string, parsed: ParsedQuery) {
     "owner_of",
     "status_of",
     "type_of",
+    "activity_summary",
   ].includes(parsed.kind);
 }
 
@@ -81,6 +86,9 @@ function toParsedQuery(question: string, aiIntent: AiQueryIntent, fallback: Pars
 
   if (INTENTS_REQUIRING_PERSON.has(kind) && !personName) return fallback;
   if (INTENTS_REQUIRING_TITLE.has(kind) && !docTitle) return fallback;
+  if ((kind === "worked_on_list" || kind === "activity_summary") && !personName) {
+    return fallback;
+  }
 
   return {
     kind,
@@ -112,6 +120,7 @@ Allowed intents:
 - topic_list: list docs/data about a topic
 - type_of: ask type/kind of one doc/topic
 - status_of: ask status of one doc/topic
+- activity_summary: which project/topic a person is most active on, recent work, mostly active (uses SQL by person — not semantic)
 - semantic: broad summary, explanation, comparison, why/how question, or unclear intent
 
 Rules:
@@ -120,6 +129,7 @@ Rules:
 - Never use words like "is", "what", "who", "only one", "task", or "project" as personName/docTitle.
 - For "who is the project manager of zuvy", intent is "project_manager_of", docTitle is "zuvy".
 - For "only one task of datapivot assigned to sanjana", intent is "assigned_list", personName is "sanjana", docTitle is "datapivot".
+- For "which project tamanna is mostly active", intent is "activity_summary", personName is "tamanna".
 - For summaries/explanations, use "semantic".
 
 JSON shape:
@@ -128,7 +138,10 @@ JSON shape:
 
   try {
     const raw = await getJsonCompletion(systemPrompt, question);
-    const parsed = JSON.parse(raw) as AiQueryIntent;
+    const jsonText = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    const parsed = JSON.parse(
+      jsonText.match(/\{[\s\S]*\}/)?.[0] ?? jsonText,
+    ) as AiQueryIntent;
     const verified = toParsedQuery(question, parsed, parsedByRules);
 
     if (process.env.NODE_ENV !== "production") {

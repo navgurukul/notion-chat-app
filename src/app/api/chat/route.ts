@@ -2,10 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { getChatStream } from "@/lib/gemini";
 import { authOptions } from "@/lib/auth";
-import { buildContextualSearchQuery, sanitizeChatHistory } from "@/lib/chat";
+import {
+  extractReferencedTitle,
+  isNotionLinkRequest,
+  resolveSemanticSearchQuery,
+  sanitizeChatHistory,
+} from "@/lib/chat";
 import { parseQuery } from "@/lib/query-router";
 import { verifyQueryWithAI } from "@/lib/query-verifier";
-import { handleMetadataQuery } from "@/lib/metadata-search";
+import { handleMetadataQuery, lookupPageLinkByTitle } from "@/lib/metadata-search";
 import { semanticSearch } from "@/lib/vector-search";
 import { addChatMessage, ensureSessionBelongsToUser, getOrCreateUser } from "@/lib/chat-store";
 
@@ -31,10 +36,20 @@ function checkRateLimit(userKey: string) {
 
 function extractAnswerForStorage(rawText: string) {
   const answerMatch = rawText.match(/\[\[ANSWER\]\]([\s\S]*?)(?:\[\[\/ANSWER\]\]|$)/);
-  const answer = answerMatch?.[1] ?? rawText;
-  return answer
-    .replace(/\[\[(?:\/)?(?:THINKING|ANSWER)\]\]/g, "")
-    .trim();
+  let answer = answerMatch?.[1] ?? rawText;
+  answer = answer.replace(/\[\[(?:\/)?(?:THINKING|ANSWER)\]\]/g, "").trim();
+
+  const thinkingOnly =
+    /\[\[THINKING\]\][\s\S]*\[\[\/THINKING\]\]/i.test(rawText) && !answerMatch;
+  if (thinkingOnly) {
+    const afterThinking = rawText
+      .replace(/\[\[THINKING\]\][\s\S]*?\[\[\/THINKING\]\]/i, "")
+      .replace(/\[\[(?:\/)?(?:THINKING|ANSWER)\]\]/g, "")
+      .trim();
+    if (afterThinking) answer = afterThinking;
+  }
+
+  return answer.trim();
 }
 
 export async function POST(req: NextRequest) {
@@ -83,20 +98,37 @@ export async function POST(req: NextRequest) {
     if (parsed.kind !== "semantic") {
       const directAnswer = await handleMetadataQuery(parsed);
       if (directAnswer) {
+        if (process.env.NODE_ENV !== "production") {
+          console.log(
+            `[chat] mode=${parsed.kind} search=sql_direct answer_chars=${directAnswer.length}`,
+          );
+        }
         if (ownedSessionId) {
           await addChatMessage(ownedSessionId, "bot", directAnswer);
         }
-        return new Response(directAnswer, {
-          headers: { "Content-Type": "text/plain; charset=utf-8" },
-        });
+        return NextResponse.json({ answer: directAnswer });
+      }
+      if (process.env.NODE_ENV !== "production") {
+        console.log(`[chat] mode=${parsed.kind} search=sql_empty fallback=semantic`);
       }
     }
 
-    const notionContext = await semanticSearch(trimmedMessage);
-    const searchQuery = buildContextualSearchQuery(trimmedMessage, chatHistory);
+    const linkTitle = extractReferencedTitle(trimmedMessage, chatHistory);
+    if (isNotionLinkRequest(trimmedMessage) && linkTitle) {
+      const linkAnswer = await lookupPageLinkByTitle(linkTitle);
+      if (linkAnswer) {
+        if (ownedSessionId) {
+          await addChatMessage(ownedSessionId, "bot", linkAnswer);
+        }
+        return NextResponse.json({ answer: linkAnswer });
+      }
+    }
+
+    const searchQuery = resolveSemanticSearchQuery(trimmedMessage, chatHistory);
+    const notionContext = await semanticSearch(searchQuery);
 
     if (process.env.NODE_ENV !== "production") {
-      console.log(`[chat] mode=semantic context_chars=${notionContext.length}`);
+      console.log(`[chat] mode=semantic search=chunks_or_pages context_chars=${notionContext.length}`);
     }
 
     const stream = await getChatStream(searchQuery, notionContext, chatHistory);

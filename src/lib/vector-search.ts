@@ -1,5 +1,7 @@
 import { embedText } from "@/lib/embeddings";
+import { hasNotionChunks, hybridChunkContext } from "@/lib/hybrid-chunk-search";
 import { query } from "@/lib/postgres";
+import { simplifySearchQuery } from "@/lib/search-query";
 
 type SearchRow = {
   id: string;
@@ -36,56 +38,31 @@ function getMaxContextChars() {
   );
 }
 
-function simplifySearchQuery(searchQuery: string) {
-  const stopWords = new Set([
-    "a",
-    "an",
-    "and",
-    "are",
-    "by",
-    "can",
-    "doc",
-    "docs",
-    "document",
-    "documents",
-    "for",
-    "from",
-    "give",
-    "is",
-    "me",
-    "of",
-    "on",
-    "owner",
-    "owned",
-    "page",
-    "pages",
-    "please",
-    "provide",
-    "related",
-    "show",
-    "status",
-    "the",
-    "to",
-    "type",
-    "what",
-    "with",
-    "which",
-    "who",
-    "whose",
-  ]);
-
-  const keywords = searchQuery
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .map((word) => word.trim())
-    .filter((word) => word.length > 1 && !stopWords.has(word));
-
-  return keywords.join(" ").trim() || searchQuery.trim();
-}
-
 function escapeLike(value: string) {
   return value.replace(/[%_]/g, "\\$&");
+}
+
+function explicitTitleFromQuery(searchQuery: string) {
+  const bracket = searchQuery.match(/\[([^\]]+)\]/);
+  if (bracket?.[1] && bracket[1].trim().length >= 3) return bracket[1].trim();
+
+  for (const line of searchQuery.split("\n")) {
+    const bullet = line.match(/^-\s+(.+)/);
+    if (!bullet) continue;
+    const text = bullet[1].trim();
+    if (text.startsWith("Current question:")) continue;
+    if (/\b(link|url|notion)\b/i.test(text) && text.length < 80) continue;
+    const head = text
+      .replace(
+        /^(what is|what's|summarize|summary of|explain|describe|tell me about|can i get|give me)\s+/i,
+        "",
+      )
+      .split(/[—–:-]/)[0]
+      ?.trim();
+    if (head && head.length >= 8) return head;
+  }
+
+  return null;
 }
 
 function titleCandidates(searchQuery: string) {
@@ -102,7 +79,7 @@ function titleCandidates(searchQuery: string) {
 
   const questionRemoved = normalized
     .replace(
-      /^(summarize|summary of|explain|describe|what is|what's|tell me about|provide me with|provide|give me|give all data of|give data of|show me|show)\s+/i,
+      /^(?:can you\s+)?(summarize|summary of|explain|describe|what is|what's|tell me about|provide me with|provide|give me|give all data of|give data of|show me|show)\s+/i,
       "",
     )
     .replace(/\b(what is|what's|core idea|main idea|summary|explain|provide|details?)\b.*$/i, "")
@@ -326,8 +303,20 @@ export async function semanticSearch(searchQuery: string): Promise<string> {
   const cleaned = searchQuery.trim();
   if (!cleaned) return "";
 
+  const explicitTitle = explicitTitleFromQuery(cleaned);
+  const titleRows = explicitTitle
+    ? mergeSearchRows(await titleSearch(explicitTitle), await titleSearch(cleaned))
+    : await titleSearch(cleaned);
+
+  if (await hasNotionChunks()) {
+    const chunkPart = await hybridChunkContext(cleaned);
+    if (chunkPart) {
+      const titlePart = titleRows.length ? `${formatContext(titleRows)}\n\n---\n\n` : "";
+      return `${titlePart}${chunkPart}`;
+    }
+  }
+
   let rows: SearchRow[] = [];
-  const titleRows = await titleSearch(cleaned);
   const embeddingsAvailable = await hasEmbeddings();
 
   if (embeddingsAvailable) {
