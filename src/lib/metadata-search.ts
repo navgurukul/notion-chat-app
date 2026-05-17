@@ -106,11 +106,43 @@ function contentSnippet(content?: string | null, maxLength = 450) {
   return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength)}...` : cleaned;
 }
 
+async function lookupProjectStatusPages(topic: string) {
+  const term = `%${escapeLike(topic)}%`;
+  return query<NotionPageRow>(
+    `
+    SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status
+    FROM notion_pages
+    WHERE
+      lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
+      OR to_tsvector('english', coalesce(title, '')) @@ plainto_tsquery('english', $2)
+    ORDER BY
+      CASE WHEN lower(coalesce(title, '')) = lower($2) THEN 0 ELSE 1 END,
+      CASE WHEN lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\' THEN 0 ELSE 1 END,
+      length(coalesce(title, '')) ASC,
+      title ASC
+    LIMIT ${SQL_RESULT_LIMIT}
+    `,
+    [term, topic],
+  );
+}
+
 async function lookupByTitle(title: string, includeContent = false) {
   const term = `%${escapeLike(title)}%`;
   const columns = includeContent
     ? "id, title, url, owner, created_by, last_edited_by, doc_type, status, content"
     : "id, title, url, owner, created_by, last_edited_by, doc_type, status";
+
+  const exact = await query<NotionPageRow>(
+    `
+    SELECT ${columns}
+    FROM notion_pages
+    WHERE lower(trim(coalesce(title, ''))) = lower(trim($1))
+    LIMIT 3
+    `,
+    [title],
+  );
+  if (exact.length === 1) return exact;
+
   return query<NotionPageRow>(
     `
     SELECT ${columns}
@@ -347,6 +379,119 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     )}`;
   }
 
+  if (parsed.kind === "team_activity" && docTitle) {
+    const topicTerm = `%${escapeLike(docTitle)}%`;
+    type TeamRow = { last_edited_by: string; owner: string | null; edit_count: string };
+    const byEditor = await query<TeamRow>(
+      `
+      SELECT
+        person AS last_edited_by,
+        max(owner) AS owner,
+        COUNT(*)::text AS edit_count
+      FROM (
+        SELECT
+          coalesce(nullif(trim(last_edited_by), ''), nullif(trim(owner), ''), 'Unknown') AS person,
+          owner
+        FROM notion_pages
+        WHERE
+          lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
+          OR lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
+      ) scoped
+      WHERE person <> 'Unknown'
+      GROUP BY person
+      ORDER BY COUNT(*) DESC
+      LIMIT 10
+      `,
+      [topicTerm],
+    );
+
+    if (!byEditor.length) {
+      return `No activity signals found for workspace/topic **${docTitle}** in synced Notion data (no owner/last-editor fields on matching pages). Try **Sync changes** to refresh metadata.`;
+    }
+
+    const top = byEditor[0];
+    return [
+      `### Most active in **${docTitle}** (by pages owned/edited in Notion)`,
+      "",
+      `**Top match:** **${top.last_edited_by}** — ${top.edit_count} related page(s) in the index.`,
+      "",
+      byEditor
+        .map((row, i) => `${i + 1}. **${row.last_edited_by}** — ${row.edit_count} page(s)`)
+        .join("\n"),
+      "",
+      `_Based on Notion owner / last-edited-by fields on pages mentioning "${docTitle}". Re-sync if dates look stale._`,
+    ].join("\n");
+  }
+
+  if (parsed.kind === "blocker_list") {
+    const scopeTerm = docTitle ? `%${escapeLike(docTitle)}%` : null;
+    const rows = await query<NotionPageRow>(
+      `
+      SELECT id, title, url, owner, status, doc_type, content
+      FROM notion_pages
+      WHERE
+        lower(coalesce(status, '')) LIKE '%block%'
+        OR lower(coalesce(status, '')) IN ('on hold', 'waiting', 'stuck')
+        OR lower(coalesce(title, '')) LIKE '%blocker%'
+        OR lower(coalesce(content, '')) LIKE '%ship blocker%'
+        OR lower(coalesce(content, '')) LIKE '%blocker comments%'
+        ${scopeTerm ? `AND (lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\' OR lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\')` : ""}
+      ORDER BY
+        CASE WHEN lower(coalesce(status, '')) LIKE '%block%' THEN 0 ELSE 1 END,
+        title ASC
+      LIMIT ${SQL_RESULT_LIMIT}
+      `,
+      scopeTerm ? [scopeTerm] : [],
+    );
+
+    if (!rows.length) {
+      return `No pages with explicit **blocker** status or blocker mentions found${docTitle ? ` for "${docTitle}"` : ""} in synced Notion data.`;
+    }
+
+    return `${formatListHeader(rows.length, `possible blockers / open issues${docTitle ? ` (${docTitle})` : ""}`)}\n\n${formatRows(
+      rows,
+      (row) => {
+        const snippet = contentSnippet(row.content, 280);
+        return `**${formatLink(row.title || "Untitled", row.url)}** — status: **${row.status || "not set"}**${row.owner ? ` · owner: ${row.owner}` : ""}${snippet ? `\n  ${snippet}` : ""}`;
+      },
+    )}`;
+  }
+
+  if (parsed.kind === "project_eta" && docTitle) {
+    const rows = await lookupByTitle(docTitle, true);
+    if (!rows.length) return null;
+
+    const lines = rows.slice(0, 8).map((row) => {
+      const body = extractPageBody(row.content, 800);
+      const dueMatch = (row.content || "").match(/due[^:\n]*:\s*([^\n]+)/i);
+      const dateMatch = (row.content || "").match(
+        /(?:target|launch|release|completion|deadline)[^:\n]*:\s*([^\n]+)/i,
+      );
+      const eta = dueMatch?.[1]?.trim() || dateMatch?.[1]?.trim();
+      return [
+        `**${formatLink(row.title || "Untitled", row.url)}**`,
+        `Status: **${row.status || "not set"}**`,
+        row.owner ? `Owner: ${row.owner}` : "",
+        eta ? `Date in page: ${eta}` : "_No ETA/deadline field found on this page_",
+        body ? `\n${body.slice(0, 400)}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    });
+
+    return [
+      `### ETA / completion — **${docTitle}**`,
+      "",
+      `_No single workspace-wide ETA is stored unless Notion pages include due dates. Related pages:_`,
+      "",
+      lines.join("\n\n---\n\n"),
+      "",
+      rows.some((r) => (r.content || "").match(/due|deadline|eta|completion date/i))
+        ? ""
+        : "\n**No explicit completion date** found in synced content for this project. Check the linked Notion pages or project tracker databases.",
+    ].join("\n");
+  }
+
   if (parsed.kind === "page_about" && docTitle) {
     const rows = await lookupByTitle(docTitle, true);
     if (!rows.length) return null;
@@ -476,19 +621,41 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
   }
 
   if (parsed.kind === "status_of" && docTitle) {
-    const rows = await lookupByTitle(docTitle);
+    const rows = await lookupProjectStatusPages(docTitle);
     if (!rows.length) return null;
+
+    const withStatus = rows.filter((row) => row.status?.trim());
+    const header = `### Progress on **${docTitle}** (${rows.length} related page(s) in Notion)`;
+
     if (rows.length === 1) {
       const row = rows[0];
-      return `**Status of "${row.title || docTitle}":** ${row.status || "Unknown"}${
+      const meta = [
+        row.status ? `Status: **${row.status}**` : "Status: _not set_",
+        row.owner ? `Owner: ${row.owner}` : "",
+        row.created_by ? `Created by: ${row.created_by}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return `${header}\n\n**${formatLink(row.title || docTitle, row.url)}** — ${meta}${
         row.url ? `\n\n${formatLink("Open in Notion", row.url)}` : ""
       }`;
     }
-    return `### ${rows.length} matching docs for "${docTitle}"\n\n${formatRows(
-      rows,
-      (row) =>
-        `**${formatLink(row.title || "Untitled", row.url)}** — Status: **${row.status || "Unknown"}**`,
-    )}`;
+
+    const statusNote =
+      withStatus.length > 0
+        ? `_Statuses below come from Notion page properties (not AI inference)._`
+        : `_No Status field stored on these pages — try opening the main project page in Notion._`;
+
+    return `${header}\n\n${statusNote}\n\n${formatRows(rows, (row) => {
+      const meta = [
+        row.status ? `status: **${row.status}**` : "status: _not set_",
+        row.owner ? `owner: ${row.owner}` : "",
+        row.doc_type ? `type: ${row.doc_type}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return `**${formatLink(row.title || "Untitled", row.url)}** — ${meta}`;
+    })}`;
   }
 
   if (parsed.kind === "activity_summary" && person) {

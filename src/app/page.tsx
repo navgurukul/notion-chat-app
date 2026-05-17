@@ -67,6 +67,58 @@ function stripStreamTags(text: string) {
   return text.replace(STREAM_TAG_PATTERN, "");
 }
 
+function stripInternalReasoning(text: string) {
+  return text
+    .replace(
+      /^(?:the user is asking|i will scan|i need to search|let me search)[\s\S]*?(?=\n\n|\n#|\n-|\n\*|$)/i,
+      "",
+    )
+    .trim();
+}
+
+/** Collapse accidental full-text repeats from stream parsing. */
+function dedupeRepeatedAnswer(text: string) {
+  const trimmed = text.trim();
+  if (trimmed.length < 200) return trimmed;
+
+  const half = Math.floor(trimmed.length / 2);
+  const first = trimmed.slice(0, half).trim();
+  const second = trimmed.slice(half).trim();
+  if (first.length > 80 && second.startsWith(first.slice(0, Math.min(120, first.length)))) {
+    return first;
+  }
+
+  const paragraphs = trimmed.split(/\n{2,}/);
+  const unique: string[] = [];
+  for (const p of paragraphs) {
+    const norm = p.trim().toLowerCase();
+    if (!norm) continue;
+    if (unique.some((u) => u.trim().toLowerCase() === norm)) continue;
+    unique.push(p);
+  }
+  return unique.join("\n\n");
+}
+
+function finalizeStreamAnswer(rawBuffer: string, answerText: string, thinkingText: string) {
+  const answerBlock = rawBuffer.match(/\[\[ANSWER\]\]([\s\S]*?)(?:\[\[\/ANSWER\]\]|$)/i)?.[1];
+  let result = "";
+  if (answerBlock?.trim()) {
+    result = stripInternalReasoning(stripStreamTags(answerBlock));
+  } else if (answerText.trim()) {
+    result = stripInternalReasoning(stripStreamTags(answerText));
+  } else {
+    const afterThinking = rawBuffer
+      .replace(/\[\[THINKING\]\][\s\S]*?\[\[\/THINKING\]\]/i, "")
+      .trim();
+    if (afterThinking) {
+      result = stripInternalReasoning(stripStreamTags(afterThinking));
+    } else if (thinkingText.trim()) {
+      result = stripInternalReasoning(stripStreamTags(thinkingText));
+    }
+  }
+  return dedupeRepeatedAnswer(result);
+}
+
 export default function ChatPage() {
   const LAST_SYNC_STORAGE_KEY = "notion_last_synced_at";
   const { data: session, status } = useSession();
@@ -291,6 +343,7 @@ export default function ChatPage() {
       let answerText = "";
       let thinkingText = "";
       let buffer = "";
+      let rawStream = "";
       let parseMode: "searching" | "tagged" | "untagged" = "searching";
       let activeSection: "thinking" | "answer" | null = null;
       let hasReceivedChunk = false;
@@ -385,6 +438,7 @@ export default function ChatPage() {
         }
 
         const chunk = decoder.decode(value, { stream: true });
+        rawStream += chunk;
         buffer += chunk;
 
         if (parseMode === "searching") {
@@ -396,7 +450,7 @@ export default function ChatPage() {
         }
 
         if (parseMode === "untagged") {
-          answerText += buffer;
+          answerText = stripStreamTags(buffer);
           buffer = "";
         } else if (parseMode === "tagged") {
           parseTaggedBuffer();
@@ -419,10 +473,7 @@ export default function ChatPage() {
         buffer = "";
       }
 
-      const cleanedAnswer = stripStreamTags(answerText);
-      if (cleanedAnswer !== answerText) {
-        answerText = cleanedAnswer;
-      }
+      answerText = finalizeStreamAnswer(rawStream, answerText, thinkingText);
       updateMessageContent();
 
       refreshChatSessions().catch((error) => console.error("Failed to refresh chats:", error));

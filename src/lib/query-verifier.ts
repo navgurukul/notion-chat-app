@@ -54,7 +54,8 @@ function cleanText(value: unknown) {
 }
 
 function shouldVerifyQuery(question: string, parsed: ParsedQuery) {
-  if (process.env.AI_QUERY_VERIFIER === "false") return false;
+  // Off by default — regex + DB prefetch are primary; enable with AI_QUERY_VERIFIER=true
+  if (process.env.AI_QUERY_VERIFIER !== "true") return false;
   if (!STRUCTURED_QUERY_PATTERN.test(question)) return false;
 
   if (parsed.kind === "semantic") return true;
@@ -119,7 +120,7 @@ Allowed intents:
 - project_manager_of: ask project manager, project lead, PM, or project owner of a topic/project
 - topic_list: list docs/data about a topic
 - type_of: ask type/kind of one doc/topic
-- status_of: ask status of one doc/topic
+- status_of: ask status or current progress of a project/topic (e.g. "progress on Oscar")
 - activity_summary: which project/topic a person is most active on, recent work, mostly active (uses SQL by person — not semantic)
 - semantic: broad summary, explanation, comparison, why/how question, or unclear intent
 

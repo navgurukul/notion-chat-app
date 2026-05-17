@@ -14,6 +14,7 @@
     "benchmark:chatbot": "tsx scripts/benchmark-chatbot.ts",
     "sync:notion": "tsx scripts/sync-notion.ts",
     "embed:missing": "tsx scripts/embed-missing.ts",
+    "verify:chat-routes": "tsx scripts/verify-chat-routes.ts",
     "backfill:notion-edited-at": "tsx scripts/backfill-notion-edited-at.ts"
   },
   "dependencies": {

@@ -11,7 +11,7 @@ import {
 import { parseQuery } from "@/lib/query-router";
 import { verifyQueryWithAI } from "@/lib/query-verifier";
 import { handleMetadataQuery, lookupPageLinkByTitle } from "@/lib/metadata-search";
-import { semanticSearch } from "@/lib/vector-search";
+import { buildNotionContextForChat } from "@/lib/notion-context";
 import { addChatMessage, ensureSessionBelongsToUser, getOrCreateUser } from "@/lib/chat-store";
 
 const MAX_MESSAGE_LENGTH = 2000;
@@ -35,21 +35,35 @@ function checkRateLimit(userKey: string) {
 }
 
 function extractAnswerForStorage(rawText: string) {
-  const answerMatch = rawText.match(/\[\[ANSWER\]\]([\s\S]*?)(?:\[\[\/ANSWER\]\]|$)/);
+  const answerMatch = rawText.match(/\[\[ANSWER\]\]([\s\S]*?)(?:\[\[\/ANSWER\]\]|$)/i);
   let answer = answerMatch?.[1] ?? rawText;
-  answer = answer.replace(/\[\[(?:\/)?(?:THINKING|ANSWER)\]\]/g, "").trim();
+  answer = answer.replace(/\[\[(?:\/)?(?:THINKING|ANSWER)\]\]/gi, "").trim();
 
   const thinkingOnly =
     /\[\[THINKING\]\][\s\S]*\[\[\/THINKING\]\]/i.test(rawText) && !answerMatch;
   if (thinkingOnly) {
     const afterThinking = rawText
       .replace(/\[\[THINKING\]\][\s\S]*?\[\[\/THINKING\]\]/i, "")
-      .replace(/\[\[(?:\/)?(?:THINKING|ANSWER)\]\]/g, "")
+      .replace(/\[\[(?:\/)?(?:THINKING|ANSWER)\]\]/gi, "")
       .trim();
     if (afterThinking) answer = afterThinking;
   }
 
-  return answer.trim();
+  const cleaned = answer
+    .replace(
+      /^(?:the user is asking|i will scan|i need to search)[\s\S]*?(?=\n\n|\n#|\n-|$)/i,
+      "",
+    )
+    .trim();
+
+  if (cleaned.length < 200) return cleaned;
+  const half = Math.floor(cleaned.length / 2);
+  const first = cleaned.slice(0, half).trim();
+  const second = cleaned.slice(half).trim();
+  if (first.length > 80 && second.startsWith(first.slice(0, Math.min(120, first.length)))) {
+    return first;
+  }
+  return cleaned;
 }
 
 export async function POST(req: NextRequest) {
@@ -125,13 +139,22 @@ export async function POST(req: NextRequest) {
     }
 
     const searchQuery = resolveSemanticSearchQuery(trimmedMessage, chatHistory);
-    const notionContext = await semanticSearch(searchQuery);
+    const notionContext = await buildNotionContextForChat(searchQuery);
 
-    if (process.env.NODE_ENV !== "production") {
-      console.log(`[chat] mode=semantic search=chunks_or_pages context_chars=${notionContext.length}`);
+    if (!notionContext.trim()) {
+      const emptyAnswer =
+        "I couldn't find matching pages in the synced Notion database. Try **Sync changes** in the sidebar, or rephrase with a project/person/page name from Notion.";
+      if (ownedSessionId) {
+        await addChatMessage(ownedSessionId, "bot", emptyAnswer);
+      }
+      return NextResponse.json({ answer: emptyAnswer });
     }
 
-    const stream = await getChatStream(searchQuery, notionContext, chatHistory);
+    if (process.env.NODE_ENV !== "production") {
+      console.log(`[chat] mode=semantic context_chars=${notionContext.length}`);
+    }
+
+    const stream = await getChatStream(trimmedMessage, notionContext, chatHistory);
 
     const encoder = new TextEncoder();
     const readableStream = new ReadableStream({

@@ -11,6 +11,9 @@ export type QueryKind =
   | "type_of"
   | "status_of"
   | "activity_summary"
+  | "team_activity"
+  | "blocker_list"
+  | "project_eta"
   | "page_about"
   | "semantic";
 
@@ -58,6 +61,34 @@ function extractAfter(text: string, patterns: RegExp[]): string | null {
 
 /** Activity / recency questions — must run before the broad worked_on_list gate. */
 function parseActivityQuery(question: string, q: string): ParsedQuery | null {
+  const whichPersonWorkingMatch =
+    question.match(
+      /which\s+projects?\s+(.+?)\s+is\s+(?:working|work)(?:\s+on)?(?:\s+currently|\s+now)?/i,
+    ) ??
+    question.match(
+      /which\s+projects?\s+(?:is\s+)?(.+?)\s+(?:working|work)\s+on(?:\s+currently|\s+now)?/i,
+    );
+  if (whichPersonWorkingMatch?.[1]) {
+    const person = cleanPersonName(whichPersonWorkingMatch[1]);
+    if (person) {
+      return { kind: "activity_summary", personName: person, raw: question };
+    }
+  }
+
+  const whatPersonWorkingMatch =
+    question.match(
+      /what\s+projects?\s+(.+?)\s+is\s+(?:working|work)(?:\s+on)?(?:\s+currently|\s+now)?/i,
+    ) ??
+    question.match(
+      /what\s+projects?\s+(?:is\s+)?(.+?)\s+(?:working|work)\s+on(?:\s+currently|\s+now)?/i,
+    );
+  if (whatPersonWorkingMatch?.[1]) {
+    const person = cleanPersonName(whatPersonWorkingMatch[1]);
+    if (person) {
+      return { kind: "activity_summary", personName: person, raw: question };
+    }
+  }
+
   if (
     !/\b(mostly|most)\s+active\b/i.test(q) &&
     !/\brecently\s+worked\b/i.test(q) &&
@@ -124,7 +155,28 @@ function parseActivityQuery(question: string, q: string): ParsedQuery | null {
     }
   }
 
+  const teamActiveMatch = question.match(
+    /who\s+is\s+(?:the\s+)?(?:most|mostly)\s+active\s+(?:team\s+member|person|contributor|member)?\s*(?:in|on|for)\s+(.+?)(?:\?|$)/i,
+  );
+  if (teamActiveMatch?.[1]) {
+    return {
+      kind: "team_activity",
+      docTitle: stripDocWords(teamActiveMatch[1]),
+      raw: question,
+    };
+  }
+
   return null;
+}
+
+/** Title before a dash, e.g. "Structuring the Product Team — What's the core idea?" */
+function extractLeadingPageTitle(question: string) {
+  const match = question.match(
+    /^(.+?)\s*[—–-]\s*(?:what'?s?(?:\s+the)?|how|why|who|when|the\s+core|tell|explain|describe|can you|give me)/i,
+  );
+  if (!match?.[1]) return null;
+  const title = match[1].trim();
+  return title.length >= 8 ? title : null;
 }
 
 export function parseQuery(question: string): ParsedQuery {
@@ -137,8 +189,19 @@ export function parseQuery(question: string): ParsedQuery {
     return { kind: "project_manager_of", docTitle: docTitle ?? undefined, raw: question };
   }
 
+  // "Who is assigned to ReportList?" — before broad assigned_list patterns
+  if (/\bwho\s+(?:is\s+)?assigned\s+to\b/i.test(q) || /\bassignee\s+of\b/i.test(q)) {
+    const docTitle = extractAfter(question, [
+      /who\s+(?:is\s+)?assigned\s+to\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+      /assignee\s+of\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+    ]);
+    if (docTitle) {
+      return { kind: "assigned_to_of", docTitle: stripDocWords(docTitle), raw: question };
+    }
+  }
+
   const topicAssignedToPersonMatch = question.match(
-    /^(?:only\s+one\s+|one\s+|single\s+)?(?:tasks?|projects?|work|data|docs?|documents?|pages?)?\s*(?:of|for|in|on|about|related to)?\s*(.+?)\s+(?:assigned|assign|given)\s+to\s+(.+?)(?:\?|$)/i,
+    /^(?!who\s+(?:is\s+)?assigned\s+to)(?:only\s+one\s+|one\s+|single\s+)?(?:tasks?|projects?|work|data|docs?|documents?|pages?)?\s*(?:of|for|in|on|about|related to)?\s*(.+?)\s+(?:assigned|assign|given)\s+to\s+(.+?)(?:\?|$)/i,
   );
   if (topicAssignedToPersonMatch?.[1] && topicAssignedToPersonMatch?.[2]) {
     return {
@@ -295,15 +358,6 @@ export function parseQuery(question: string): ParsedQuery {
     return { kind: "created_by_of", docTitle: docTitle ?? undefined, raw: question };
   }
 
-  // assigned to / assignee of
-  if (/\bwho\s+(is\s+)?assigned\s+to\b/i.test(q) || /\bassignee\s+of\b/i.test(q)) {
-    const docTitle = extractAfter(question, [
-      /who\s+(?:is\s+)?assigned\s+to\s+(?:the\s+)?(.+)$/i,
-      /assignee\s+of\s+(?:the\s+)?(.+)$/i,
-    ]);
-    return { kind: "assigned_to_of", docTitle: docTitle ?? undefined, raw: question };
-  }
-
   // type of
   if (/\bwhat\s+(type|kind)\s+(is|of)\b/i.test(q) || /\btype\s+of\b/i.test(q)) {
     const docTitle = extractAfter(question, [
@@ -314,11 +368,73 @@ export function parseQuery(question: string): ParsedQuery {
     return { kind: "type_of", docTitle: docTitle ?? undefined, raw: question };
   }
 
-  // page overview ("tell me about X") — after status/type so those stay structured
+  // blockers across workspace / project
+  if (/\bblockers?\b/i.test(q)) {
+    const scope = extractAfter(question, [
+      /blockers?\s+(?:in|across|for)\s+(?:the\s+)?(?:projects?\s+in\s+)?(.+?)(?:\?|$)/i,
+      /(?:all|every)\s+(?:the\s+)?blockers?\s+(?:in|for)\s+(.+?)(?:\?|$)/i,
+    ]);
+    return { kind: "blocker_list", docTitle: scope ? stripDocWords(scope) : undefined, raw: question };
+  }
+
+  // ETA / completion date for a named project
   if (
-    /\b(tell me about|tell me more about|give me an overview of|overview of)\b/i.test(q) ||
-    /\b(what is|what's|what are)\s+(?:the\s+)?(?!status\b)/i.test(q) ||
-    /\b(describe|explain)\s+(?:the\s+)?/i.test(q)
+    /\b(eta|estimated completion|completion date|target date)\b/i.test(q) ||
+    /\bwhen\s+will\b.+\b(?:complete|done|ready|ship)\b/i.test(q)
+  ) {
+    const docTitle = extractAfter(question, [
+      /(?:eta|deadline|estimated completion)\s+(?:for\s+)?(?:completion\s+of\s+)?(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
+      /completion\s+of\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
+      /when\s+will\s+(?:the\s+)?(?:project\s+)?(.+?)\s+(?:be\s+)?(?:complete|done|ready)/i,
+    ]);
+    if (docTitle && docTitle.length >= 3) {
+      return { kind: "project_eta", docTitle: stripDocWords(docTitle), raw: question };
+    }
+  }
+
+  // project progress / status (before page_about — "what is the progress on Oscar" is NOT page_about)
+  if (
+    /\b(?:current\s+)?progress\s+on\b/i.test(q) ||
+    /\bhow\s+is\s+.+\s+(?:progress|going)\b/i.test(q) ||
+    /\bwhat\s+is\s+the\s+status\s+of\b/i.test(q) ||
+    /\bstatus\s+of\b/i.test(q)
+  ) {
+    const docTitle = extractAfter(question, [
+      /(?:what\s+is\s+the\s+)?(?:current\s+)?progress\s+on\s+(?:the\s+(?:project\s+)?)?(.+?)(?:\?|$)/i,
+      /how\s+is\s+(?:the\s+(?:project\s+)?)?(.+?)\s+(?:progress|going)/i,
+      /status\s+of\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+      /what\s+is\s+the\s+status\s+of\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+    ]);
+    if (docTitle && docTitle.length >= 2) {
+      return { kind: "status_of", docTitle: stripDocWords(docTitle), raw: question };
+    }
+  }
+
+  const leadingTitle = extractLeadingPageTitle(question);
+  if (leadingTitle) {
+    return { kind: "page_about", docTitle: leadingTitle, raw: question };
+  }
+
+  // summarize / purpose of a page
+  if (/\b(summarize|summary of)\b/i.test(q) || /\bwhat\s+is\b.+\bfor(?:\?|$)/i.test(q)) {
+    const docTitle = extractAfter(question, [
+      /summarize\s+(?:what\s+)?(?:the\s+)?(.+?)\s+is\s+for(?:\?|$)/i,
+      /summary\s+of\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+      /(?:what is|what's)\s+(?:the\s+)?(.+?)\s+for(?:\?|$)/i,
+    ]);
+    if (docTitle && docTitle.length >= 4) {
+      return { kind: "page_about", docTitle: stripDocWords(docTitle), raw: question };
+    }
+  }
+
+  // page overview ("tell me about X") — not progress/status/eta/blocker questions
+  if (
+    (/\b(tell me about|tell me more about|give me an overview of|overview of)\b/i.test(q) ||
+      /\b(what is|what's|what are)\s+(?:the\s+)?(?!status\b)/i.test(q) ||
+      /\b(describe|explain)\s+(?:the\s+)?/i.test(q)) &&
+    !/\b(?:current\s+)?progress\b/i.test(q) &&
+    !/\bprogress\s+on\b/i.test(q) &&
+    !/\b(eta|blocker)\b/i.test(q)
   ) {
     const docTitle = extractAfter(question, [
       /(?:tell me about|tell me more about|give me an overview of|overview of)\s+(?:the\s+)?(.+?)(?:\?|$)/i,
@@ -328,15 +444,6 @@ export function parseQuery(question: string): ParsedQuery {
     if (docTitle && docTitle.length >= 4 && !/\b(status|type|kind)\s+of\b/i.test(q)) {
       return { kind: "page_about", docTitle, raw: question };
     }
-  }
-
-  // status of
-  if (/\bwhat\s+is\s+the\s+status\s+of\b/i.test(q) || /\bstatus\s+of\b/i.test(q)) {
-    const docTitle = extractAfter(question, [
-      /status\s+of\s+(?:the\s+)?(.+)$/i,
-      /what\s+is\s+the\s+status\s+of\s+(?:the\s+)?(.+)$/i,
-    ]);
-    return { kind: "status_of", docTitle: docTitle ?? undefined, raw: question };
   }
 
   // topic list
