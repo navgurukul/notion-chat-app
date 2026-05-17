@@ -142,3 +142,15 @@ export async function clearChatMessages(sessionId: string) {
     [sessionId],
   );
 }
+
+export async function deleteChatSession(sessionId: string, userId: string) {
+  const rows = await query<{ id: string }>(
+    `
+    DELETE FROM chat_sessions
+    WHERE id = $1 AND user_id = $2
+    RETURNING id
+    `,
+    [sessionId, userId],
+  );
+  return rows.length > 0;
+}

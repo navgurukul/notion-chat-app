@@ -59,12 +59,19 @@ function cleanPersonName(value: string | null) {
   if (!value) return null;
   const cleaned = stripDocWords(value)
     .replace(/\s+(?:has|have|had)\s*$/i, "")
+    .replace(/^(?:did|does|do)\s+/i, "")
     .trim();
   if (!cleaned) return null;
   if (/^(what|which|who|when|where|why|how|is|was|are|were|task|tasks|project|projects|work|manager|lead|only|one)$/i.test(cleaned)) {
     return null;
   }
   return cleaned;
+}
+
+export function isNoiseTopic(topic?: string) {
+  if (!topic?.trim()) return true;
+  const t = topic.trim().toLowerCase();
+  return ["which", "what", "who", "whom", "whose", "did", "does", "do", "has", "have", "had", "the", "a", "an"].includes(t);
 }
 
 function extractAfter(text: string, patterns: RegExp[]): string | null {
@@ -102,6 +109,17 @@ function parseActivityQuery(question: string, q: string): ParsedQuery | null {
         personName: person,
         ...(year ? { year } : {}),
       });
+    }
+  }
+
+  const tasksWorkedMatch =
+    question.match(/\b(?:which|what)\s+tasks?\s+(.+?)\s+(?:has|have)\s+worked(?:\s+on)?/i) ??
+    question.match(/\b(?:which|what)\s+tasks?\s+(?:did|has|have)\s+(.+?)\s+work(?:\s+on)?/i) ??
+    question.match(/\b(?:which|what)\s+tasks?\s+(.+?)\s+worked(?:\s+on)?/i);
+  if (tasksWorkedMatch?.[1]) {
+    const person = cleanPersonName(tasksWorkedMatch[1]);
+    if (person) {
+      return { kind: "worked_on_list", personName: person, raw: question };
     }
   }
 
@@ -292,17 +310,19 @@ export function parseQuery(question: string): ParsedQuery {
     };
   }
 
-  // owner list: "show all docs owned by X"
+  // owner list: "show all docs owned by X", "pages owned by souvik"
   if (
     /\b(all|list|show)\b.*\b(docs?|documents?|pages?)\b.*\bowned by\b/i.test(q) ||
+    /\b(?:pages?|docs?|documents?)\s+owned\s+by\b/i.test(q) ||
     /\bdocs?\s+owned\s+by\b/i.test(q) ||
     /\bwhich\s+(docs?|documents?|pages?)\s+have\b.*\bas\s+owner\b/i.test(q)
   ) {
     const personName = extractAfter(question, [
-      /owned by\s+(.+?)(?:\s+as\s+owner)?$/i,
+      /(?:pages?|docs?|documents?)\s+owned\s+by\s+(.+?)(?:\?|$)/i,
+      /owned by\s+(.+?)(?:\s+as\s+owner)?(?:\?|$)/i,
       /which\s+docs?\s+have\s+(.+?)\s+as\s+owner/i,
     ]);
-    return { kind: "owner_list", personName: personName ?? undefined, raw: question };
+    return { kind: "owner_list", personName: cleanPersonName(personName) ?? undefined, raw: question };
   }
 
   // created-by list
@@ -404,6 +424,17 @@ export function parseQuery(question: string): ParsedQuery {
       /\btasks?\s+(?:by|of|for)\s+(.+)$/i,
     ]);
     return { kind: "worked_on_list", personName: cleanPersonName(personName) ?? undefined, raw: question };
+  }
+
+  // "Which project is Souvik the owner of?" → list pages owned by person
+  const personIsOwnerOfMatch = question.match(
+    /\b(?:which|what)\s+projects?\s+(?:is|are)\s+(.+?)\s+the\s+owner\s+of/i,
+  );
+  if (personIsOwnerOfMatch?.[1]) {
+    const person = cleanPersonName(personIsOwnerOfMatch[1]);
+    if (person) {
+      return { kind: "owner_list", personName: person, raw: question };
+    }
   }
 
   // owner of

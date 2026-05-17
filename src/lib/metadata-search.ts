@@ -1,5 +1,5 @@
 import { query } from "@/lib/postgres";
-import type { ParsedQuery } from "@/lib/query-router";
+import { isNoiseTopic, type ParsedQuery } from "@/lib/query-router";
 
 type NotionPageRow = {
   id: string;
@@ -284,22 +284,81 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
   const docTitle = parsed.docTitle?.trim();
 
   if (parsed.kind === "owner_list" && person) {
+    const personTerm = `%${escapeLike(person)}%`;
+    const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
+    const projectsOwnedQuery = /\b(?:which|what)\s+projects?\s+.+\s+the\s+owner\s+of/i.test(parsed.raw);
+    const singularProject = /\bwhich\s+project\s+/i.test(parsed.raw);
+
     const rows = await query<NotionPageRow>(
       `
       SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status
       FROM notion_pages
-      WHERE lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-      ORDER BY title ASC
+      WHERE
+        lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
+        OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+      ORDER BY
+        CASE
+          WHEN lower(coalesce(status, '')) IN ('in development', 'in progress', 'testing', 'prod ready') THEN 0
+          WHEN lower(coalesce(status, '')) = 'backlog' THEN 1
+          ELSE 2
+        END,
+        title ASC
       LIMIT ${SQL_RESULT_LIMIT}
       `,
-      [`%${escapeLike(person)}%`],
+      [personTerm, fuzzyPersonTerm],
     );
     if (!rows.length) return null;
-    return `${formatListHeader(rows.length, `owned by ${person}`)}\n\n${formatRows(
-      rows,
-      (row) =>
-        `**${formatLink(row.title || "Untitled", row.url)}** — owner: ${row.owner || "Unknown"}`,
-    )}`;
+
+    const seenTitles = new Set<string>();
+    const uniqueRows = rows.filter((row) => {
+      const key = (row.title || "").trim().toLowerCase();
+      if (!key || seenTitles.has(key)) return false;
+      seenTitles.add(key);
+      return true;
+    });
+
+    const ownerName = uniqueRows[0]?.owner || person;
+    const activeRows = uniqueRows.filter((row) =>
+      /in development|in progress|testing|prod ready/i.test(row.status || ""),
+    );
+    const lines: string[] = [];
+
+    if (singularProject && uniqueRows.length > 1) {
+      const highlights = (activeRows.length ? activeRows : uniqueRows)
+        .slice(0, 5)
+        .map((row) => `**${row.title}**`)
+        .join(", ");
+      lines.push(
+        `**${ownerName}** is listed as owner on **${uniqueRows.length}** projects in Notion — not just one. Active examples: ${highlights}.`,
+        "",
+      );
+    } else if (singularProject && uniqueRows.length === 1) {
+      const row = uniqueRows[0];
+      lines.push(
+        `**${ownerName}** is owner of **${formatLink(row.title || "Untitled", row.url)}**${row.status ? ` (status: ${row.status})` : ""}.`,
+        "",
+      );
+    }
+
+    const label = projectsOwnedQuery
+      ? `project(s) where **${person}** is owner`
+      : `page(s) owned by **${person}**`;
+
+    lines.push(
+      formatListHeader(uniqueRows.length, label),
+      "",
+      formatRows(uniqueRows, (row) => {
+        const meta = [
+          `owner: ${row.owner || "Unknown"}`,
+          row.status ? `status: ${row.status}` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        return `**${formatLink(row.title || "Untitled", row.url)}** — ${meta}`;
+      }),
+    );
+
+    return lines.join("\n");
   }
 
   if (parsed.kind === "created_by_list" && person) {
@@ -363,9 +422,46 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
   if (parsed.kind === "worked_on_list" && person) {
     const personTerm = `%${escapeLike(person)}%`;
     const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
-    const normalizedTopic = docTitle ? normalizeTopic(docTitle) : "";
+    const effectiveTopic = docTitle && !isNoiseTopic(docTitle) ? docTitle : undefined;
+    const normalizedTopic = effectiveTopic ? normalizeTopic(effectiveTopic) : "";
     const topicTerm = normalizedTopic ? `%${escapeLike(normalizedTopic)}%` : null;
-    const rows = await query<NotionPageRow>(
+    const taskListQuery = /\b(?:which|what)\s+tasks?\b/i.test(parsed.raw);
+
+    const personPropertyInContentSql = `
+      (
+        (
+          lower(coalesce(content, '')) LIKE '%captain:%'
+          OR lower(coalesce(content, '')) LIKE '%assignee:%'
+          OR lower(coalesce(content, '')) LIKE '%assign:%'
+          OR lower(coalesce(content, '')) LIKE '%assigned:%'
+        )
+        AND lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
+      )
+    `;
+
+    const personFieldMatchSql = `
+      (
+        lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
+        OR lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\'
+        OR lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
+        OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+        OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+        OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+        OR ${personPropertyInContentSql}
+      )
+    `;
+
+    const personMatchSql = topicTerm
+      ? `
+      (
+        ${personFieldMatchSql}
+        OR lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
+        OR lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
+      )
+    `
+      : personFieldMatchSql;
+
+    const rows = await query<NotionPageRow & { notion_edited_at?: string | null }>(
       `
       SELECT
         id,
@@ -377,66 +473,68 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         doc_type,
         status,
         content,
+        notion_edited_at::text AS notion_edited_at,
         CASE
-          WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\' THEN 'owner'
-          WHEN lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\' THEN 'created_by'
-          WHEN lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\' THEN 'last_edited_by'
-          WHEN lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\' THEN 'title'
-          WHEN lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\' THEN 'content'
-          WHEN regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\' THEN 'owner'
-          WHEN regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\' THEN 'created_by'
-          WHEN regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\' THEN 'last_edited_by'
-          WHEN regexp_replace(lower(coalesce(title, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\' THEN 'title'
-          ELSE 'content'
+          WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
+            OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+            THEN 'owner'
+          WHEN ${personPropertyInContentSql} THEN 'assignee'
+          WHEN lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\'
+            OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+            THEN 'creator'
+          WHEN lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
+            OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+            THEN 'last editor'
+          ELSE 'mentioned'
         END AS match_source
       FROM notion_pages
-      WHERE
-      (
-        lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-        OR lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\'
-        OR lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
-        OR lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
-        OR lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(title, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(content, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
-      )
+      WHERE ${personMatchSql}
       AND (
         $3::text IS NULL
         OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
         OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
       )
-      ORDER BY title ASC
+      ORDER BY
+        CASE
+          WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\' THEN 1
+          WHEN ${personPropertyInContentSql} THEN 2
+          WHEN lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\' THEN 3
+          ELSE 9
+        END,
+        notion_edited_at DESC NULLS LAST,
+        title ASC
       LIMIT ${SQL_RESULT_LIMIT}
       `,
       [personTerm, fuzzyPersonTerm, topicTerm],
     );
     if (!rows.length) return null;
-    const includeDetails = Boolean(docTitle) || rows.length <= 20;
-    return `${formatListHeader(rows.length, `associated with ${person}${docTitle ? ` and matching "${docTitle}"` : ""}`)}\n\n${formatRows(
-      rows,
-      (row) => {
-        const who =
-          row.match_source === "owner"
-            ? `owner/assignee: ${row.owner || "Unknown"}`
-            : row.match_source === "created_by"
+
+    const label = taskListQuery
+      ? `${person} worked on`
+      : `associated with ${person}${effectiveTopic ? ` and matching "${effectiveTopic}"` : ""}`;
+
+    return `${formatListHeader(rows.length, label)}\n\n${formatRows(rows, (row) => {
+      const who =
+        row.match_source === "owner"
+          ? `owner: ${row.owner || "Unknown"}`
+          : row.match_source === "assignee"
+            ? "assignee/captain"
+            : row.match_source === "creator"
               ? `created by: ${row.created_by || "Unknown"}`
-              : row.match_source === "last_edited_by"
+              : row.match_source === "last editor"
                 ? `last edited by: ${row.last_edited_by || "Unknown"}`
-                : row.match_source === "title"
-                  ? "name mentioned in title"
-                  : "name mentioned in content";
-        const metadata = [
-          who,
-          row.status ? `status: ${row.status}` : "",
-          row.doc_type ? `type: ${row.doc_type}` : "",
-        ].filter(Boolean).join(" · ");
-        const snippet = includeDetails ? contentSnippet(row.content) : "";
-        return `**${formatLink(row.title || "Untitled", row.url)}** — ${metadata}${snippet ? `\n  ${snippet}` : ""}`;
-      },
-    )}`;
+                : "mentioned";
+      const metadata = [
+        who,
+        row.status ? `status: ${row.status}` : "",
+        row.notion_edited_at
+          ? `last edited: ${new Date(row.notion_edited_at).toLocaleDateString()}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return `**${formatLink(row.title || "Untitled", row.url)}** — ${metadata}`;
+    })}`;
   }
 
   if (parsed.kind === "project_manager_of" && docTitle) {

@@ -82,6 +82,21 @@ const CASES: Array<{
     expectKind: "activity_summary",
     mustInclude: ["komal", "2026", "Reflection"],
   },
+  {
+    question: "which task tamanna has worked on?",
+    expectKind: "worked_on_list",
+    mustInclude: ["tamanna", "Tamanna"],
+  },
+  {
+    question: "Which project is Souvik the owner of?",
+    expectKind: "owner_list",
+    mustInclude: ["Souvik", "Oscar"],
+  },
+  {
+    question: "pages owned by souvik",
+    expectKind: "owner_list",
+    mustInclude: ["Souvik", "Oscar"],
+  },
 ];
 
 async function main() {

@@ -131,6 +131,7 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [thinkingByMessage, setThinkingByMessage] = useState<ThinkingByMessage>({});
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [chatPendingDelete, setChatPendingDelete] = useState<ChatSession | null>(null);
   const [showFullSyncConfirm, setShowFullSyncConfirm] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMode, setSyncMode] = useState<"incremental" | "full" | null>(null);
@@ -266,6 +267,50 @@ export default function ChatPage() {
       await refreshChatSessions();
     } catch (error) {
       console.error("Failed to clear chat:", error);
+    }
+  };
+
+  const requestDeleteChat = (chat: ChatSession, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isLoadingChats || isLoading) return;
+    setChatPendingDelete(chat);
+  };
+
+  const confirmDeleteChat = async () => {
+    if (!chatPendingDelete || isLoadingChats || isLoading) return;
+
+    const chatId = chatPendingDelete.id;
+    setChatPendingDelete(null);
+    setIsLoadingChats(true);
+
+    try {
+      const response = await fetch(`/api/chats/${chatId}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("Failed to delete chat");
+
+      const wasActive = chatId === activeSessionId;
+      let sessions = chatSessions.filter((chat) => chat.id !== chatId);
+
+      if (!sessions.length) {
+        const createResponse = await fetch("/api/chats", { method: "POST" });
+        if (!createResponse.ok) throw new Error("Failed to create chat");
+        const createData = await createResponse.json();
+        sessions = createData?.session ? [createData.session] : [];
+      }
+
+      setChatSessions(sessions);
+
+      if (wasActive) {
+        const nextId = sessions[0]?.id ?? null;
+        setActiveSessionId(nextId);
+        if (!nextId) {
+          setMessages([]);
+          setThinkingByMessage({});
+        }
+      }
+    } catch (error) {
+      console.error("Failed to delete chat:", error);
+    } finally {
+      setIsLoadingChats(false);
     }
   };
 
@@ -629,6 +674,58 @@ export default function ChatPage() {
         </div>
       )}
 
+      {/* Delete chat confirmation */}
+      {chatPendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setChatPendingDelete(null)}
+            role="presentation"
+          />
+          <div className="bg-[#1a1a1a] border border-white/10 p-8 rounded-2xl max-w-sm w-full relative z-10 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-start mb-4">
+              <div className="p-3 rounded-full bg-red-500/20 text-red-500">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <button
+                type="button"
+                onClick={() => setChatPendingDelete(null)}
+                className="text-white/40 hover:text-white transition-colors"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <h3 className="text-xl font-bold mb-2">Delete this chat?</h3>
+            <p className="text-white/60 text-sm mb-2 leading-relaxed">
+              <span className="text-white/90 font-medium">
+                {chatPendingDelete.title || "New Chat"}
+              </span>{" "}
+              and all its messages will be permanently removed.
+            </p>
+            <p className="text-white/40 text-xs mb-6">This cannot be undone.</p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setChatPendingDelete(null)}
+                disabled={isLoadingChats}
+                className="flex-1 py-3 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-colors font-medium disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteChat}
+                disabled={isLoadingChats}
+                className="flex-1 py-3 px-4 rounded-xl bg-red-500 hover:bg-red-600 transition-all font-medium active:scale-[0.98] disabled:opacity-50"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Logout Confirmation Modal */}
       {showLogoutConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -716,17 +813,34 @@ export default function ChatPage() {
 
           <div className="space-y-2 mb-6">
             {chatSessions.map((chat) => (
-              <button
+              <div
                 key={chat.id}
-                onClick={() => setActiveSessionId(chat.id)}
-                className={`w-full text-left px-3 py-2 rounded-lg text-sm truncate transition-colors ${
+                className={`group flex items-center gap-1 rounded-lg border transition-colors ${
                   activeSessionId === chat.id
-                    ? "bg-blue-600/20 text-blue-200 border border-blue-500/30"
-                    : "bg-white/5 text-white/55 hover:bg-white/[0.08] hover:text-white"
+                    ? "bg-blue-600/20 border-blue-500/30"
+                    : "bg-white/5 border-transparent hover:bg-white/[0.08]"
                 }`}
               >
-                {chat.title || "New Chat"}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveSessionId(chat.id)}
+                  className={`flex-1 min-w-0 text-left px-3 py-2 text-sm truncate transition-colors ${
+                    activeSessionId === chat.id ? "text-blue-200" : "text-white/55 group-hover:text-white"
+                  }`}
+                >
+                  {chat.title || "New Chat"}
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => requestDeleteChat(chat, e)}
+                  disabled={isLoadingChats || isLoading}
+                  className="shrink-0 p-2 mr-1 rounded-md text-white/30 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all disabled:opacity-40"
+                  title="Delete chat"
+                  aria-label={`Delete ${chat.title || "chat"}`}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
             ))}
             {!chatSessions.length && (
               <p className="text-xs text-white/35 px-2">No chats yet.</p>
