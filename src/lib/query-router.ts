@@ -15,12 +15,18 @@ export type QueryKind =
   | "blocker_list"
   | "project_eta"
   | "page_about"
+  | "project_summary"
+  | "compare_pages"
+  | "risks_for"
+  | "onboarding_tasks"
   | "semantic";
 
 export type ParsedQuery = {
   kind: QueryKind;
   personName?: string;
   docTitle?: string;
+  /** Second page title for compare_pages */
+  compareTitleB?: string;
   /** Calendar year from phrases like "in 2026" */
   year?: number;
   raw: string;
@@ -38,8 +44,23 @@ function withYear(question: string, partial: Omit<ParsedQuery, "raw" | "year">):
   return { ...partial, year, raw: question };
 }
 
+function preprocessQuestion(text: string) {
+  return text
+    .replace(/\bsummry\b/gi, "summary")
+    .replace(/\bsummerrize\b/gi, "summarize")
+    .replace(/\bsummarise\b/gi, "summarize");
+}
+
 function normalize(text: string) {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Trim leading punctuation from extracted page titles. */
+function cleanPageTitle(value: string) {
+  return value
+    .replace(/^[-–—:\s]+/, "")
+    .replace(/[?!.,;]+$/g, "")
+    .trim();
 }
 
 function stripDocWords(value: string) {
@@ -78,6 +99,17 @@ function extractAfter(text: string, patterns: RegExp[]): string | null {
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match?.[1]) return stripDocWords(match[1].trim());
+  }
+  return null;
+}
+
+function extractPageTitle(text: string, patterns: RegExp[]): string | null {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) {
+      const title = cleanPageTitle(match[1].trim());
+      if (title.length >= 4) return title;
+    }
   }
   return null;
 }
@@ -257,16 +289,31 @@ function parseActivityQuery(question: string, q: string): ParsedQuery | null {
 
 /** Title before a dash, e.g. "Structuring the Product Team — What's the core idea?" */
 function extractLeadingPageTitle(question: string) {
+  if (/^\s*compare\b/i.test(question)) return null;
   const match = question.match(
     /^(.+?)\s*[—–-]\s*(?:what'?s?(?:\s+the)?|how|why|who|when|the\s+core|tell|explain|describe|can you|give me)/i,
   );
   if (!match?.[1]) return null;
   const title = match[1].trim();
+  if (/^compare\b/i.test(title)) return null;
   return title.length >= 8 ? title : null;
 }
 
+/** "Compare Oscar MVP and Oscar App — what's the difference?" */
+export function extractCompareTitles(question: string): { a: string; b: string } | null {
+  const match = question.match(
+    /\bcompare\s+(.+?)\s+and\s+(.+?)(?:\s*[—–-]|\s*[,;]|\s+what\b|\s+what'?s\b|\?|$)/i,
+  );
+  if (!match?.[1] || !match?.[2]) return null;
+  const a = cleanPageTitle(match[1].trim());
+  const b = cleanPageTitle(match[2].trim());
+  if (a.length < 2 || b.length < 2) return null;
+  return { a, b };
+}
+
 export function parseQuery(question: string): ParsedQuery {
-  const q = normalize(question);
+  const qn = preprocessQuestion(question);
+  const q = normalize(qn);
 
   if (/\bwho\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm|owner)\s+(?:of|for|on)\b/i.test(q)) {
     const docTitle = extractAfter(question, [
@@ -334,7 +381,7 @@ export function parseQuery(question: string): ParsedQuery {
     return { kind: "created_by_list", personName: personName ?? undefined, raw: question };
   }
 
-  const activityQuery = parseActivityQuery(question, q);
+  const activityQuery = parseActivityQuery(qn, q);
   if (activityQuery) return activityQuery;
 
   if (
@@ -509,20 +556,61 @@ export function parseQuery(question: string): ParsedQuery {
     }
   }
 
+  const compareTitles = extractCompareTitles(question);
+  if (compareTitles) {
+    return {
+      kind: "compare_pages",
+      docTitle: compareTitles.a,
+      compareTitleB: compareTitles.b,
+      raw: question,
+    };
+  }
+
+  if (
+    /\bonboarding\s+tasks?\b/i.test(q) ||
+    (/\bnew\s+hire\b/i.test(q) && /\btasks?\b/i.test(q) && /\b(?:complete|need|do)\b/i.test(q))
+  ) {
+    return { kind: "onboarding_tasks", raw: question };
+  }
+
+  if (/\brisks?\b/i.test(q)) {
+    const riskTopic = extractAfter(question, [
+      /risks?\s+mentioned\s+for\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+      /(?:main\s+)?risks?\s+(?:mentioned\s+)?(?:for|in|of|around)\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+      /risks?\s+(?:for|in|of)\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+    ]);
+    if (riskTopic && riskTopic.length >= 2) {
+      return { kind: "risks_for", docTitle: stripDocWords(riskTopic) || riskTopic, raw: question };
+    }
+  }
+
   const leadingTitle = extractLeadingPageTitle(question);
   if (leadingTitle) {
     return { kind: "page_about", docTitle: leadingTitle, raw: question };
   }
 
-  // summarize / purpose of a page
-  if (/\b(summarize|summary of)\b/i.test(q) || /\bwhat\s+is\b.+\bfor(?:\?|$)/i.test(q)) {
-    const docTitle = extractAfter(question, [
+  const projectSummaryTopic = extractProjectSummaryTopic(question);
+  if (projectSummaryTopic) {
+    return { kind: "project_summary", docTitle: projectSummaryTopic, raw: question };
+  }
+
+  // summarize / purpose of a page (single doc, not a program)
+  if (
+    /\b(summarize|summar(?:y|ize|ry)|summary\s+of|provide\s+(?:a\s+)?summar|give\s+(?:me\s+)?(?:a\s+)?summar)\b/i.test(q) ||
+    /\bwhat\s+is\b.+\bfor(?:\?|$)/i.test(q) ||
+    /\bwhat'?s\s+happening\b/i.test(q)
+  ) {
+    const docTitle = extractPageTitle(qn, [
+      /(?:provide|give)(?:\s+me)?\s+(?:a\s+)?summar(?:y|ize|ry)\s+(?:of|for)\s*[-–—]?\s*(.+?)(?:\?|$)/i,
+      /(?:summarize|summerrize|summary)\s*[-–—]\s*(.+?)(?:\?|$)/i,
       /summarize\s+(?:what\s+)?(?:the\s+)?(.+?)\s+is\s+for(?:\?|$)/i,
+      /(?:summarize|summary\s+of)\s+(?:the\s+)?(.+?)(?:\?|$)/i,
       /summary\s+of\s+(?:the\s+)?(.+?)(?:\?|$)/i,
       /(?:what is|what's)\s+(?:the\s+)?(.+?)\s+for(?:\?|$)/i,
+      /what'?s\s+happening\s+(?:with|on|in)?\s*(?:the\s+)?(.+?)(?:\?|$)/i,
     ]);
-    if (docTitle && docTitle.length >= 4) {
-      return { kind: "page_about", docTitle: stripDocWords(docTitle), raw: question };
+    if (docTitle) {
+      return { kind: "page_about", docTitle, raw: question };
     }
   }
 
@@ -533,7 +621,10 @@ export function parseQuery(question: string): ParsedQuery {
       /\b(describe|explain)\s+(?:the\s+)?/i.test(q)) &&
     !/\b(?:current\s+)?progress\b/i.test(q) &&
     !/\bprogress\s+on\b/i.test(q) &&
-    !/\b(eta|blocker)\b/i.test(q)
+    !/\b(eta|blocker)\b/i.test(q) &&
+    !/\brisks?\b/i.test(q) &&
+    !/\bcompare\b/i.test(q) &&
+    !/\bonboarding\s+tasks?\b/i.test(q)
   ) {
     const docTitle = extractAfter(question, [
       /(?:tell me about|tell me more about|give me an overview of|overview of)\s+(?:the\s+)?(.+?)(?:\?|$)/i,
@@ -566,4 +657,38 @@ export function parseQuery(question: string): ParsedQuery {
   }
 
   return { kind: "semantic", raw: question };
+}
+
+/** "summarize datapivot ai project", "overview of Oscar" — not single-page "tell me about X". */
+export function extractProjectSummaryTopic(question: string) {
+  const q = question.trim();
+  if (/\bsummarize\s+what\b/i.test(q) || /\bwhat\b.+\bis\s+for\b/i.test(q)) {
+    return null;
+  }
+
+  const hasProgramIntent =
+    (/\b(summarize|summary|overview)\b/i.test(q) &&
+      (/\bproject\b/i.test(q) || /\boverview\b/i.test(q))) ||
+    /\bwhat\s+is\s+(?:the\s+)?.+\s+project\s*\??$/i.test(q);
+
+  if (!hasProgramIntent) return null;
+
+  const patterns = [
+    /\b(?:summarize|summary of|give me an overview of|overview of)\s+(?:the\s+)?(.+?)(?:\s+project)?\s*\??$/i,
+    /\b(?:describe|explain)\s+(?:the\s+)?(.+?)\s+project\s*\??$/i,
+    /\bwhat\s+is\s+(?:the\s+)?(.+?)\s+project\s*\??$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = question.match(pattern);
+    if (!match?.[1]) continue;
+    const topic = match[1]
+      .replace(/\s+project\s*$/i, "")
+      .replace(/[?!.,;]+$/g, "")
+      .trim();
+    const cleaned = stripDocWords(topic) || topic;
+    if (cleaned.length >= 3 && !/^(the|a|an|this|that)$/i.test(cleaned)) {
+      return cleaned;
+    }
+  }
+  return null;
 }

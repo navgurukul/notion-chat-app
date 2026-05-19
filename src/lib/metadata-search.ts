@@ -46,6 +46,24 @@ function formatLink(title: string, url: string | null) {
   return url ? `[${title}](${url})` : title;
 }
 
+/** Notion pages often lack an Owner property; fall back to creator / editor. */
+function resolvePageOwner(row: NotionPageRow): { name: string | null; label: string } {
+  if (row.owner?.trim()) {
+    return { name: row.owner.trim(), label: "Owner" };
+  }
+  if (row.created_by?.trim()) {
+    return { name: row.created_by.trim(), label: "Created by" };
+  }
+  if (row.last_edited_by?.trim()) {
+    return { name: row.last_edited_by.trim(), label: "Last edited by" };
+  }
+  const fromContent = (row.content || "").match(/^Created by:\s*(.+)$/m);
+  if (fromContent?.[1]?.trim()) {
+    return { name: fromContent[1].trim(), label: "Created by" };
+  }
+  return { name: null, label: "Owner" };
+}
+
 function escapeLike(value: string) {
   return value.replace(/[%_]/g, "\\$&");
 }
@@ -147,7 +165,133 @@ const PROJECT_THEMES = [
     hubTitleLike: "%oscar%",
     signals: [/oscar/i],
   },
+  {
+    name: "DataPivots AI",
+    hubTitleLike: "%datapivot%",
+    signals: [/datapivot/i, /data pivot/i, /nagaada/i, /pivotsai/i],
+  },
 ] as const;
+
+function projectSearchTokens(topic: string) {
+  const stop = new Set(["project", "the", "ai", "app", "platform"]);
+  return topic
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 3 && !stop.has(t));
+}
+
+function rankProjectHubRow(
+  row: NotionPageRow & { content?: string | null },
+  tokens: string[],
+) {
+  const title = (row.title || "").toLowerCase();
+  const content = (row.content || "").toLowerCase();
+  let score = 0;
+
+  for (const token of tokens) {
+    if (title.includes(token)) score += 10;
+    else if (content.includes(token)) score += 2;
+  }
+
+  if (row.owner?.trim()) score += 5;
+  if (/in development|in progress|testing|scoping/i.test(row.status || "")) score += 4;
+  if (/crisis|high/i.test(content)) score += 1;
+
+  const contentLen = (row.content || "").length;
+  if (contentLen > 1000) score += 5;
+  else if (contentLen > 400) score += 2;
+  else if (contentLen < 150) score -= 4;
+
+  if (/proposal|sow|release|platform|nagaada|roadmap/i.test(title)) score += 4;
+  if (/^click on|icon$|sign in screen$/i.test(title)) score -= 12;
+  if (/^data insights with/i.test(title) && contentLen < 300) score -= 8;
+
+  return score;
+}
+
+async function searchProjectPages(topic: string) {
+  const tokens = projectSearchTokens(topic);
+  if (!tokens.length) return [];
+
+  const primary = `%${escapeLike(tokens[0])}%`;
+  const rows = await query<NotionPageRow & { content: string | null }>(
+    `
+    SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
+    FROM notion_pages
+    WHERE
+      lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
+      OR lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
+      ${tokens.length > 1 ? `OR lower(coalesce(title, '')) LIKE lower($2) ESCAPE '\\'` : ""}
+    LIMIT 40
+    `,
+    tokens.length > 1
+      ? [primary, `%${escapeLike(tokens[1])}%`]
+      : [primary],
+  );
+
+  return rows
+    .map((row) => ({ row, score: rankProjectHubRow(row, tokens) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.row);
+}
+
+async function buildProjectSummary(topic: string) {
+  const pages = await searchProjectPages(topic);
+  if (!pages.length) return null;
+
+  const hub = pages[0];
+  const hubBody = extractPageBody(hub.content, 1200);
+  const related = pages.slice(1, 12);
+
+  const statusCounts = new Map<string, number>();
+  for (const row of pages) {
+    const status = row.status?.trim() || "not set";
+    statusCounts.set(status, (statusCounts.get(status) ?? 0) + 1);
+  }
+
+  const activeStatuses = [...statusCounts.entries()]
+    .filter(([s]) => /in development|in progress|testing|scoping/i.test(s))
+    .map(([s, n]) => `${s} (${n})`);
+
+  const lines: string[] = [
+    `## ${hub.title || topic}`,
+    [
+      hub.status ? `**Status:** ${hub.status}` : "",
+      hub.owner ? `**Owner:** ${hub.owner}` : "",
+      hub.created_by ? `**Created by:** ${hub.created_by}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    "",
+    hubBody
+      ? hubBody
+      : "_Main project page has limited body text in sync — see related pages below._",
+    hub.url ? `\n${formatLink("Open main page in Notion", hub.url)}` : "",
+    "",
+    `**Scope (${pages.length} related pages in Notion):**`,
+    activeStatuses.length
+      ? `Active work: ${activeStatuses.join(", ")}`
+      : `_Statuses: ${[...statusCounts.entries()].slice(0, 6).map(([s, n]) => `${s} (${n})`).join(", ")}_`,
+    "",
+    "**Key related pages:**",
+  ];
+
+  for (const row of related) {
+    const meta = [row.status ? `status: ${row.status}` : "", row.owner ? `owner: ${row.owner}` : ""]
+      .filter(Boolean)
+      .join(" · ");
+    lines.push(`- **${formatLink(row.title || "Untitled", row.url)}**${meta ? ` — ${meta}` : ""}`);
+  }
+
+  if (pages.length > 13) {
+    lines.push("", `_+${pages.length - 13} more related pages in Notion._`);
+  }
+
+  return lines.filter((line) => line !== "").join("\n");
+}
 
 function wantsProjectNameAnswer(raw: string) {
   return /\b(?:which|what|all)\b[\s\S]*\bprojects?\b/i.test(raw);
@@ -166,17 +310,214 @@ function isHistoricalWorkQuery(raw: string) {
 
 function inferProjectTheme(rows: Array<{ title?: string | null; content?: string | null }>) {
   const combined = rows
-    .map((row) => `${row.title ?? ""} ${(row.content ?? "").slice(0, 600)}`)
+    .map((row) => `${row.title ?? ""} ${(row.content ?? "").slice(0, 400)}`)
     .join(" ")
     .toLowerCase();
 
   let best: { name: string; score: number } | null = null;
   for (const theme of PROJECT_THEMES) {
     const score = theme.signals.reduce((n, pattern) => n + (pattern.test(combined) ? 1 : 0), 0);
-    const minScore = theme.name === "Reports and Dashboards" ? 2 : 1;
+    const minScore = 2;
     if (score >= minScore && (!best || score > best.score)) best = { name: theme.name, score };
   }
   return best?.name ?? null;
+}
+
+async function buildComparePages(titleA: string, titleB: string) {
+  const rowsA = await lookupByTitle(titleA, true);
+  const rowsB = await lookupByTitle(titleB, true);
+
+  if (!rowsA.length && !rowsB.length) {
+    return pageNotSyncedMessage(`${titleA} / ${titleB}`);
+  }
+
+  function formatPageBlock(label: string, rows: NotionPageRow[]) {
+    if (!rows.length) {
+      return `### ${label}\n\n_Not found in synced Notion — try **Sync changes**._`;
+    }
+    const row = rows[0];
+    const body = extractPageBody(row.content, 900);
+    const meta = [
+      row.status ? `**Status:** ${row.status}` : "",
+      row.owner ? `**Owner:** ${row.owner}` : "",
+      row.doc_type ? `**Type:** ${row.doc_type}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return [
+      `### ${label}: ${row.title || "Untitled"}`,
+      meta,
+      body || "_No body text in sync._",
+      row.url ? formatLink("Open in Notion", row.url) : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
+
+  return [
+    `## Compare: **${titleA}** vs **${titleB}**`,
+    "",
+    "_Scope and status from synced Notion pages (not AI inference)._",
+    "",
+    formatPageBlock(titleA, rowsA),
+    "",
+    "---",
+    "",
+    formatPageBlock(titleB, rowsB),
+    "",
+    rowsA.length && rowsB.length
+      ? "_Ask about a specific page title for more detail._"
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function buildRisksAnswer(topic: string) {
+  const tokens = topic
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length >= 3 && !["mobile", "app", "main", "the"].includes(t));
+  const primary = tokens[0] || topic;
+  const term = `%${escapeLike(primary)}%`;
+
+  const rows = await query<NotionPageRow & { content: string | null }>(
+    `
+    SELECT id, title, url, owner, status, content
+    FROM notion_pages
+    WHERE
+      (
+        lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
+        OR lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
+      )
+      AND (
+        lower(coalesce(content, '')) ~ '(risk|risks|concern|challenge|limitation|mitigation|blocker|dependency)'
+        OR lower(coalesce(title, '')) ~ '(risk|risks|concern|challenge)'
+      )
+    ORDER BY
+      CASE WHEN lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\' THEN 0 ELSE 1 END,
+      length(coalesce(content, '')) DESC
+    LIMIT ${SQL_RESULT_LIMIT}
+    `,
+    [term],
+  );
+
+  if (!rows.length) {
+    const fallback = await lookupByTitle(topic, true);
+    if (fallback.length) {
+      const hub = fallback[0];
+      const body = extractPageBody(hub.content, 1500);
+      const riskLines = (body || "")
+        .split(/\n/)
+        .filter((line) => /risk|concern|challenge|limitation|mitigation|blocker/i.test(line))
+        .slice(0, 12);
+      if (riskLines.length) {
+        return [
+          `## Risks / concerns — **${hub.title || topic}**`,
+          "",
+          riskLines.map((l) => `- ${l.trim()}`).join("\n"),
+          hub.url ? `\n${formatLink("Open in Notion", hub.url)}` : "",
+        ].join("\n");
+      }
+    }
+    return null;
+  }
+
+  const lines: string[] = [
+    `## Risks / concerns mentioned for **${topic}**`,
+    "",
+    `_${rows.length} synced page(s) mention risks or concerns._`,
+    "",
+  ];
+
+  for (const row of rows.slice(0, 8)) {
+    const snippet = contentSnippet(row.content, 500);
+    const riskSnippet = snippet
+      .split(/(?<=[.!?])\s+/)
+      .filter((s) => /risk|concern|challenge|limitation|mitigation|blocker/i.test(s))
+      .slice(0, 2)
+      .join(" ");
+    lines.push(
+      `- **${formatLink(row.title || "Untitled", row.url)}**${row.status ? ` — ${row.status}` : ""}${riskSnippet ? `\n  ${riskSnippet}` : snippet ? `\n  ${snippet}` : ""}`,
+    );
+  }
+
+  return lines.join("\n");
+}
+
+async function buildOnboardingTasksAnswer() {
+  const rows = await query<NotionPageRow & { content: string | null }>(
+    `
+    SELECT id, title, url, owner, status, content
+    FROM notion_pages
+    WHERE
+      lower(coalesce(title, '')) LIKE '%onboarding%task%'
+      OR lower(coalesce(title, '')) = lower('employee onboarding hub')
+      OR (
+        lower(coalesce(title, '')) LIKE '%employee onboarding%'
+        AND lower(coalesce(content, '')) LIKE '%onboarding tasks%'
+      )
+    ORDER BY
+      CASE WHEN lower(coalesce(title, '')) LIKE '%onboarding%task%' THEN 0 ELSE 1 END,
+      title ASC
+    LIMIT ${SQL_RESULT_LIMIT}
+    `,
+  );
+
+  const hub =
+    rows.find((r) => /employee onboarding hub/i.test(r.title || "")) ??
+    (await lookupByTitle("Employee Onboarding Hub", true))[0];
+
+  const taskPages = rows.filter((r) => /onboarding task/i.test(r.title || ""));
+
+  const checklistFromHub = hub
+    ? (extractPageBody(hub.content, 2000) || "")
+        .split(/\n/)
+        .filter((line) => /^[-*•\d]/.test(line.trim()) || /task|training|document|intro|submit/i.test(line))
+        .slice(0, 20)
+    : [];
+
+  const lines: string[] = [
+    "## Onboarding tasks for new hires",
+    "",
+    "_From synced **Employee Onboarding Hub** and related Notion pages._",
+    "",
+    "**Standard flow:**",
+    "1. PnC adds the new hire to the **Onboarding Tracker**",
+    "2. Tasks are created from the standard checklist",
+    "3. New hire completes training, document submissions, and team intros",
+    "4. Progress rolls up in the Onboarding Tracker; manager is notified when complete",
+    "",
+  ];
+
+  if (checklistFromHub.length) {
+    lines.push("**Checklist items from hub:**");
+    for (const line of checklistFromHub.slice(0, 14)) {
+      lines.push(`- ${line.replace(/^[-*•\d.]+\s*/, "").trim()}`);
+    }
+    lines.push("");
+  }
+
+  if (taskPages.length) {
+    lines.push(`**${taskPages.length} task page(s) in Notion:**`);
+    for (const row of taskPages.slice(0, 12)) {
+      lines.push(
+        `- **${formatLink(row.title || "Untitled", row.url)}**${row.status ? ` — ${row.status}` : ""}`,
+      );
+    }
+  } else if (hub) {
+    lines.push(`**Hub:** ${formatLink(hub.title || "Employee Onboarding Hub", hub.url)}`);
+    lines.push("", "_Open the hub for **Onboarding Tasks** and **Onboarding Tracker** databases._");
+  } else {
+    return null;
+  }
+
+  if (hub?.url) {
+    lines.push("", formatLink("Open Employee Onboarding Hub in Notion", hub.url));
+  }
+
+  return lines.join("\n");
 }
 
 function collectProjectThemes(rows: Array<{ title?: string | null; content?: string | null }>) {
@@ -244,6 +585,52 @@ async function lookupProjectStatusPages(topic: string) {
   );
 }
 
+const TITLE_STOP_WORDS = new Set([
+  "for",
+  "the",
+  "and",
+  "with",
+  "from",
+  "about",
+  "page",
+  "doc",
+  "document",
+  "proposal",
+]);
+
+function titleMatchScore(rowTitle: string, queryTitle: string) {
+  const row = (rowTitle || "").toLowerCase().trim();
+  const query = queryTitle.toLowerCase().trim();
+  if (!row || !query) return 0;
+  if (row === query) return 1000;
+  if (row.includes(query)) return 800 + query.length;
+  if (query.includes(row) && row.length >= 12) return 600 + row.length;
+
+  const tokens = query
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 4 && !TITLE_STOP_WORDS.has(t));
+
+  if (!tokens.length) return 0;
+
+  let matched = 0;
+  for (const token of tokens) {
+    if (row.includes(token)) matched += 1;
+  }
+
+  const required = tokens.length <= 2 ? tokens.length : Math.max(2, Math.ceil(tokens.length * 0.5));
+  if (matched < required) return matched * 10;
+  return 200 + matched * 80 + Math.min(row.length, query.length);
+}
+
+function pageNotSyncedMessage(docTitle: string) {
+  return (
+    `I couldn't find **${docTitle}** in the synced Notion database.\n\n` +
+    `Use **Sync changes** in the sidebar (or a full sync if the page is new), then ask again with the full page title.`
+  );
+}
+
 async function lookupByTitle(title: string, includeContent = false) {
   const term = `%${escapeLike(title)}%`;
   const columns = includeContent
@@ -261,22 +648,28 @@ async function lookupByTitle(title: string, includeContent = false) {
   );
   if (exact.length === 1) return exact;
 
-  return query<NotionPageRow>(
+  const candidates = await query<NotionPageRow>(
     `
     SELECT ${columns}
     FROM notion_pages
     WHERE
       lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
       OR to_tsvector('english', coalesce(title, '')) @@ plainto_tsquery('english', $2)
-    ORDER BY
-      CASE WHEN lower(coalesce(title, '')) = lower($2) THEN 0 ELSE 1 END,
-      length(coalesce(title, '')) ASC,
-      ts_rank(to_tsvector('english', coalesce(title, '')), plainto_tsquery('english', $2)) DESC,
-      title ASC
     LIMIT ${SQL_RESULT_LIMIT}
     `,
     [term, title],
   );
+
+  if (!candidates.length) return [];
+
+  const ranked = candidates
+    .map((row) => ({ row, score: titleMatchScore(row.title || "", title) }))
+    .filter((item) => item.score >= 200)
+    .sort((a, b) => b.score - a.score);
+
+  if (!ranked.length) return [];
+  if (ranked[0].score >= 800) return [ranked[0].row];
+  return ranked.map((item) => item.row);
 }
 
 export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string | null> {
@@ -708,15 +1101,32 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     ].join("\n");
   }
 
+  if (parsed.kind === "project_summary" && docTitle) {
+    return buildProjectSummary(docTitle);
+  }
+
+  if (parsed.kind === "compare_pages" && docTitle && parsed.compareTitleB) {
+    return buildComparePages(docTitle, parsed.compareTitleB);
+  }
+
+  if (parsed.kind === "risks_for" && docTitle) {
+    return buildRisksAnswer(docTitle);
+  }
+
+  if (parsed.kind === "onboarding_tasks") {
+    return buildOnboardingTasksAnswer();
+  }
+
   if (parsed.kind === "page_about" && docTitle) {
     const rows = await lookupByTitle(docTitle, true);
-    if (!rows.length) return null;
+    if (!rows.length) return pageNotSyncedMessage(docTitle);
 
     if (rows.length === 1) {
       const row = rows[0];
       const body = extractPageBody(row.content);
+      const { name: ownerName, label: ownerLabel } = resolvePageOwner(row);
       const meta = [
-        row.owner ? `Owner: ${row.owner}` : "",
+        ownerName ? `${ownerLabel}: ${ownerName}` : "",
         row.status ? `Status: ${row.status}` : "",
         row.doc_type ? `Type: ${row.doc_type}` : "",
       ]
@@ -764,14 +1174,21 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     if (!rows.length) return null;
     if (rows.length === 1) {
       const row = rows[0];
-      return `**Owner of "${row.title || docTitle}":** ${row.owner || "Unknown"}${
+      const { name, label } = resolvePageOwner(row);
+      const note =
+        label === "Created by" && !row.owner?.trim()
+          ? " _(No Owner property on this page in Notion.)_"
+          : "";
+      return `**${label} of "${row.title || docTitle}":** ${name || "Unknown"}${note}${
         row.url ? `\n\n${formatLink("Open in Notion", row.url)}` : ""
       }`;
     }
     return `### ${rows.length} matching docs for "${docTitle}"\n\n${formatRows(
       rows,
-      (row) =>
-        `**${formatLink(row.title || "Untitled", row.url)}** — Owner: **${row.owner || "Unknown"}**`,
+      (row) => {
+        const { name, label } = resolvePageOwner(row);
+        return `**${formatLink(row.title || "Untitled", row.url)}** — ${label}: **${name || "Unknown"}**`;
+      },
     )}`;
   }
 
@@ -882,7 +1299,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     const year = parsed.year;
     const yearStart = year ? `${year}-01-01` : null;
     const yearEnd = year ? `${year + 1}-01-01` : null;
-    const workingOnQuery = /\bworking\s+on\b/i.test(parsed.raw);
+    const workingOnQuery = /\bworking\s+on\b|\bworking\s+currently\b/i.test(parsed.raw);
     const projectNameQuery = wantsProjectNameAnswer(parsed.raw);
 
     type ActivityRow = NotionPageRow & {
@@ -1077,8 +1494,13 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     const yearRows = year
       ? rows.filter((row) => row.notion_edited_at?.startsWith(String(year)))
       : rows;
-    const projectTheme = inferProjectTheme(activeRows.length ? activeRows : rows);
-    const hubPage = projectTheme ? await lookupProjectHubPage(projectTheme) : null;
+    const ownerRows = rows.filter((row) => row.activity_role === "owner");
+    const themeSource = ownerRows.length ? ownerRows : rows.slice(0, 10);
+    const projectTheme = inferProjectTheme(themeSource);
+    const hubPage =
+      projectTheme && collectProjectThemes(themeSource).filter((t) => t === projectTheme).length >= 2
+        ? await lookupProjectHubPage(projectTheme)
+        : null;
 
     if (projectNameQuery) {
       const yearActive = yearRows.filter((row) => isActiveStatus(row.status));
@@ -1167,23 +1589,41 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         return lines.join("\n");
       }
 
-      // No year — use all-time active work
-      const displayRows = (workingOnQuery && activeRows.length ? activeRows : rows).slice(0, 4);
-      const hubLine = hubPage
-        ? formatLink(hubPage.title || projectTheme || "Project", hubPage.url)
-        : projectTheme
-          ? `**${projectTheme}**`
-          : null;
+      // No year — use owner pages; do not invent a hub from mention-only rows
+      const ownerActive = (workingOnQuery && activeRows.length ? activeRows : rows).filter(
+        (row) => row.activity_role === "owner",
+      );
+      const displayRows = (ownerActive.length ? ownerActive : ownerRows.length ? ownerRows : rows).slice(
+        0,
+        4,
+      );
+      const focusRow = displayRows[0];
+      const themes = collectProjectThemes(themeSource);
 
-      if (hubLine && projectTheme) {
-        lines.push(`**${person}** is working on **${projectTheme}** (${hubLine}).`);
-      } else if (projectTheme) {
-        lines.push(`**${person}** is working on **${projectTheme}**.`);
-      } else if (!activeRows.length) {
+      if (focusRow) {
+        const focusMeta = [
+          focusRow.status ? focusRow.status : "",
+          focusRow.notion_edited_at
+            ? `last edited ${new Date(focusRow.notion_edited_at).toLocaleDateString()}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        lines.push(
+          `**${person}** — strongest focus in synced Notion: **${formatLink(focusRow.title || "Untitled", focusRow.url)}**${focusMeta ? ` (${focusMeta})` : ""}.`,
+        );
+        if (themes.length > 1) {
+          lines.push(`_Also associated with: ${themes.slice(0, 4).join(", ")}._`);
+        } else if (hubPage && projectTheme) {
+          lines.push(
+            `_Broader area: **${projectTheme}** — ${formatLink(hubPage.title || projectTheme, hubPage.url)}._`,
+          );
+        }
+      } else if (!activeRows.length && !ownerRows.length) {
         lines.push(`**${person}** has **no active project assigned** in synced Notion data.`);
         return lines.join("\n");
       } else {
-        lines.push(`**${person}** — project name could not be inferred from task titles.`);
+        lines.push(`**${person}** — see owned/assigned pages below (no single hub page inferred).`);
       }
 
       if (displayRows.length) {

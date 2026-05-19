@@ -97,6 +97,57 @@ const CASES: Array<{
     expectKind: "owner_list",
     mustInclude: ["Souvik", "Oscar"],
   },
+  {
+    question: "summarize datapivot ai project",
+    expectKind: "project_summary",
+    mustInclude: ["DataPivot", "Nagaada"],
+  },
+  {
+    question: "give me an overview of Oscar project",
+    expectKind: "project_summary",
+    mustInclude: ["Oscar"],
+  },
+  {
+    question: "provide summry of - Team Learning & Session Report – 02 May",
+    expectKind: "page_about",
+    mustInclude: ["Managing Dependencies", "Sakshi"],
+  },
+  {
+    question: "owner of Team Learning & Session Report – 02 May",
+    expectKind: "owner_of",
+    mustInclude: ["Sakshi"],
+  },
+  {
+    question:
+      "summerrize - Proposal for Samyarth Developer Profit-Sharing & Mentorship Model",
+    expectKind: "page_about",
+    mustInclude: ["synced", "Samyarth"],
+  },
+  {
+    question: "Which project is Tamanna mostly active in?",
+    expectKind: "activity_summary",
+    mustInclude: ["Tamanna", "Report"],
+  },
+  {
+    question: "which project komal is working currently",
+    expectKind: "activity_summary",
+    mustInclude: ["komal", "Reflection"],
+  },
+  {
+    question: "Compare Oscar MVP and Oscar App — what's the difference in scope?",
+    expectKind: "compare_pages",
+    mustInclude: ["Oscar MVP", "Oscar App"],
+  },
+  {
+    question: "What are the main risks mentioned for the Oscar mobile app?",
+    expectKind: "risks_for",
+    mustInclude: ["Oscar"],
+  },
+  {
+    question: "What onboarding tasks does a new hire need to complete?",
+    expectKind: "onboarding_tasks",
+    mustInclude: ["Onboarding"],
+  },
 ];
 
 async function main() {

@@ -109,6 +109,19 @@ export async function POST(req: NextRequest) {
       console.log("[chat] parsed_query=", { rules: parsedByRules, final: parsed });
     }
 
+    const structuredKinds = new Set([
+      "page_about",
+      "project_summary",
+      "compare_pages",
+      "risks_for",
+      "onboarding_tasks",
+      "owner_of",
+      "created_by_of",
+      "assigned_to_of",
+      "type_of",
+      "status_of",
+    ]);
+
     if (parsed.kind !== "semantic") {
       const directAnswer = await handleMetadataQuery(parsed);
       if (directAnswer) {
@@ -121,6 +134,13 @@ export async function POST(req: NextRequest) {
           await addChatMessage(ownedSessionId, "bot", directAnswer);
         }
         return NextResponse.json({ answer: directAnswer });
+      }
+      if (structuredKinds.has(parsed.kind) && parsed.docTitle?.trim()) {
+        const notSynced = `I couldn't find **${parsed.docTitle.trim()}** in the synced Notion database. Use **Sync changes** in the sidebar, then try again.`;
+        if (ownedSessionId) {
+          await addChatMessage(ownedSessionId, "bot", notSynced);
+        }
+        return NextResponse.json({ answer: notSynced });
       }
       if (process.env.NODE_ENV !== "production") {
         console.log(`[chat] mode=${parsed.kind} search=sql_empty fallback=semantic`);

@@ -18,6 +18,7 @@ const ALLOWED_KINDS = new Set<QueryKind>([
   "status_of",
   "activity_summary",
   "page_about",
+  "project_summary",
   "semantic",
 ]);
 
@@ -38,6 +39,7 @@ const INTENTS_REQUIRING_TITLE = new Set<QueryKind>([
   "type_of",
   "status_of",
   "page_about",
+  "project_summary",
 ]);
 
 type AiQueryIntent = {
