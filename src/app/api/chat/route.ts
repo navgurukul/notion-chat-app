@@ -8,8 +8,7 @@ import {
   resolveSemanticSearchQuery,
   sanitizeChatHistory,
 } from "@/lib/chat";
-import { parseQuery } from "@/lib/query-router";
-import { verifyQueryWithAI } from "@/lib/query-verifier";
+import { resolveQuery } from "@/lib/query/resolve-query";
 import { handleMetadataQuery, lookupPageLinkByTitle } from "@/lib/metadata-search";
 import { buildNotionContextForChat } from "@/lib/notion-context";
 import { addChatMessage, ensureSessionBelongsToUser, getOrCreateUser } from "@/lib/chat-store";
@@ -102,11 +101,45 @@ export async function POST(req: NextRequest) {
     }
 
     const chatHistory = sanitizeChatHistory(history);
-    const parsedByRules = parseQuery(trimmedMessage);
-    const parsed = await verifyQueryWithAI(trimmedMessage, parsedByRules);
+
+    if (isNotionLinkRequest(trimmedMessage)) {
+      const linkTitle = extractReferencedTitle(trimmedMessage, chatHistory);
+      if (linkTitle) {
+        const linkAnswer = await lookupPageLinkByTitle(linkTitle);
+        if (linkAnswer) {
+          if (ownedSessionId) {
+            await addChatMessage(ownedSessionId, "bot", linkAnswer);
+          }
+          return NextResponse.json({ answer: linkAnswer });
+        }
+        const notFound = `I couldn't find a synced Notion page titled **${linkTitle}**. Use **Sync changes**, or ask with the exact page title from Notion.`;
+        if (ownedSessionId) {
+          await addChatMessage(ownedSessionId, "bot", notFound);
+        }
+        return NextResponse.json({ answer: notFound });
+      }
+      if (/\b(it|this|that)\b/i.test(trimmedMessage)) {
+        const unresolved =
+          chatHistory.length > 0
+            ? "I couldn't resolve which page you mean from chat history. Ask again with the full page title, e.g. link for **Structuring the Product Team**."
+            : "I couldn't resolve which page you mean — include the page title, or ask about a page first so chat history has context.";
+        if (ownedSessionId) {
+          await addChatMessage(ownedSessionId, "bot", unresolved);
+        }
+        return NextResponse.json({ answer: unresolved });
+      }
+    }
+
+    const parsed = await resolveQuery(trimmedMessage);
 
     if (process.env.NODE_ENV !== "production") {
-      console.log("[chat] parsed_query=", { rules: parsedByRules, final: parsed });
+      console.log("[chat] parsed_query=", {
+        kind: parsed.kind,
+        confidence: parsed.confidence,
+        source: parsed.source,
+        personName: parsed.personName,
+        docTitle: parsed.docTitle,
+      });
     }
 
     const structuredKinds = new Set([
@@ -147,18 +180,19 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const linkTitle = extractReferencedTitle(trimmedMessage, chatHistory);
-    if (isNotionLinkRequest(trimmedMessage) && linkTitle) {
-      const linkAnswer = await lookupPageLinkByTitle(linkTitle);
-      if (linkAnswer) {
-        if (ownedSessionId) {
-          await addChatMessage(ownedSessionId, "bot", linkAnswer);
-        }
-        return NextResponse.json({ answer: linkAnswer });
+    if (isNotionLinkRequest(trimmedMessage)) {
+      const needTitle =
+        "Ask for a Notion link using the page title, e.g. **link for Employee Onboarding Hub**.";
+      if (ownedSessionId) {
+        await addChatMessage(ownedSessionId, "bot", needTitle);
       }
+      return NextResponse.json({ answer: needTitle });
     }
 
-    const searchQuery = resolveSemanticSearchQuery(trimmedMessage, chatHistory);
+    let searchQuery = resolveSemanticSearchQuery(trimmedMessage, chatHistory);
+    if (parsed.kind === "semantic" && parsed.docTitle?.trim()) {
+      searchQuery = `${parsed.docTitle.trim()} ${searchQuery}`;
+    }
     const notionContext = await buildNotionContextForChat(searchQuery);
 
     if (!notionContext.trim()) {

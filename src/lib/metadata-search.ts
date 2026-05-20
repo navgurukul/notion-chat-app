@@ -1,18 +1,7 @@
 import { query } from "@/lib/postgres";
-import { isNoiseTopic, type ParsedQuery } from "@/lib/query-router";
-
-type NotionPageRow = {
-  id: string;
-  title: string | null;
-  url: string | null;
-  owner: string | null;
-  created_by: string | null;
-  last_edited_by: string | null;
-  doc_type: string | null;
-  status: string | null;
-  content?: string | null;
-  match_source?: string | null;
-};
+import type { ActivityRow, NotionPageRow, WorkedOnRow } from "@/lib/notion-types";
+import { isNoiseTopic } from "@/lib/query-router";
+import type { ParsedQuery } from "@/lib/query/types";
 
 const SQL_RESULT_LIMIT = 20;
 const HISTORICAL_PROJECT_LIMIT = 50;
@@ -68,35 +57,13 @@ function escapeLike(value: string) {
   return value.replace(/[%_]/g, "\\$&");
 }
 
-/** Direct Notion URL lookup by page title (exact, then partial). */
+/** Direct Notion URL lookup by page title (exact, then ranked partial). */
 export async function lookupPageLinkByTitle(docTitle: string): Promise<string | null> {
   const trimmed = docTitle.trim();
   if (trimmed.length < 2) return null;
 
-  const exact = await query<NotionPageRow>(
-    `
-    SELECT id, title, url
-    FROM notion_pages
-    WHERE lower(coalesce(title, '')) = lower($1)
-    LIMIT 1
-    `,
-    [trimmed],
-  );
-  const row =
-    exact[0] ??
-    (
-      await query<NotionPageRow>(
-        `
-        SELECT id, title, url
-        FROM notion_pages
-        WHERE lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
-        ORDER BY length(coalesce(title, '')) ASC, title ASC
-        LIMIT 1
-        `,
-        [`%${escapeLike(trimmed)}%`],
-      )
-    )[0];
-
+  const ranked = await lookupByTitle(trimmed, false);
+  const row = ranked[0];
   if (!row) return null;
   if (!row.url) {
     return `Found **${row.title || "Untitled"}**, but no Notion URL is stored for it.`;
@@ -778,6 +745,20 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
     const normalizedTopic = docTitle ? normalizeTopic(docTitle) : "";
     const topicTerm = normalizedTopic ? `%${escapeLike(normalizedTopic)}%` : null;
+    const assigneeInContentSql = `
+      (
+        (
+          lower(coalesce(content, '')) LIKE '%assignee:%'
+          OR lower(coalesce(content, '')) LIKE '%assign:%'
+          OR lower(coalesce(content, '')) LIKE '%assigned:%'
+          OR lower(coalesce(content, '')) LIKE '%captain:%'
+        )
+        AND (
+          lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
+          OR regexp_replace(lower(coalesce(content, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+        )
+      )
+    `;
     const rows = await query<NotionPageRow>(
       `
       SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
@@ -786,18 +767,29 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         (
           lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
           OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+          OR ${assigneeInContentSql}
         )
         AND (
           $3::text IS NULL
           OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
           OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
         )
-      ORDER BY title ASC
+      ORDER BY
+        CASE
+          WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\' THEN 0
+          ELSE 1
+        END,
+        title ASC
       LIMIT ${SQL_RESULT_LIMIT}
       `,
       [personTerm, fuzzyPersonTerm, topicTerm],
     );
-    if (!rows.length) return null;
+    if (!rows.length) {
+      return (
+        `No tasks or pages with **${person}** as owner or assignee in synced Notion.\n\n` +
+        `_Check the exact name spelling in Notion (e.g. full name) or use **Sync changes** if assignments were updated recently._`
+      );
+    }
     return `${formatListHeader(rows.length, `assigned to ${person}${docTitle ? ` and matching "${docTitle}"` : ""}`)}\n\n${formatRows(
       rows,
       (row) => {
@@ -854,7 +846,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     `
       : personFieldMatchSql;
 
-    const rows = await query<NotionPageRow & { notion_edited_at?: string | null }>(
+    const rows = await query<WorkedOnRow>(
       `
       SELECT
         id,
@@ -945,7 +937,12 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
 
     if (exactRows.length) {
       const row = exactRows[0];
-      if (row.owner?.trim()) return row.owner.trim();
+      const ownerName = row.owner?.trim();
+      if (ownerName) {
+        return row.url
+          ? `${ownerName}\n\n${formatLink(row.title || docTitle, row.url)}`
+          : ownerName;
+      }
       return null;
     }
 
@@ -1301,14 +1298,6 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     const yearEnd = year ? `${year + 1}-01-01` : null;
     const workingOnQuery = /\bworking\s+on\b|\bworking\s+currently\b/i.test(parsed.raw);
     const projectNameQuery = wantsProjectNameAnswer(parsed.raw);
-
-    type ActivityRow = NotionPageRow & {
-      notion_edited_at: string | null;
-      activity_role: string | null;
-      role_rank: number;
-      status_rank: number;
-      content?: string | null;
-    };
 
     const personPropertyInContentSql = `
       (

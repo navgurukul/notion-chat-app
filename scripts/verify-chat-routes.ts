@@ -3,7 +3,7 @@
  * Run: npm run verify:chat-routes
  */
 import "dotenv/config";
-import { parseQuery } from "../src/lib/query-router";
+import { resolveQueryRulesOnly } from "../src/lib/query/resolve-query";
 import { handleMetadataQuery } from "../src/lib/metadata-search";
 import { prefetchPagesFromQuestion } from "../src/lib/notion-context";
 
@@ -148,13 +148,21 @@ const CASES: Array<{
     expectKind: "onboarding_tasks",
     mustInclude: ["Onboarding"],
   },
+  {
+    question: "Summarize the main themes across all Zuvy-related docs",
+    expectKind: "semantic",
+  },
+  {
+    question: "Why did we choose this architecture for the payments module?",
+    expectKind: "semantic",
+  },
 ];
 
 async function main() {
   let failed = 0;
 
   for (const test of CASES) {
-    const parsed = parseQuery(test.question);
+    const parsed = resolveQueryRulesOnly(test.question);
     const sql = await handleMetadataQuery(parsed);
     const prefetch = await prefetchPagesFromQuestion(test.question);
 
@@ -164,7 +172,9 @@ async function main() {
       !test.mustInclude ||
       test.mustInclude.some((s) => answer.toLowerCase().includes(s.toLowerCase()));
 
-    const ok = kindOk && (sql ? includesOk : prefetch.length > 0);
+    const semanticOk = test.expectKind === "semantic" && kindOk && prefetch.length > 0;
+    const ok =
+      semanticOk || (kindOk && (sql ? includesOk : prefetch.length > 0));
     if (!ok) failed += 1;
 
     console.log(ok ? "PASS" : "FAIL", "—", test.question);

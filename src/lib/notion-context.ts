@@ -1,4 +1,5 @@
 import { query } from "@/lib/postgres";
+import { extractCrossDocSummaryTopic } from "@/lib/query/normalize";
 import { simplifySearchQuery } from "@/lib/search-query";
 import { semanticSearch } from "@/lib/vector-search";
 
@@ -84,6 +85,28 @@ export function extractQuestionTerms(question: string) {
   );
   if (aboutMatch?.[1]) phrases.push(aboutMatch[1].trim());
 
+  const crossDocTopic = extractCrossDocSummaryTopic(question);
+  if (crossDocTopic) phrases.unshift(crossDocTopic);
+
+  const moduleMatch = question.match(
+    /\b(?:for\s+)?(?:the\s+)?([a-zA-Z][\w\s'-]{2,40}?)\s+module\b/i,
+  );
+  if (moduleMatch?.[1]) {
+    const phrase = moduleMatch[1].replace(/^(?:this|that)\s+/i, "").trim();
+    if (phrase.length >= 3) {
+      phrases.push(phrase);
+      phrases.push(`${phrase} module`);
+    }
+  }
+
+  const paymentsMatch = question.match(/\bpayments?\b/i);
+  if (paymentsMatch) phrases.push("payment", "payments", "PRD");
+
+  const whyTopicMatch = question.match(
+    /\b(?:why|how)\b.+\b(?:for|in|on)\s+(?:the\s+)?([a-zA-Z][\w\s'-]{2,40})\b/i,
+  );
+  if (whyTopicMatch?.[1]) phrases.push(whyTopicMatch[1].trim());
+
   return Array.from(new Set([...phrases, ...tokens])).slice(0, 8);
 }
 
@@ -132,19 +155,21 @@ export async function prefetchPagesFromQuestion(question: string): Promise<strin
     const primaryTerm = terms[0].toLowerCase();
     const likeRows = await query<PageRow>(
       `
-      SELECT id, title, url, owner, created_by, status, doc_type, content, 10 AS rank
+      SELECT id, title, url, owner, created_by, status, doc_type, content,
+        (
+          CASE WHEN lower(coalesce(title, '')) = $2 THEN 100 ELSE 0 END +
+          CASE WHEN lower(coalesce(title, '')) LIKE $3 ESCAPE '\\' THEN 50 ELSE 0 END +
+          (
+            SELECT count(*)::int FROM unnest($1::text[]) AS pat(p)
+            WHERE lower(coalesce(title, '')) LIKE pat.p
+               OR lower(coalesce(content, '')) LIKE pat.p
+          ) * 8
+        ) AS rank
       FROM notion_pages
       WHERE
         lower(coalesce(title, '')) LIKE ANY($1::text[])
         OR lower(coalesce(content, '')) LIKE ANY($1::text[])
-        OR lower(coalesce(owner, '')) LIKE ANY($1::text[])
-        OR lower(coalesce(created_by, '')) LIKE ANY($1::text[])
-      ORDER BY
-        CASE WHEN lower(coalesce(title, '')) = $2 THEN 0
-             WHEN lower(coalesce(title, '')) LIKE $3 ESCAPE '\\' THEN 1
-             ELSE 2 END,
-        length(coalesce(title, '')) ASC,
-        title ASC
+      ORDER BY rank DESC, length(coalesce(title, '')) ASC, title ASC
       LIMIT $4
       `,
       [likePatterns, primaryTerm, `%${escapeLike(primaryTerm)}%`, PREFETCH_LIMIT],

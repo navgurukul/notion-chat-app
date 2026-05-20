@@ -50,9 +50,14 @@ const SKIP_BRACKET_TITLE =
 const PAGE_QUESTION_PREFIX =
   /^(?:what is|what's|what are|tell me about|can you tell me about|summarize|summary of|explain|describe|structuring)\b/i;
 
+/** Short factual questions — not a page title for "link for it". */
+const SKIP_USER_TURN_FOR_LINK =
+  /^(?:who|which)\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm|owner|assigned)\b/i;
+
 function titleFromUserTurn(content: string) {
   const line = content.split("\n")[0]?.trim() ?? "";
   if (line.length < 8 || isNotionLinkRequest(line)) return null;
+  if (SKIP_USER_TURN_FOR_LINK.test(line)) return null;
 
   if (PAGE_QUESTION_PREFIX.test(line) || /[—–-]/.test(line)) {
     const head = line

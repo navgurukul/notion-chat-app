@@ -1,45 +1,17 @@
-export type QueryKind =
-  | "owner_list"
-  | "owner_of"
-  | "created_by_list"
-  | "created_by_of"
-  | "assigned_list"
-  | "assigned_to_of"
-  | "worked_on_list"
-  | "project_manager_of"
-  | "topic_list"
-  | "type_of"
-  | "status_of"
-  | "activity_summary"
-  | "team_activity"
-  | "blocker_list"
-  | "project_eta"
-  | "page_about"
-  | "project_summary"
-  | "compare_pages"
-  | "risks_for"
-  | "onboarding_tasks"
-  | "semantic";
+export type { ParsedQuery, QueryKind, QuerySource } from "@/lib/query/types";
 
-export type ParsedQuery = {
-  kind: QueryKind;
-  personName?: string;
-  docTitle?: string;
-  /** Second page title for compare_pages */
-  compareTitleB?: string;
-  /** Calendar year from phrases like "in 2026" */
-  year?: number;
-  raw: string;
-};
+import {
+  extractCrossDocSummaryTopic,
+  extractYearFromQuestion,
+  isCrossDocSummaryQuestion,
+  looksLikeSinglePageTitle,
+} from "@/lib/query/normalize";
 
-export function extractYearFromQuestion(question: string): number | undefined {
-  const match = question.match(/\b(20\d{2})\b/);
-  if (!match?.[1]) return undefined;
-  const year = Number.parseInt(match[1], 10);
-  return year >= 2020 && year <= 2099 ? year : undefined;
-}
+export { extractCrossDocSummaryTopic, extractYearFromQuestion, isCrossDocSummaryQuestion };
 
-function withYear(question: string, partial: Omit<ParsedQuery, "raw" | "year">): ParsedQuery {
+type RulesQuery = Omit<import("@/lib/query/types").ParsedQuery, "confidence" | "source">;
+
+function withYear(question: string, partial: Omit<RulesQuery, "raw" | "year">): RulesQuery {
   const year = extractYearFromQuestion(question);
   return { ...partial, year, raw: question };
 }
@@ -115,7 +87,7 @@ function extractPageTitle(text: string, patterns: RegExp[]): string | null {
 }
 
 /** Activity / recency questions — must run before the broad worked_on_list gate. */
-function parseActivityQuery(question: string, q: string): ParsedQuery | null {
+function parseActivityQuery(question: string, q: string): RulesQuery | null {
   const projectWorkedInYearMatch =
     question.match(
       /\b(?:all\s+(?:the\s+)?)?projects?\s+(.+?)\s+(?:has|have)\s+worked(?:\s+on)?(?:\s+in\s+(20\d{2}))?/i,
@@ -311,7 +283,8 @@ export function extractCompareTitles(question: string): { a: string; b: string }
   return { a, b };
 }
 
-export function parseQuery(question: string): ParsedQuery {
+/** Rule-based intent parse (legacy). Prefer {@link resolveQuery} in the chat API. */
+export function parseQueryByRules(question: string): RulesQuery {
   const qn = preprocessQuestion(question);
   const q = normalize(qn);
 
@@ -320,6 +293,16 @@ export function parseQuery(question: string): ParsedQuery {
       /who\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm|owner)\s+(?:of|for|on)\s+(.+?)(?:\?|$)/i,
     ]);
     return { kind: "project_manager_of", docTitle: docTitle ?? undefined, raw: question };
+  }
+
+  const tasksAssignedToMatch = question.match(
+    /\b(?:which|what)\s+tasks?\s+assigned\s+to\s+(.+?)(?:\?|$)/i,
+  );
+  if (tasksAssignedToMatch?.[1]) {
+    const person = cleanPersonName(tasksAssignedToMatch[1]);
+    if (person) {
+      return { kind: "assigned_list", personName: person, raw: question };
+    }
   }
 
   // "Who is assigned to ReportList?" — before broad assigned_list patterns
@@ -594,6 +577,11 @@ export function parseQuery(question: string): ParsedQuery {
     return { kind: "project_summary", docTitle: projectSummaryTopic, raw: question };
   }
 
+  if (isCrossDocSummaryQuestion(question)) {
+    const topic = extractCrossDocSummaryTopic(question);
+    return { kind: "semantic", docTitle: topic, raw: question };
+  }
+
   // summarize / purpose of a page (single doc, not a program)
   if (
     /\b(summarize|summar(?:y|ize|ry)|summary\s+of|provide\s+(?:a\s+)?summar|give\s+(?:me\s+)?(?:a\s+)?summar)\b/i.test(q) ||
@@ -609,7 +597,7 @@ export function parseQuery(question: string): ParsedQuery {
       /(?:what is|what's)\s+(?:the\s+)?(.+?)\s+for(?:\?|$)/i,
       /what'?s\s+happening\s+(?:with|on|in)?\s*(?:the\s+)?(.+?)(?:\?|$)/i,
     ]);
-    if (docTitle) {
+    if (docTitle && looksLikeSinglePageTitle(docTitle)) {
       return { kind: "page_about", docTitle, raw: question };
     }
   }
@@ -631,7 +619,12 @@ export function parseQuery(question: string): ParsedQuery {
       /(?:what is|what's|what are)\s+(?:the\s+)?(.+?)(?:\?|$)/i,
       /(?:describe|explain)\s+(?:the\s+)?(.+?)(?:\?|$)/i,
     ]);
-    if (docTitle && docTitle.length >= 4 && !/\b(status|type|kind)\s+of\b/i.test(q)) {
+    if (
+      docTitle &&
+      docTitle.length >= 4 &&
+      looksLikeSinglePageTitle(docTitle) &&
+      !/\b(status|type|kind)\s+of\b/i.test(q)
+    ) {
       return { kind: "page_about", docTitle, raw: question };
     }
   }
@@ -692,3 +685,6 @@ export function extractProjectSummaryTopic(question: string) {
   }
   return null;
 }
+
+/** @deprecated Prefer {@link resolveQuery} from `@/lib/query/resolve-query`. */
+export { parseQueryByRules as parseQuery };

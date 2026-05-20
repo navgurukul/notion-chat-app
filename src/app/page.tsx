@@ -119,14 +119,20 @@ function finalizeStreamAnswer(rawBuffer: string, answerText: string, thinkingTex
   return dedupeRepeatedAnswer(result);
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export default function ChatPage() {
   const LAST_SYNC_STORAGE_KEY = "notion_last_synced_at";
+  const LAST_CHAT_SESSION_KEY = "notion_active_chat_session";
   const { data: session, status } = useSession();
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isLoadingChats, setIsLoadingChats] = useState(false);
+  const [chatsReady, setChatsReady] = useState(false);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [thinkingByMessage, setThinkingByMessage] = useState<ThinkingByMessage>({});
@@ -142,6 +148,14 @@ export default function ChatPage() {
   const botMessageIndexRef = useRef<number | null>(null);
   /** Index of the next bot bubble; set when the user message is appended (setState updaters run later). */
   const pendingBotMessageIndexRef = useRef<number | null>(null);
+  /** Prevents session message reload from wiping in-flight user/bot bubbles. */
+  const chatInFlightRef = useRef(false);
+  const messagesLoadGenerationRef = useRef(0);
+  const activeSessionIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -183,27 +197,76 @@ export default function ChatPage() {
         }
 
         setChatSessions(sessions);
-        setActiveSessionId(sessions[0]?.id ?? null);
+        const storedSessionId = localStorage.getItem(LAST_CHAT_SESSION_KEY);
+        const restored = storedSessionId
+          ? sessions.find((s) => s.id === storedSessionId)
+          : undefined;
+        setActiveSessionId(restored?.id ?? sessions[0]?.id ?? null);
       } catch (error) {
         console.error("Failed to load initial chat data:", error);
       } finally {
         setIsLoadingChats(false);
+        setChatsReady(true);
       }
     };
 
     loadInitialData();
   }, [status]);
 
+  const syncMessagesFromSession = async (
+    sessionId: string,
+    options?: { keepLocalBotIndex?: number },
+  ) => {
+    const response = await fetch(`/api/chats/${sessionId}/messages`);
+    if (!response.ok) return false;
+    const data = await response.json();
+    const loadedMessages = Array.isArray(data?.messages) ? data.messages : [];
+    const mapped = loadedMessages.map((message: Message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+
+    setMessages((prev) => {
+      const keepIdx = options?.keepLocalBotIndex;
+      const localBot = keepIdx !== undefined ? prev[keepIdx]?.content?.trim() : "";
+      if (!localBot) return mapped;
+
+      const lastBotIdx = mapped.map((m, i) => (m.role === "bot" ? i : -1)).filter((i) => i >= 0).pop();
+      if (lastBotIdx === undefined) return mapped;
+
+      const remoteBot = mapped[lastBotIdx]?.content?.trim() ?? "";
+      if (localBot.length <= remoteBot.length) return mapped;
+
+      const merged = [...mapped];
+      merged[lastBotIdx] = { role: "bot", content: localBot };
+      return merged;
+    });
+    setThinkingByMessage({});
+    return mapped.length > 0;
+  };
+
+  useEffect(() => {
+    if (activeSessionId) {
+      localStorage.setItem(LAST_CHAT_SESSION_KEY, activeSessionId);
+    }
+  }, [activeSessionId]);
+
   useEffect(() => {
     if (!activeSessionId) {
-      setMessages([]);
+      if (chatsReady) setMessages([]);
       return;
     }
 
+    const loadGeneration = ++messagesLoadGenerationRef.current;
+    const sessionId = activeSessionId;
+
     const loadSessionMessages = async () => {
       try {
-        const response = await fetch(`/api/chats/${activeSessionId}/messages`);
+        const response = await fetch(`/api/chats/${sessionId}/messages`);
         if (!response.ok) throw new Error("Failed to load chat messages");
+        if (loadGeneration !== messagesLoadGenerationRef.current) return;
+        if (chatInFlightRef.current) return;
+
         const data = await response.json();
         const loadedMessages = Array.isArray(data?.messages) ? data.messages : [];
         setMessages(
@@ -314,6 +377,30 @@ export default function ChatPage() {
     }
   };
 
+  const setBotMessageAt = (botIndex: number, content: string) => {
+    setMessages((prev) => {
+      if (!prev[botIndex]) return prev;
+      const next = [...prev];
+      next[botIndex] = { role: "bot", content };
+      return next;
+    });
+  };
+
+  const clearThinkingAt = (botIndex: number) => {
+    setThinkingByMessage((prev) => {
+      const entry = prev[botIndex];
+      if (!entry) return prev;
+      return {
+        ...prev,
+        [botIndex]: {
+          ...entry,
+          status: "idle",
+          isStreaming: false,
+        },
+      };
+    });
+  };
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading || !activeSessionId) return;
@@ -323,17 +410,25 @@ export default function ChatPage() {
     setInput("");
 
     const newUserMsg: Message = { role: "user", content: userMessage };
-    setMessages((prev) => {
-      const next = [...prev, newUserMsg];
-      pendingBotMessageIndexRef.current = next.length;
-      return next;
-    });
+    const botIndex = messages.length + 1;
+    pendingBotMessageIndexRef.current = botIndex;
+    setMessages((prev) => [...prev, newUserMsg, { role: "bot", content: "" }]);
 
+    chatInFlightRef.current = true;
+    messagesLoadGenerationRef.current += 1;
     setIsLoading(true);
-    botMessageIndexRef.current = null;
+    botMessageIndexRef.current = botIndex;
+    setThinkingByMessage((prev) => ({
+      ...prev,
+      [botIndex]: {
+        summary: "",
+        status: "retrieving",
+        isStreaming: true,
+      },
+    }));
 
     try {
-      const history = messages
+      const history = [...messages, newUserMsg]
         .slice(-8)
         .map((message) => ({
           role: message.role,
@@ -359,109 +454,20 @@ export default function ChatPage() {
             ? (data as { answer: string }).answer
             : null;
         if (answer !== null) {
-          setMessages((prev) => [...prev, { role: "bot", content: answer }]);
+          setBotMessageAt(botIndex, answer);
+          clearThinkingAt(botIndex);
           refreshChatSessions().catch((error) => console.error("Failed to refresh chats:", error));
           return;
         }
         throw new Error("Invalid chat response");
       }
 
-      const botIndex = pendingBotMessageIndexRef.current;
-      if (botIndex === null) {
-        throw new Error("Chat state was lost; please try again.");
-      }
-      botMessageIndexRef.current = botIndex;
-      setMessages((prev) => [...prev, { role: "bot", content: "" }]);
-      setThinkingByMessage((prev) => ({
-        ...prev,
-        [botIndex]: {
-          summary: "",
-          status: "retrieving",
-          isStreaming: true,
-        },
-      }));
-
       const reader = response.body?.getReader();
       if (!reader) throw new Error("Response stream unavailable");
       const decoder = new TextDecoder();
 
-      let answerText = "";
-      let thinkingText = "";
-      let buffer = "";
       let rawStream = "";
-      let parseMode: "searching" | "tagged" | "untagged" = "searching";
-      let activeSection: "thinking" | "answer" | null = null;
       let hasReceivedChunk = false;
-
-      const updateThinkingSummary = (summary: string) => {
-        const trimmedSummary = summary.trim();
-        setThinkingByMessage((prev) => {
-          const entry = prev[botIndex];
-          if (!entry) return prev;
-          if (entry.summary === trimmedSummary) return prev;
-          return {
-            ...prev,
-            [botIndex]: {
-              ...entry,
-              summary: trimmedSummary,
-            },
-          };
-        });
-      };
-
-      const updateMessageContent = () => {
-        setMessages((prev) => {
-          const targetIndex = botMessageIndexRef.current;
-          if (targetIndex === null || !prev[targetIndex]) return prev;
-          const next = [...prev];
-          next[targetIndex] = { role: "bot", content: answerText };
-          return next;
-        });
-      };
-
-      const appendToSection = (text: string) => {
-        if (!text) return;
-
-        if (activeSection === "thinking") {
-          thinkingText += text;
-          updateThinkingSummary(thinkingText.trim());
-          return;
-        }
-
-        // Text outside [[THINKING]]/[[ANSWER]] tags still belongs in the visible answer.
-        answerText += text;
-      };
-
-      const parseTaggedBuffer = () => {
-        while (true) {
-          const nextTag = findNextStreamTag(buffer);
-          if (!nextTag) {
-            if (activeSection) {
-              const safeLength = Math.max(0, buffer.length - (MAX_STREAM_TAG_LENGTH - 1));
-              if (safeLength > 0) {
-                const safeText = buffer.slice(0, safeLength);
-                appendToSection(safeText);
-                buffer = buffer.slice(safeLength);
-              }
-            }
-            break;
-          }
-
-          const before = buffer.slice(0, nextTag.index);
-          appendToSection(before);
-          buffer = buffer.slice(nextTag.index + nextTag.tag.length);
-
-          if (nextTag.tag === STREAM_TAGS.thinkingStart) {
-            activeSection = "thinking";
-          } else if (nextTag.tag === STREAM_TAGS.thinkingEnd) {
-            activeSection = null;
-          } else if (nextTag.tag === STREAM_TAGS.answerStart) {
-            activeSection = "answer";
-          } else if (nextTag.tag === STREAM_TAGS.answerEnd) {
-            activeSection = null;
-          }
-        }
-      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -484,65 +490,34 @@ export default function ChatPage() {
 
         const chunk = decoder.decode(value, { stream: true });
         rawStream += chunk;
-        buffer += chunk;
-
-        if (parseMode === "searching") {
-          if (containsStreamTag(buffer)) {
-            parseMode = "tagged";
-          } else if (buffer.length >= STREAM_TAG_SEARCH_LIMIT) {
-            parseMode = "untagged";
-          }
-        }
-
-        if (parseMode === "untagged") {
-          answerText = stripStreamTags(buffer);
-          buffer = "";
-        } else if (parseMode === "tagged") {
-          parseTaggedBuffer();
-        } else if (parseMode === "searching" && buffer.length > 0) {
-          answerText = stripStreamTags(buffer);
-        }
-
-        updateMessageContent();
+        const display = stripInternalReasoning(stripStreamTags(rawStream));
+        setBotMessageAt(botIndex, display);
       }
 
-      buffer += decoder.decode();
+      rawStream += decoder.decode();
+      const answerText = finalizeStreamAnswer(rawStream, stripStreamTags(rawStream), "");
+      setBotMessageAt(botIndex, answerText);
+      clearThinkingAt(botIndex);
 
-      if (parseMode === "searching") {
-        answerText = stripStreamTags(buffer);
-        buffer = "";
-      } else if (parseMode === "tagged") {
-        if (activeSection) {
-          appendToSection(buffer);
+      if (!answerText.trim()) {
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          await sleep(400 * (attempt + 1));
+          const synced = await syncMessagesFromSession(sessionId);
+          if (synced) break;
         }
-        buffer = "";
       }
-
-      answerText = finalizeStreamAnswer(rawStream, answerText, thinkingText);
-      updateMessageContent();
 
       refreshChatSessions().catch((error) => console.error("Failed to refresh chats:", error));
 
     } catch {
-      const failMsg: Message = { role: "bot", content: "Failed to connect to the server." };
-      setMessages((prev) => [...prev, failMsg]);
+      setBotMessageAt(botIndex, "Failed to connect to the server.");
+      clearThinkingAt(botIndex);
     } finally {
       setIsLoading(false);
-      const finalBotIndex = botMessageIndexRef.current;
+      chatInFlightRef.current = false;
       botMessageIndexRef.current = null;
-      setThinkingByMessage((prev) => {
-        if (finalBotIndex === null) return prev;
-        const entry = prev[finalBotIndex];
-        if (!entry) return prev;
-        return {
-          ...prev,
-          [finalBotIndex]: {
-            ...entry,
-            status: "idle",
-            isStreaming: false,
-          },
-        };
-      });
+      pendingBotMessageIndexRef.current = null;
+      clearThinkingAt(botIndex);
     }
   };
 
@@ -930,7 +905,12 @@ export default function ChatPage() {
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-8 space-y-8 scroll-smooth antialiased">
-          {messages.length === 0 ? (
+          {!chatsReady || isLoadingChats ? (
+            <div className="h-full flex flex-col items-center justify-center text-center">
+              <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+              <p className="mt-4 text-sm text-white/40">Loading chat...</p>
+            </div>
+          ) : messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto">
               <div className="p-6 rounded-3xl bg-blue-600/10 mb-6">
                 <Bot className="w-12 h-12 text-blue-500" />
@@ -942,11 +922,20 @@ export default function ChatPage() {
             </div>
           ) : (
             messages.map((msg, idx) => {
+              const isPendingBot =
+                isLoading &&
+                msg.role === "bot" &&
+                !msg.content.trim() &&
+                idx === messages.length - 1;
+              if (msg.role === "bot" && !msg.content.trim() && !isPendingBot) {
+                return null;
+              }
               const thinkingEntry = thinkingByMessage[idx];
               const showThinking =
                 msg.role === "bot" &&
                 Boolean(thinkingEntry) &&
-                Boolean(thinkingEntry?.isStreaming);
+                Boolean(thinkingEntry?.isStreaming) &&
+                !msg.content.trim();
               const thinkingLabel =
                 thinkingEntry?.status === "retrieving"
                   ? "Searching Notion..."
@@ -971,26 +960,30 @@ export default function ChatPage() {
                         <span>{thinkingLabel}</span>
                       </div>
                     )}
-                    <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          a: ({ href, children }) => (
-                            <a href={href} target="_blank" rel="noopener noreferrer">
-                              {children}
-                            </a>
-                          ),
-                        }}
-                      >
-                        {msg.content}
-                      </ReactMarkdown>
-                    </div>
+                    {(msg.content.trim() || showThinking) && (
+                      <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
+                        {msg.content.trim() ? (
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              a: ({ href, children }) => (
+                                <a href={href} target="_blank" rel="noopener noreferrer">
+                                  {children}
+                                </a>
+                              ),
+                            }}
+                          >
+                            {msg.content}
+                          </ReactMarkdown>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
             })
           )}
-          {isLoading && messages[messages.length - 1]?.role !== 'bot' && (
+          {isLoading && messages[messages.length - 1]?.role === "user" && (
             <div className="flex gap-4">
               <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center">
                 <Bot className="w-5 h-5" />
