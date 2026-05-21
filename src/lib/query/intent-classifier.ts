@@ -1,4 +1,4 @@
-import { getJsonCompletion } from "@/lib/gemini";
+import { getJsonCompletion } from "@/lib/ai/gemini";
 import { extractYearFromQuestion } from "./normalize";
 import type { ClassifiedIntent, ParsedQuery, QueryKind } from "./types";
 

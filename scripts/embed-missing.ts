@@ -8,8 +8,8 @@
  *   EMBED_BATCH_LIMIT=50 EMBED_TARGET=chunks,pages npx tsx scripts/embed-missing.ts
  */
 import "dotenv/config";
-import { embedBatch } from "../src/lib/embeddings";
-import { query } from "../src/lib/postgres";
+import { embedBatch } from "../src/lib/ai/embeddings";
+import { query } from "../src/lib/db";
 
 const CHUNK_BATCH = 20;
 

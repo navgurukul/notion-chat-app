@@ -1,5 +1,4 @@
-import { likePattern } from "@/lib/sql-utils";
-import { query } from "@/lib/postgres";
+import { likePattern, query } from "@/lib/db";
 import type { ParsedQuery } from "./types";
 
 /**

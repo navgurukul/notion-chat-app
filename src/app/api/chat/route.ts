@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isSessionResponse, requireSession } from "@/lib/api-auth";
-import { handleChatPost } from "@/lib/chat-handler";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { isSessionResponse, requireSession } from "@/lib/auth";
+import { handleChatPost } from "@/lib/chat/handler";
+import { checkRateLimit } from "@/lib/shared/rate-limit";
 
 export async function POST(req: NextRequest) {
   try {

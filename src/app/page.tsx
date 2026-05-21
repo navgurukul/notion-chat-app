@@ -10,7 +10,7 @@ import {
   extractFinalAnswer,
   stripInternalReasoning,
   stripStreamTags,
-} from "@/lib/stream-tags";
+} from "@/lib/chat/stream-tags";
 
 interface Message {
   role: "user" | "bot";

@@ -5,6 +5,14 @@ export function extractYearFromQuestion(question: string): number | undefined {
   return year >= 2020 && year <= 2099 ? year : undefined;
 }
 
+/** Remove trailing "in (year) 2025" from a captured person name. */
+export function stripYearSuffixFromPerson(value: string): string {
+  return value
+    .replace(/\s+in\s+(?:the\s+)?(?:year\s+)?(20\d{2})\s*$/i, "")
+    .replace(/\s+(?:for|during)\s+(?:the\s+)?(?:year\s+)?(20\d{2})\s*$/i, "")
+    .trim();
+}
+
 const CROSS_DOC_NOISE = /^(?:main|the|themes?|all|across|related|docs?|documents?|pages?)$/i;
 
 /** Project/product name from "Zuvy-related docs", "themes across all Oscar pages", etc. */

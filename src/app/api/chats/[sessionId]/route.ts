@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { isSessionResponse, requireSession } from "@/lib/api-auth";
-import { deleteChatSession, ensureSessionBelongsToUser, getOrCreateUser } from "@/lib/chat-store";
+import { isSessionResponse, requireSession } from "@/lib/auth";
+import { deleteChatSession, ensureSessionBelongsToUser, getOrCreateUser } from "@/lib/chat/store";
 
 type RouteContext = {
   params: Promise<{ sessionId: string }>;

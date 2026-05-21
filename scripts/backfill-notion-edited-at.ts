@@ -7,7 +7,7 @@
  */
 import "dotenv/config";
 import { Client } from "@notionhq/client";
-import { ensureSchema, query } from "../src/lib/postgres";
+import { ensureSchema, query } from "../src/lib/db";
 
 const PAGE_SIZE = 100;
 

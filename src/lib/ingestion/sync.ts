@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Client } from "@notionhq/client";
-import { chunkPageContent } from "@/lib/chunk-page";
-import { buildEmbeddingText, embedBatch } from "@/lib/embeddings";
-import { ensureSchema, query } from "@/lib/postgres";
+import { chunkPageContent } from "@/lib/ingestion/chunk";
+import { buildEmbeddingText, embedBatch } from "@/lib/ai/embeddings";
+import { ensureSchema, query } from "@/lib/db";
 
 const PAGE_SIZE = 100;
 const SYNC_CHUNK_SIZE = 20;

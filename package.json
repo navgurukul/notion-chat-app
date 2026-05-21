@@ -13,6 +13,7 @@
     "sync:notion": "tsx scripts/sync-notion.ts",
     "embed:missing": "tsx scripts/embed-missing.ts",
     "verify:chat-routes": "tsx scripts/verify-chat-routes.ts",
+    "test:e2e": "tsx scripts/e2e-pipeline-test.ts",
     "backfill:notion-edited-at": "tsx scripts/backfill-notion-edited-at.ts"
   },
   "dependencies": {

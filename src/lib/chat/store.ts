@@ -1,5 +1,5 @@
 import type { Session } from "next-auth";
-import { query } from "@/lib/postgres";
+import { query } from "@/lib/db/postgres";
 
 export const CHAT_HISTORY_LIMIT = 30;
 

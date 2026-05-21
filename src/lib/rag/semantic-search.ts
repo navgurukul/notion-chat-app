@@ -1,8 +1,8 @@
-import { escapeLike } from "@/lib/sql-utils";
-import { embedText } from "@/lib/embeddings";
-import { hasNotionChunks, hybridChunkContext } from "@/lib/hybrid-chunk-search";
-import { query } from "@/lib/postgres";
-import { simplifySearchQuery } from "@/lib/search-query";
+import { escapeLike } from "@/lib/db/sql-utils";
+import { embedText } from "@/lib/ai/embeddings";
+import { hasNotionChunks, hybridChunkContext } from "@/lib/rag/hybrid-search";
+import { query } from "@/lib/db";
+import { simplifySearchQuery } from "@/lib/shared/search-query";
 
 type SearchRow = {
   id: string;

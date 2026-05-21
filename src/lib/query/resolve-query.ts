@@ -1,4 +1,4 @@
-import { parseQueryByRules } from "@/lib/query-router";
+import { parseQueryByRules } from "@/lib/query/rules";
 import { classifyQueryIntent } from "./intent-classifier";
 import { resolveEntities } from "./entity-resolution";
 import { logQueryRouting } from "./telemetry";

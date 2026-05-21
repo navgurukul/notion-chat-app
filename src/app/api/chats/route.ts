@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { isSessionResponse, requireSession } from "@/lib/api-auth";
-import { createChatSession, getOrCreateUser, listChatSessions } from "@/lib/chat-store";
+import { isSessionResponse, requireSession } from "@/lib/auth";
+import { createChatSession, getOrCreateUser, listChatSessions } from "@/lib/chat/store";
 
 export async function GET() {
   try {

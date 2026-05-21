@@ -1,40 +1,5 @@
-import type { ChatHistoryItem } from "./gemini";
-
-export function sanitizeChatHistory(value: unknown, maxTurns = 8): ChatHistoryItem[] {
-  if (!Array.isArray(value)) return [];
-
-  return value
-    .filter((item): item is ChatHistoryItem => {
-      if (!item || typeof item !== "object") return false;
-      const candidate = item as Partial<ChatHistoryItem>;
-      return (
-        (candidate.role === "user" || candidate.role === "bot") &&
-        typeof candidate.content === "string" &&
-        candidate.content.trim().length > 0
-      );
-    })
-    .slice(-maxTurns)
-    .map((item) => ({
-      role: item.role,
-      content: item.content.trim().slice(0, 2000),
-    }));
-}
-
-export function buildContextualSearchQuery(message: string, history: ChatHistoryItem[]) {
-  const recentUserTurns = history
-    .filter((item) => item.role === "user")
-    .slice(-3)
-    .map((item) => item.content);
-
-  if (recentUserTurns.length === 0) return message;
-
-  return [
-    "Conversation context:",
-    ...recentUserTurns.map((turn) => `- ${turn}`),
-    "",
-    `Current question: ${message}`,
-  ].join("\n");
-}
+import type { ChatHistoryItem } from "@/lib/ai/gemini";
+import { buildContextualSearchQuery } from "@/lib/chat/history";
 
 export function isNotionLinkRequest(message: string) {
   return (
@@ -50,7 +15,6 @@ const SKIP_BRACKET_TITLE =
 const PAGE_QUESTION_PREFIX =
   /^(?:what is|what's|what are|tell me about|can you tell me about|summarize|summary of|explain|describe|structuring)\b/i;
 
-/** Short factual questions — not a page title for "link for it". */
 const SKIP_USER_TURN_FOR_LINK =
   /^(?:who|which)\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm|owner|assigned)\b/i;
 
@@ -77,7 +41,7 @@ function titleFromUserTurn(content: string) {
   return null;
 }
 
-/** Resolve a page title from bracket refs, explicit names, or prior chat turns ("link of it"). */
+/** Resolve page title from brackets, explicit text, or chat history ("link for it"). */
 export function extractReferencedTitle(message: string, history: ChatHistoryItem[]) {
   const bracket = message.match(/\[([^\]]+)\]/);
   if (bracket?.[1]) {

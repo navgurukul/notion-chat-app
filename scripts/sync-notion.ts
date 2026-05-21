@@ -11,7 +11,7 @@
  *   SYNC_PAGE_LIMIT=10    — max pages to sync (same as --limit 10)
  */
 import "dotenv/config";
-import { syncNotionToPostgres } from "../src/lib/notion-sync";
+import { syncNotionToPostgres } from "../src/lib/ingestion";
 
 function hasFlag(name: string) {
   return process.argv.includes(name);

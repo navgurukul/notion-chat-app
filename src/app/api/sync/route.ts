@@ -1,7 +1,7 @@
 import { NextResponse, NextRequest } from "next/server";
-import { isSessionResponse, requireSession } from "@/lib/api-auth";
-import { query } from "@/lib/postgres";
-import { syncNotionToPostgres } from "@/lib/notion-sync";
+import { isSessionResponse, requireSession } from "@/lib/auth";
+import { query } from "@/lib/db";
+import { syncNotionToPostgres } from "@/lib/ingestion";
 
 type LastSyncRow = {
   last_synced_at: string | null;

@@ -1,8 +1,10 @@
-import { escapeLike } from "@/lib/sql-utils";
-import { query } from "@/lib/postgres";
+/**
+ * Build text context for Gemini: keyword page prefetch + chunk/vector search.
+ */
+import { escapeLike, query } from "@/lib/db";
 import { extractCrossDocSummaryTopic } from "@/lib/query/normalize";
-import { simplifySearchQuery } from "@/lib/search-query";
-import { semanticSearch } from "@/lib/vector-search";
+import { simplifySearchQuery } from "@/lib/shared/search-query";
+import { semanticSearch } from "@/lib/rag/semantic-search";
 
 type PageRow = {
   id: string;

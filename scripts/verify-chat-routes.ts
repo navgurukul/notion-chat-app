@@ -4,8 +4,8 @@
  */
 import "dotenv/config";
 import { resolveQueryRulesOnly } from "../src/lib/query/resolve-query";
-import { handleMetadataQuery } from "../src/lib/metadata-search";
-import { prefetchPagesFromQuestion } from "../src/lib/notion-context";
+import { handleMetadataQuery } from "../src/lib/sql/answers";
+import { prefetchPagesFromQuestion } from "../src/lib/rag/build-context";
 
 const CASES: Array<{
   question: string;
@@ -147,6 +147,16 @@ const CASES: Array<{
     question: "What onboarding tasks does a new hire need to complete?",
     expectKind: "onboarding_tasks",
     mustInclude: ["Onboarding"],
+  },
+  {
+    question: "what task assigned to tamanna in year 2025",
+    expectKind: "assigned_list",
+    mustInclude: ["Tamanna", "2025", "ReportList"],
+  },
+  {
+    question: "what task assigned to tamanna in year 2026",
+    expectKind: "assigned_list",
+    mustInclude: ["tamanna", "2026"],
   },
   {
     question: "Summarize the main themes across all Zuvy-related docs",

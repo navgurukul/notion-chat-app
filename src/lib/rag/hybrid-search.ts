@@ -1,6 +1,6 @@
-import { embedText } from "@/lib/embeddings";
-import { query } from "@/lib/postgres";
-import { simplifySearchQuery } from "@/lib/search-query";
+import { embedText } from "@/lib/ai/embeddings";
+import { query } from "@/lib/db";
+import { simplifySearchQuery } from "@/lib/shared/search-query";
 
 type ChunkHybridRow = {
   chunk_id: string;

@@ -1,3 +1,11 @@
+/**
+ * Rule-based question classifier (regex).
+ *
+ * Input: raw user question string
+ * Output: { kind, personName?, docTitle?, year?, ... }
+ *
+ * Called by `query/resolve-query.ts`. LLM classifier runs only when regex confidence is low.
+ */
 export type { ParsedQuery, QueryKind, QuerySource } from "@/lib/query/types";
 
 import {
@@ -5,6 +13,7 @@ import {
   extractYearFromQuestion,
   isCrossDocSummaryQuestion,
   looksLikeSinglePageTitle,
+  stripYearSuffixFromPerson,
 } from "@/lib/query/normalize";
 
 export { extractCrossDocSummaryTopic, extractYearFromQuestion, isCrossDocSummaryQuestion };
@@ -50,10 +59,11 @@ function stripDocWords(value: string) {
 
 function cleanPersonName(value: string | null) {
   if (!value) return null;
-  const cleaned = stripDocWords(value)
-    .replace(/\s+(?:has|have|had)\s*$/i, "")
-    .replace(/^(?:did|does|do)\s+/i, "")
-    .trim();
+  const cleaned = stripYearSuffixFromPerson(
+    stripDocWords(value)
+      .replace(/\s+(?:has|have|had)\s*$/i, "")
+      .replace(/^(?:did|does|do)\s+/i, ""),
+  ).trim();
   if (!cleaned) return null;
   if (/^(what|which|who|when|where|why|how|is|was|are|were|task|tasks|project|projects|work|manager|lead|only|one)$/i.test(cleaned)) {
     return null;
@@ -295,13 +305,21 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "project_manager_of", docTitle: docTitle ?? undefined, raw: question };
   }
 
-  const tasksAssignedToMatch = question.match(
-    /\b(?:which|what)\s+tasks?\s+assigned\s+to\s+(.+?)(?:\?|$)/i,
+  const tasksAssignedToYearMatch = question.match(
+    /\b(?:which|what)\s+tasks?\s+assigned\s+to\s+(.+?)(?:\s+in\s+(?:the\s+)?(?:year\s+)?(20\d{2}))?(?:\?|$)/i,
   );
-  if (tasksAssignedToMatch?.[1]) {
-    const person = cleanPersonName(tasksAssignedToMatch[1]);
+  if (tasksAssignedToYearMatch?.[1]) {
+    const person = cleanPersonName(tasksAssignedToYearMatch[1]);
     if (person) {
-      return { kind: "assigned_list", personName: person, raw: question };
+      const yearFromGroup = tasksAssignedToYearMatch[2];
+      const year = yearFromGroup
+        ? Number.parseInt(yearFromGroup, 10)
+        : extractYearFromQuestion(question);
+      return withYear(question, {
+        kind: "assigned_list",
+        personName: person,
+        ...(year ? { year } : {}),
+      });
     }
   }
 
@@ -317,7 +335,7 @@ export function parseQueryByRules(question: string): RulesQuery {
   }
 
   const topicAssignedToPersonMatch = question.match(
-    /^(?!who\s+(?:is\s+)?assigned\s+to)(?:only\s+one\s+|one\s+|single\s+)?(?:tasks?|projects?|work|data|docs?|documents?|pages?)?\s*(?:of|for|in|on|about|related to)?\s*(.+?)\s+(?:assigned|assign|given)\s+to\s+(.+?)(?:\?|$)/i,
+    /^(?!who\s+(?:is\s+)?assigned\s+to)(?!what\s+tasks?\s+assigned\s+to)(?:only\s+one\s+|one\s+|single\s+)?(?:tasks?|projects?|work|data|docs?|documents?|pages?)?\s*(?:of|for|in|on|about|related to)?\s*(.+?)\s+(?:assigned|assign|given)\s+to\s+(.+?)(?:\?|$)/i,
   );
   if (topicAssignedToPersonMatch?.[1] && topicAssignedToPersonMatch?.[2]) {
     return {

@@ -1,7 +1,11 @@
-import { escapeLike } from "@/lib/sql-utils";
-import { query } from "@/lib/postgres";
-import type { ActivityRow, NotionPageRow, WorkedOnRow } from "@/lib/notion-types";
-import { isNoiseTopic } from "@/lib/query-router";
+/**
+ * SQL answers — lookup owners, status, assignments, summaries from `notion_pages`.
+ *
+ * No Gemini here. If this returns null, the chat pipeline falls back to RAG.
+ */
+import { escapeLike, query } from "@/lib/db";
+import type { ActivityRow, NotionPageRow, WorkedOnRow } from "@/lib/shared/notion-types";
+import { isNoiseTopic } from "@/lib/query/rules";
 import type { ParsedQuery } from "@/lib/query/types";
 
 const SQL_RESULT_LIMIT = 20;
@@ -742,6 +746,9 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
     const normalizedTopic = docTitle ? normalizeTopic(docTitle) : "";
     const topicTerm = normalizedTopic ? `%${escapeLike(normalizedTopic)}%` : null;
+    const year = parsed.year;
+    const yearStart = year ? `${year}-01-01` : null;
+    const yearEnd = year ? `${year + 1}-01-01` : null;
     const assigneeInContentSql = `
       (
         (
@@ -756,9 +763,9 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         )
       )
     `;
-    const rows = await query<NotionPageRow>(
+    const rows = await query<NotionPageRow & { notion_edited_at?: string | null }>(
       `
-      SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
+      SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content, notion_edited_at::text
       FROM notion_pages
       WHERE
         (
@@ -771,29 +778,44 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
           OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
           OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
         )
+        AND (
+          $4::text IS NULL
+          OR (
+            notion_edited_at IS NOT NULL
+            AND notion_edited_at >= $4::timestamptz
+            AND notion_edited_at < $5::timestamptz
+          )
+        )
       ORDER BY
         CASE
           WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\' THEN 0
           ELSE 1
         END,
+        notion_edited_at DESC NULLS LAST,
         title ASC
       LIMIT ${SQL_RESULT_LIMIT}
       `,
-      [personTerm, fuzzyPersonTerm, topicTerm],
+      [personTerm, fuzzyPersonTerm, topicTerm, yearStart, yearEnd],
     );
+    const yearNote = year ? ` in **${year}**` : "";
     if (!rows.length) {
       return (
-        `No tasks or pages with **${person}** as owner or assignee in synced Notion.\n\n` +
-        `_Check the exact name spelling in Notion (e.g. full name) or use **Sync changes** if assignments were updated recently._`
+        `No tasks or pages with **${person}** as owner or assignee${yearNote} in synced Notion.\n\n` +
+        `_Check the exact name spelling in Notion (e.g. **Tamanna a**), or use **Sync changes** if assignments were updated recently._`
       );
     }
-    return `${formatListHeader(rows.length, `assigned to ${person}${docTitle ? ` and matching "${docTitle}"` : ""}`)}\n\n${formatRows(
+    return `${formatListHeader(rows.length, `assigned to ${person}${yearNote}${docTitle ? ` and matching "${docTitle}"` : ""}`)}\n\n${formatRows(
       rows,
       (row) => {
+        const edited =
+          "notion_edited_at" in row && row.notion_edited_at
+            ? String(row.notion_edited_at).slice(0, 10)
+            : "";
         const metadata = [
           `owner/assignee: ${row.owner || "Unknown"}`,
           row.status ? `status: ${row.status}` : "",
           row.doc_type ? `type: ${row.doc_type}` : "",
+          edited ? `last edited: ${edited}` : "",
         ].filter(Boolean).join(" · ");
         const snippet = docTitle ? contentSnippet(row.content) : "";
         return `**${formatLink(row.title || "Untitled", row.url)}** — ${metadata}${snippet ? `\n  ${snippet}` : ""}`;
