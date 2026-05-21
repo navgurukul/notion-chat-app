@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
+import { isSessionResponse, requireSession } from "@/lib/api-auth";
 import { createChatSession, getOrCreateUser, listChatSessions } from "@/lib/chat-store";
 
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const session = await requireSession();
+    if (isSessionResponse(session)) return session;
 
     const user = await getOrCreateUser(session);
     const sessions = await listChatSessions(user.id);
@@ -22,8 +21,8 @@ export async function GET() {
 
 export async function POST() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const session = await requireSession();
+    if (isSessionResponse(session)) return session;
 
     const user = await getOrCreateUser(session);
     const chat = await createChatSession(user.id);

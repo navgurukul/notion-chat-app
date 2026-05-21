@@ -1,7 +1,5 @@
-import { NextResponse } from "next/server";
-import { NextRequest } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
+import { NextResponse, NextRequest } from "next/server";
+import { isSessionResponse, requireSession } from "@/lib/api-auth";
 import { query } from "@/lib/postgres";
 import { syncNotionToPostgres } from "@/lib/notion-sync";
 
@@ -11,10 +9,8 @@ type LastSyncRow = {
 
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const session = await requireSession();
+    if (isSessionResponse(session)) return session;
 
     const rows = await query<LastSyncRow>(
       "SELECT MAX(synced_at)::text AS last_synced_at FROM notion_pages",
@@ -34,10 +30,8 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const session = await requireSession();
+    if (isSessionResponse(session)) return session;
 
     const { searchParams } = new URL(req.url);
     const force = searchParams.get("force") === "true";

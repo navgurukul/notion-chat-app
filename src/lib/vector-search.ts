@@ -1,3 +1,4 @@
+import { escapeLike } from "@/lib/sql-utils";
 import { embedText } from "@/lib/embeddings";
 import { hasNotionChunks, hybridChunkContext } from "@/lib/hybrid-chunk-search";
 import { query } from "@/lib/postgres";
@@ -36,10 +37,6 @@ function getMaxContextChars() {
   return Math.floor(
     readPositiveNumber(process.env.VECTOR_SEARCH_MAX_CONTEXT_CHARS, DEFAULT_MAX_CONTEXT_CHARS),
   );
-}
-
-function escapeLike(value: string) {
-  return value.replace(/[%_]/g, "\\$&");
 }
 
 function explicitTitleFromQuery(searchQuery: string) {

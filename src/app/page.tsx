@@ -6,6 +6,11 @@ import { useEffect, useState, useRef } from "react";
 import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  extractFinalAnswer,
+  stripInternalReasoning,
+  stripStreamTags,
+} from "@/lib/stream-tags";
 
 interface Message {
   role: "user" | "bot";
@@ -28,96 +33,6 @@ type ThinkingEntry = {
 };
 
 type ThinkingByMessage = { [key: number]: ThinkingEntry };
-
-const STREAM_TAGS = {
-  thinkingStart: "[[THINKING]]",
-  thinkingEnd: "[[/THINKING]]",
-  answerStart: "[[ANSWER]]",
-  answerEnd: "[[/ANSWER]]",
-};
-
-const STREAM_TAG_LIST = Object.values(STREAM_TAGS);
-const MAX_STREAM_TAG_LENGTH = Math.max(
-  ...STREAM_TAG_LIST.map((tag) => tag.length),
-);
-const STREAM_TAG_SEARCH_LIMIT = 800;
-const STREAM_TAG_PATTERN = /\[\[(?:\/)?(?:THINKING|ANSWER)\]\]/g;
-
-function findNextStreamTag(text: string) {
-  let nextIndex = -1;
-  let nextTag = "";
-
-  for (const tag of STREAM_TAG_LIST) {
-    const index = text.indexOf(tag);
-    if (index !== -1 && (nextIndex === -1 || index < nextIndex)) {
-      nextIndex = index;
-      nextTag = tag;
-    }
-  }
-
-  if (nextIndex === -1) return null;
-  return { index: nextIndex, tag: nextTag };
-}
-
-function containsStreamTag(text: string) {
-  return STREAM_TAG_LIST.some((tag) => text.includes(tag));
-}
-
-function stripStreamTags(text: string) {
-  return text.replace(STREAM_TAG_PATTERN, "");
-}
-
-function stripInternalReasoning(text: string) {
-  return text
-    .replace(
-      /^(?:the user is asking|i will scan|i need to search|let me search)[\s\S]*?(?=\n\n|\n#|\n-|\n\*|$)/i,
-      "",
-    )
-    .trim();
-}
-
-/** Collapse accidental full-text repeats from stream parsing. */
-function dedupeRepeatedAnswer(text: string) {
-  const trimmed = text.trim();
-  if (trimmed.length < 200) return trimmed;
-
-  const half = Math.floor(trimmed.length / 2);
-  const first = trimmed.slice(0, half).trim();
-  const second = trimmed.slice(half).trim();
-  if (first.length > 80 && second.startsWith(first.slice(0, Math.min(120, first.length)))) {
-    return first;
-  }
-
-  const paragraphs = trimmed.split(/\n{2,}/);
-  const unique: string[] = [];
-  for (const p of paragraphs) {
-    const norm = p.trim().toLowerCase();
-    if (!norm) continue;
-    if (unique.some((u) => u.trim().toLowerCase() === norm)) continue;
-    unique.push(p);
-  }
-  return unique.join("\n\n");
-}
-
-function finalizeStreamAnswer(rawBuffer: string, answerText: string, thinkingText: string) {
-  const answerBlock = rawBuffer.match(/\[\[ANSWER\]\]([\s\S]*?)(?:\[\[\/ANSWER\]\]|$)/i)?.[1];
-  let result = "";
-  if (answerBlock?.trim()) {
-    result = stripInternalReasoning(stripStreamTags(answerBlock));
-  } else if (answerText.trim()) {
-    result = stripInternalReasoning(stripStreamTags(answerText));
-  } else {
-    const afterThinking = rawBuffer
-      .replace(/\[\[THINKING\]\][\s\S]*?\[\[\/THINKING\]\]/i, "")
-      .trim();
-    if (afterThinking) {
-      result = stripInternalReasoning(stripStreamTags(afterThinking));
-    } else if (thinkingText.trim()) {
-      result = stripInternalReasoning(stripStreamTags(thinkingText));
-    }
-  }
-  return dedupeRepeatedAnswer(result);
-}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -495,7 +410,7 @@ export default function ChatPage() {
       }
 
       rawStream += decoder.decode();
-      const answerText = finalizeStreamAnswer(rawStream, stripStreamTags(rawStream), "");
+      const answerText = extractFinalAnswer(rawStream);
       setBotMessageAt(botIndex, answerText);
       clearThinkingAt(botIndex);
 

@@ -1,9 +1,6 @@
+import { likePattern } from "@/lib/sql-utils";
 import { query } from "@/lib/postgres";
 import type { ParsedQuery } from "./types";
-
-function escapeLike(value: string) {
-  return value.replace(/[%_]/g, "\\$&");
-}
 
 /**
  * Map an ambiguous topic ("Oscar") to the best-matching synced page title before SQL/RAG.
@@ -22,7 +19,7 @@ export async function canonicalizeDocTitle(topic: string): Promise<string> {
   );
   if (exact[0]?.title) return exact[0].title;
 
-  const term = `%${escapeLike(trimmed)}%`;
+  const term = likePattern(trimmed);
   const candidates = await query<{ title: string | null; score: number }>(
     `
     SELECT title,

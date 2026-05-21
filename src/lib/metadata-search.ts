@@ -1,3 +1,4 @@
+import { escapeLike } from "@/lib/sql-utils";
 import { query } from "@/lib/postgres";
 import type { ActivityRow, NotionPageRow, WorkedOnRow } from "@/lib/notion-types";
 import { isNoiseTopic } from "@/lib/query-router";
@@ -51,10 +52,6 @@ function resolvePageOwner(row: NotionPageRow): { name: string | null; label: str
     return { name: fromContent[1].trim(), label: "Created by" };
   }
   return { name: null, label: "Owner" };
-}
-
-function escapeLike(value: string) {
-  return value.replace(/[%_]/g, "\\$&");
 }
 
 /** Direct Notion URL lookup by page title (exact, then ranked partial). */

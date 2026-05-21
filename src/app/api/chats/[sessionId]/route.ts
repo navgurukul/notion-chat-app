@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
+import { isSessionResponse, requireSession } from "@/lib/api-auth";
 import { deleteChatSession, ensureSessionBelongsToUser, getOrCreateUser } from "@/lib/chat-store";
 
 type RouteContext = {
@@ -9,10 +8,8 @@ type RouteContext = {
 
 export async function DELETE(_req: Request, context: RouteContext) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const session = await requireSession();
+    if (isSessionResponse(session)) return session;
 
     const user = await getOrCreateUser(session);
     const { sessionId } = await context.params;

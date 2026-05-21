@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
+import { isSessionResponse, requireSession } from "@/lib/api-auth";
 import {
   addChatMessage,
   CHAT_HISTORY_LIMIT,
@@ -15,8 +14,8 @@ type RouteContext = {
 };
 
 async function requireOwnedSession(context: RouteContext) {
-  const session = await getServerSession(authOptions);
-  if (!session) return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  const session = await requireSession();
+  if (isSessionResponse(session)) return { error: session };
 
   const user = await getOrCreateUser(session);
   const { sessionId } = await context.params;

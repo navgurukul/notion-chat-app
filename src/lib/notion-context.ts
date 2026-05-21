@@ -1,3 +1,4 @@
+import { escapeLike } from "@/lib/sql-utils";
 import { query } from "@/lib/postgres";
 import { extractCrossDocSummaryTopic } from "@/lib/query/normalize";
 import { simplifySearchQuery } from "@/lib/search-query";
@@ -17,10 +18,6 @@ type PageRow = {
 
 const PREFETCH_LIMIT = 12;
 const BODY_SNIPPET_CHARS = 1200;
-
-function escapeLike(value: string) {
-  return value.replace(/[%_]/g, "\\$&");
-}
 
 /** Pull meaningful tokens from a natural-language question. */
 export function extractQuestionTerms(question: string) {
