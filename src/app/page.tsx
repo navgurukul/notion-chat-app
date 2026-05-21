@@ -503,20 +503,6 @@ export default function ChatPage() {
     return `Last synced: ${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
   };
 
-  const formatFullSyncTime = (isoTime: string | null) => {
-    if (!isoTime) return "No sync completed yet";
-    const syncTime = new Date(isoTime);
-    if (!Number.isFinite(syncTime.getTime())) return "Sync time unavailable";
-
-    return syncTime.toLocaleString(undefined, {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
   if (status === "loading") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] text-white">
@@ -675,6 +661,60 @@ export default function ChatPage() {
               <p className="text-xs text-white/40 truncate">{session.user?.email}</p>
             </div>
           </div>
+
+          <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3 space-y-3">
+            <div className="flex items-center gap-2 rounded-lg bg-blue-600/10 border border-blue-500/20 px-3 py-2 text-blue-400 text-xs">
+              <div className="w-2 h-2 shrink-0 rounded-full bg-blue-500 animate-pulse" />
+              <span className="font-medium">Connected to Notion Database</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleIncrementalSync}
+              disabled={isSyncing}
+              title="Sync updated Notion pages"
+              className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 transition-all disabled:opacity-60 ${
+                isSyncing
+                  ? "bg-white/5 text-white/70"
+                  : syncStatus === "success"
+                    ? "bg-green-500/10 text-green-400"
+                    : syncStatus === "error"
+                      ? "bg-red-500/10 text-red-400"
+                      : "hover:bg-white/[0.08] text-white/80 hover:text-white"
+              }`}
+            >
+              {isSyncing ? (
+                <RefreshCw className="w-4 h-4 shrink-0 animate-spin text-blue-500" />
+              ) : syncStatus === "success" ? (
+                <CheckCircle className="w-4 h-4 shrink-0" />
+              ) : syncStatus === "error" ? (
+                <XCircle className="w-4 h-4 shrink-0" />
+              ) : (
+                <RefreshCw className="w-4 h-4 shrink-0" />
+              )}
+              <span className="flex-1 text-left text-sm font-semibold">
+                {isSyncing
+                  ? syncMode === "full"
+                    ? "Full rebuild..."
+                    : "Syncing..."
+                  : syncStatus === "success"
+                    ? "Synced"
+                    : syncStatus === "error"
+                      ? "Sync failed"
+                      : "Sync Notion"}
+              </span>
+            </button>
+            <p className="mt-2 px-1 text-[10px] text-white/45 leading-snug">
+              {formatRelativeSyncTime(lastSyncedAt)}
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowFullSyncConfirm(true)}
+              disabled={isSyncing}
+              className="mt-1.5 w-full text-left px-1 text-[10px] text-white/35 hover:text-amber-400/90 disabled:opacity-30 transition-colors"
+            >
+              Full rebuild (all pages)…
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 p-4 overflow-y-auto">
@@ -735,68 +775,6 @@ export default function ChatPage() {
             {!chatSessions.length && (
               <p className="text-xs text-white/35 px-2">No chats yet.</p>
             )}
-          </div>
-
-          <div className="text-xs font-semibold text-white/30 uppercase tracking-wider mb-4 px-2">
-            Active Connection
-          </div>
-          <div className="p-3 rounded-lg bg-blue-600/10 border border-blue-500/20 text-blue-400 text-sm flex items-center mb-6 gap-2">
-            <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-            Connected to Notion Database
-          </div>
-
-          <div className="text-xs font-semibold text-white/30 uppercase tracking-wider mb-4 px-2">
-            Database Sync
-          </div>
-          <button
-            onClick={handleIncrementalSync}
-            disabled={isSyncing}
-            className={`w-full p-4 rounded-xl border flex flex-col items-center gap-3 transition-all ${isSyncing
-              ? "bg-white/5 border-white/10"
-              : syncStatus === 'success'
-                ? "bg-green-500/10 border-green-500/50 text-green-400"
-                : syncStatus === 'error'
-                  ? "bg-red-500/10 border-red-500/50 text-red-400"
-                  : "bg-white/5 border-white/10 hover:bg-white/[0.08] text-white/70 hover:text-white"
-              }`}
-          >
-            {isSyncing ? (
-              <RefreshCw className="w-6 h-6 animate-spin text-blue-500" />
-            ) : syncStatus === 'success' ? (
-              <CheckCircle className="w-6 h-6" />
-            ) : syncStatus === 'error' ? (
-              <XCircle className="w-6 h-6" />
-            ) : (
-              <RefreshCw className="w-6 h-6" />
-            )}
-            <div className="text-center">
-              <span className="text-sm font-bold block">
-                {isSyncing
-                  ? syncMode === "full"
-                    ? "Full rebuild..."
-                    : "Syncing changes..."
-                  : syncStatus === "success"
-                    ? "Sync success"
-                    : syncStatus === "error"
-                      ? "Sync failed"
-                      : "Sync changes"}
-              </span>
-              <span className="text-[10px] opacity-40 uppercase tracking-widest mt-1">
-                {isSyncing && syncMode === "full" ? "All pages" : "Updated pages only"}
-              </span>
-            </div>
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowFullSyncConfirm(true)}
-            disabled={isSyncing}
-            className="mt-2 w-full text-center text-[11px] text-white/40 hover:text-amber-400/90 disabled:opacity-30 transition-colors"
-          >
-            Full rebuild (all pages)…
-          </button>
-          <div className="mt-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-center">
-            <p className="text-[11px] font-medium text-white/60">{formatRelativeSyncTime(lastSyncedAt)}</p>
-            <p className="mt-1 text-[10px] text-white/35">{formatFullSyncTime(lastSyncedAt)}</p>
           </div>
         </div>
 
