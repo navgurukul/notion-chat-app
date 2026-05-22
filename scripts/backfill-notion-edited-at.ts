@@ -29,7 +29,7 @@ async function fetchAllPagesFromSearch(notion: Client) {
     });
 
     for (const item of response.results) {
-      if (item.object !== "page") continue;
+      if (item.object !== "page" || !("last_edited_time" in item)) continue;
       pages.push({
         id: item.id,
         last_edited_time: item.last_edited_time ?? null,

@@ -102,13 +102,15 @@ export default function ChatPage() {
 
         if (!chatsResponse.ok) throw new Error("Failed to load chats");
         const chatsData = await chatsResponse.json();
-        let sessions = Array.isArray(chatsData?.sessions) ? chatsData.sessions : [];
+        let sessions: ChatSession[] = Array.isArray(chatsData?.sessions)
+          ? (chatsData.sessions as ChatSession[])
+          : [];
 
         if (!sessions.length) {
           const createResponse = await fetch("/api/chats", { method: "POST" });
           if (!createResponse.ok) throw new Error("Failed to create chat");
           const createData = await createResponse.json();
-          sessions = createData?.session ? [createData.session] : [];
+          sessions = createData?.session ? [createData.session as ChatSession] : [];
         }
 
         setChatSessions(sessions);
@@ -136,7 +138,7 @@ export default function ChatPage() {
     if (!response.ok) return false;
     const data = await response.json();
     const loadedMessages = Array.isArray(data?.messages) ? data.messages : [];
-    const mapped = loadedMessages.map((message: Message) => ({
+    const mapped: Message[] = loadedMessages.map((message: Message) => ({
       role: message.role,
       content: message.content,
     }));
@@ -197,7 +199,7 @@ export default function ChatPage() {
     };
 
     loadSessionMessages();
-  }, [activeSessionId]);
+  }, [activeSessionId, chatsReady]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setSyncClock(Date.now()), 60000);

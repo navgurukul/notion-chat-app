@@ -15,7 +15,6 @@ import { resolveQuery } from "../src/lib/query/resolve-query";
 import { lookupPageLinkByTitle, handleMetadataQuery } from "../src/lib/sql/answers";
 import {
   isNotionLinkRequest,
-  extractReferencedTitle,
   resolveSemanticSearchQuery,
 } from "../src/lib/chat/link-lookup";
 
