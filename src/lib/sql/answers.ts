@@ -115,7 +115,7 @@ const PROJECT_THEMES = [
   },
   {
     name: "Role-based access & platform",
-    hubTitleLike: "%role%",
+    hubTitleLike: "%role based access%",
     signals: [/role/i, /\bapi\b/i, /socket/i, /routing/i, /login/i],
   },
   {
@@ -265,6 +265,212 @@ function wantsProjectNameAnswer(raw: string) {
   return /\b(?:which|what|all)\b[\s\S]*\bprojects?\b/i.test(raw);
 }
 
+function asksForProjectsOnly(raw: string) {
+  return /\bprojects?\b/i.test(raw) && !/\btasks?\b/i.test(raw);
+}
+
+function asksForTasksOnly(raw: string) {
+  return /\btasks?\b/i.test(raw);
+}
+
+/** Person named on a project team roster or billing line in page body (not only Owner field). */
+function personOnProjectTeam(content: string | null | undefined, person: string) {
+  if (!content?.trim()) return false;
+  const norm = person.toLowerCase().trim();
+  const fuzzy = stripVowels(norm);
+  const text = content.toLowerCase();
+  if (!text.includes(norm) && !text.replace(/[aeiou]/g, "").includes(fuzzy)) return false;
+
+  const firstName = norm.split(/\s+/)[0]?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") ?? norm;
+  if (!firstName) return false;
+
+  if (new RegExp(`\\bdevs?\\b[\\s\\S]{0,500}${firstName}`, "i").test(content)) return true;
+  if (new RegExp(`\\bteam\\b[\\s\\S]{0,400}${firstName}`, "i").test(content)) return true;
+  if (new RegExp(`${firstName}[\\s\\S]{0,60}(?:per month|billable|rs\\s|\\d+,?\\d{3})`, "i").test(content))
+    return true;
+  if (new RegExp(`\\bassignee:\\s*[^\\n]*${firstName}`, "i").test(content)) return true;
+  if (new RegExp(`\\bcaptain:\\s*[^\\n]*${firstName}`, "i").test(content)) return true;
+  return false;
+}
+
+function inferProjectThemeForPage(row: { title?: string | null; content?: string | null }) {
+  const title = (row.title ?? "").toLowerCase();
+  const contentHead = (row.content ?? "").slice(0, 1200).toLowerCase();
+
+  if (/datapivot|nagaada|data pivot|pivotsai/.test(title)) return "DataPivots AI";
+  if (/product roadmap|roadmap.*execution/.test(title) && /datapivot|nagaada/.test(contentHead)) {
+    return "DataPivots AI";
+  }
+  if (/reports and dashboard|release 2\.1/.test(title)) return "Reports and Dashboards";
+  if (/meraki/.test(title)) return "Meraki";
+  if (/oscar/.test(title)) return "Oscar";
+  if (/reflection platform|^reflection$/i.test(title)) return "Reflection Platform";
+
+  return inferProjectTheme([row]);
+}
+
+function ownedProjectHubForTheme(theme: string, rows: NotionPageRow[]) {
+  const norm = theme.toLowerCase();
+  const exact = rows.find((row) => (row.title ?? "").trim().toLowerCase() === norm);
+  if (exact) return { title: exact.title, url: exact.url ?? null };
+  const partial = rows.find(
+    (row) =>
+      (row.title ?? "").toLowerCase().includes(norm) &&
+      !(row.title ?? "").toLowerCase().includes("induction"),
+  );
+  return partial ? { title: partial.title, url: partial.url ?? null } : null;
+}
+
+function attachOrphanTasksToOwnedProject(
+  byTheme: Map<string, { tasks: NotionPageRow[]; rosterHub?: { title: string | null; url: string | null } }>,
+  rows: NotionPageRow[],
+) {
+  const primary = [...byTheme.entries()].find(([theme]) => ownedProjectHubForTheme(theme, rows));
+  if (!primary) return;
+  const [, entry] = primary;
+  const seen = new Set(entry.tasks.map((r) => r.id));
+  for (const row of rows) {
+    if (inferProjectThemeForPage(row) || seen.has(row.id)) continue;
+    entry.tasks.push(row);
+    seen.add(row.id);
+  }
+}
+
+async function findProjectRosterThemes(person: string) {
+  const personTerm = `%${escapeLike(person)}%`;
+  const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
+  const rows = await query<{ title: string | null; url: string | null; content: string | null }>(
+    `
+    SELECT title, url, content
+    FROM notion_pages
+    WHERE
+      (
+        lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
+        OR regexp_replace(lower(coalesce(content, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+      )
+      AND (
+        lower(coalesce(title, '')) LIKE '%datapivot%'
+        OR lower(coalesce(title, '')) LIKE '%nagaada%'
+        OR lower(coalesce(title, '')) LIKE '%roadmap%'
+        OR lower(coalesce(title, '')) LIKE '%release%'
+        OR lower(coalesce(title, '')) LIKE '%meraki%'
+        OR lower(coalesce(title, '')) LIKE '%oscar%'
+        OR lower(coalesce(title, '')) LIKE '%reflection%'
+        OR lower(coalesce(title, '')) LIKE '%reports and dashboard%'
+        OR lower(coalesce(title, '')) LIKE '%sow%'
+      )
+    LIMIT 30
+    `,
+    [personTerm, fuzzyPersonTerm],
+  );
+
+  const seen = new Set<string>();
+  const out: Array<{ theme: string; hubTitle: string; hubUrl: string | null }> = [];
+  for (const row of rows) {
+    if (!personOnProjectTeam(row.content, person)) continue;
+    const theme = inferProjectThemeForPage(row);
+    if (!theme || seen.has(theme)) continue;
+    seen.add(theme);
+    out.push({
+      theme,
+      hubTitle: row.title || theme,
+      hubUrl: row.url,
+    });
+  }
+  return out;
+}
+
+async function formatAssignedProjectsAnswer(
+  person: string,
+  rows: NotionPageRow[],
+  yearNote: string,
+) {
+  type ThemeEntry = {
+    tasks: NotionPageRow[];
+    rosterHub?: { title: string | null; url: string | null };
+  };
+  const byTheme = new Map<string, ThemeEntry>();
+
+  for (const row of rows) {
+    const theme = inferProjectThemeForPage(row);
+    if (!theme) continue;
+    const entry = byTheme.get(theme) ?? { tasks: [] };
+    entry.tasks.push(row);
+    byTheme.set(theme, entry);
+  }
+
+  for (const roster of await findProjectRosterThemes(person)) {
+    const entry = byTheme.get(roster.theme) ?? { tasks: [] };
+    if (!entry.rosterHub) {
+      entry.rosterHub = { title: roster.hubTitle, url: roster.hubUrl };
+    }
+    byTheme.set(roster.theme, entry);
+  }
+
+  attachOrphanTasksToOwnedProject(byTheme, rows);
+
+  const themes = [...byTheme.entries()]
+    .sort((a, b) => {
+      const score = (e: ThemeEntry) =>
+        e.tasks.length + (e.rosterHub ? 3 : 0) + e.tasks.filter((r) => isActiveStatus(r.status)).length;
+      return score(b[1]) - score(a[1]);
+    })
+    .map(([name]) => name);
+
+  const lines: string[] = [];
+  lines.push(
+    `### Projects for **${person}**${yearNote}`,
+    "",
+    `_From **${rows.length}** owned/assigned task pages plus project team rosters in synced Notion._`,
+    `_For every task, ask: **"What tasks is ${person} assigned to?"**_`,
+    "",
+  );
+
+  if (!themes.length) {
+    return (
+      `No **projects** found for **${person}**${yearNote} in synced Notion (no owner/assignee tasks and no team roster match).\n\n` +
+      `_Try **Sync changes** if assignments were updated recently._`
+    );
+  }
+
+  for (const theme of themes.slice(0, 10)) {
+    const entry = byTheme.get(theme)!;
+    const hub =
+      ownedProjectHubForTheme(theme, rows) ??
+      (await lookupProjectHubPage(theme)) ??
+      entry.rosterHub;
+    const activeCount = entry.tasks.filter((row) => isActiveStatus(row.status)).length;
+    const hubLink = hub?.url
+      ? formatLink(hub.title || theme, hub.url)
+      : `**${theme}**`;
+
+    const parts: string[] = [];
+    if (entry.rosterHub && entry.tasks.length === 0) {
+      parts.push("on **project team** (from roster)");
+    } else if (entry.rosterHub) {
+      parts.push("on project team + **owner/assignee** on tasks");
+    } else {
+      parts.push(`**${entry.tasks.length}** owned/assigned task(s)`);
+    }
+    if (activeCount) parts.push(`**${activeCount}** active task(s)`);
+
+    const sampleTasks = entry.tasks
+      .filter((row) => isActiveStatus(row.status))
+      .slice(0, 2)
+      .map((row) => row.title || "Untitled");
+
+    let line = `- **${theme}** — ${hubLink} — ${parts.join(", ")}`;
+    if (sampleTasks.length) line += ` (e.g. ${sampleTasks.join(", ")})`;
+    lines.push(line);
+  }
+
+  if (themes.length > 10) {
+    lines.push("", `_+${themes.length - 10} more project areas._`);
+  }
+
+  return lines.join("\n");
+}
+
 function wantsAllProjectsList(raw: string) {
   return /\ball\s+(?:the\s+)?projects?\b/i.test(raw);
 }
@@ -276,7 +482,76 @@ function isHistoricalWorkQuery(raw: string) {
   );
 }
 
+/** "Navgurukul workspace" means whole synced DB — not a page title filter. */
+function isWorkspaceScope(scope?: string) {
+  if (!scope?.trim()) return true;
+  const t = scope.toLowerCase();
+  if (/\b(workspace|navgurukul|ng)\b/.test(t) && t.length < 40) return true;
+  return isNoiseTopic(scope);
+}
+
+function isBlockerStatus(status: string | null | undefined) {
+  const s = (status ?? "").trim().toLowerCase();
+  if (!s || s === "not set") return false;
+  return /block/.test(s) || ["on hold", "waiting", "stuck"].includes(s);
+}
+
+function formatBlockerListAnswer(
+  rows: NotionPageRow[],
+  scopeLabel?: string,
+) {
+  const blocked = rows.filter((row) => /block/i.test(row.status ?? ""));
+  const onHold = rows.filter(
+    (row) =>
+      isBlockerStatus(row.status) &&
+      !/block/i.test(row.status ?? "") &&
+      /hold|waiting|stuck/i.test(row.status ?? ""),
+  );
+
+  const scopeNote = scopeLabel
+    ? isWorkspaceScope(scopeLabel)
+      ? "_Across all synced Navgurukul Notion pages (workspace-wide)._"
+      : `_Filtered by **${scopeLabel}** in title or content._`
+    : "_Across all synced Notion pages._";
+
+  const lines: string[] = [
+    `### ${rows.length} blocker / open issue(s)${scopeLabel && !isWorkspaceScope(scopeLabel) ? ` — ${scopeLabel}` : ""}`,
+    "",
+    scopeNote,
+    "",
+  ];
+
+  const renderSection = (label: string, sectionRows: NotionPageRow[]) => {
+    if (!sectionRows.length) return;
+    lines.push(`**${label} (${sectionRows.length}):**`);
+    for (const row of sectionRows) {
+      const theme = inferProjectThemeForPage(row);
+      const themeTag = theme ? ` · ${theme}` : "";
+      const snippet = contentSnippet(row.content, 200);
+      lines.push(
+        `- **${formatLink(row.title || "Untitled", row.url)}** — **${row.status || "not set"}**${row.owner ? ` · ${row.owner}` : ""}${themeTag}${snippet ? `\n  ${snippet}` : ""}`,
+      );
+    }
+    lines.push("");
+  };
+
+  renderSection("Blocked", blocked);
+  renderSection("On hold / waiting", onHold);
+
+  const other = rows.filter((row) => !blocked.includes(row) && !onHold.includes(row));
+  if (other.length) {
+    renderSection("Other flagged items", other);
+  }
+
+  lines.push(
+    `_Only pages with **Blocked** / **On Hold** status in Notion are listed (not checklist text that mentions “blocker”)._`,
+  );
+
+  return lines.join("\n");
+}
+
 function inferProjectTheme(rows: Array<{ title?: string | null; content?: string | null }>) {
+  const titleText = rows.map((row) => row.title ?? "").join(" ").toLowerCase();
   const combined = rows
     .map((row) => `${row.title ?? ""} ${(row.content ?? "").slice(0, 400)}`)
     .join(" ")
@@ -284,8 +559,12 @@ function inferProjectTheme(rows: Array<{ title?: string | null; content?: string
 
   let best: { name: string; score: number } | null = null;
   for (const theme of PROJECT_THEMES) {
-    const score = theme.signals.reduce((n, pattern) => n + (pattern.test(combined) ? 1 : 0), 0);
-    const minScore = 2;
+    let score = theme.signals.reduce((n, pattern) => n + (pattern.test(combined) ? 1 : 0), 0);
+    const titleHits = theme.signals.reduce((n, pattern) => n + (pattern.test(titleText) ? 1 : 0), 0);
+    if (titleHits) score += titleHits;
+    const minScore = theme.name === "DataPivots AI" && /datapivot|nagaada|data pivot|pivotsai/.test(titleText)
+      ? 1
+      : 2;
     if (score >= minScore && (!best || score > best.score)) best = { name: theme.name, score };
   }
   return best?.name ?? null;
@@ -491,7 +770,7 @@ async function buildOnboardingTasksAnswer() {
 function collectProjectThemes(rows: Array<{ title?: string | null; content?: string | null }>) {
   const scores = new Map<string, number>();
   for (const row of rows) {
-    const theme = inferProjectTheme([row]);
+    const theme = inferProjectThemeForPage(row) ?? inferProjectTheme([row]);
     if (!theme) continue;
     scores.set(theme, (scores.get(theme) ?? 0) + 1);
   }
@@ -508,9 +787,22 @@ async function lookupProjectHubPage(themeName: string) {
     SELECT title, url
     FROM notion_pages
     WHERE lower(coalesce(title, '')) LIKE $1
+      AND length(coalesce(title, '')) > 10
+      AND length(coalesce(title, '')) < 80
+      AND lower(coalesce(title, '')) NOT LIKE '%creation%'
+      AND lower(coalesce(title, '')) NOT LIKE '%widget%'
+      AND lower(coalesce(title, '')) NOT LIKE '%pagination%'
+      AND lower(coalesce(title, '')) NOT LIKE '%routing (fe)%'
+      AND lower(coalesce(title, '')) NOT LIKE '%induction%'
+      AND lower(coalesce(title, '')) NOT LIKE '%capstone%'
+      AND lower(coalesce(title, '')) NOT LIKE '%metacognition%'
     ORDER BY
-      CASE WHEN lower(trim(title)) = lower(trim($2)) THEN 0 END,
-      CASE WHEN lower(title) LIKE '%release%' THEN 1 ELSE 2 END,
+      CASE WHEN lower(trim(title)) = lower(trim($2)) THEN 0
+           WHEN lower(title) LIKE '%nagaada%' OR lower(title) LIKE '%datapivot%' THEN 1
+           WHEN lower(title) LIKE '%release%' OR lower(title) LIKE '%roadmap%' THEN 2
+           WHEN lower(title) LIKE '%reports and dashboard%' THEN 2
+           WHEN lower(title) LIKE '%role based access%' THEN 3
+           ELSE 4 END,
       length(title) ASC
     LIMIT 1
     `,
@@ -597,6 +889,195 @@ function pageNotSyncedMessage(docTitle: string) {
     `I couldn't find **${docTitle}** in the synced Notion database.\n\n` +
     `Use **Sync changes** in the sidebar (or a full sync if the page is new), then ask again with the full page title.`
   );
+}
+
+function projectTopicTokens(topic: string) {
+  return topic
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 4 && !["project", "completion", "the"].includes(t));
+}
+
+function extractCharterSection(content: string, tokens: string[]) {
+  if (!tokens.length) return null;
+  const pattern = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const re = new RegExp(
+    `##\\s*\\d*\\.?\\s*[^\\n]*(?:${pattern})[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s+\\d|$)`,
+    "i",
+  );
+  return content.match(re)?.[1]?.trim() ?? null;
+}
+
+function extractTimelineBullets(text: string, max = 8) {
+  const bullets: string[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (/^[-*•]\s+/.test(trimmed) && trimmed.length > 8) {
+      bullets.push(trimmed.replace(/^[-*•]\s+/, ""));
+    }
+    if (bullets.length >= max) break;
+  }
+  return bullets;
+}
+
+function extractDateMentions(text: string) {
+  const found = new Set<string>();
+  const patterns = [
+    /\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+20\d{2}\b/gi,
+    /\b(?:may|june)\s+and\s+(?:may|june)\s+20\d{2}\b/gi,
+    /\bby\s+(?:may|june|q[1-4]|[a-z]+)\s+(?:end|20\d{2})\b/gi,
+    /\b(?:due|deadline|target|launch|release|completion|eta)\s*(?:date)?\s*[:\-]\s*[^\n]+/gi,
+    /\b20\d{2}-\d{2}-\d{2}\b/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const line = match[0].trim();
+      if (line.length > 4 && line.length < 120) found.add(line);
+    }
+  }
+  return [...found].slice(0, 8);
+}
+
+async function findRelatedProjectPages(topic: string) {
+  const tokens = projectTopicTokens(topic);
+  const primary = tokens[0] ?? topic.split(/\s+/)[0] ?? topic;
+  if (primary.length < 3) return [];
+
+  const term = `%${escapeLike(primary)}%`;
+  return query<NotionPageRow & { content: string | null }>(
+    `
+    SELECT id, title, url, owner, doc_type, status, content
+    FROM notion_pages
+    WHERE
+      lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
+      OR lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
+    ORDER BY
+      CASE WHEN lower(trim(coalesce(title, ''))) = lower(trim($2)) THEN 0
+           WHEN lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\' THEN 1
+           ELSE 2 END,
+      CASE WHEN lower(coalesce(title, '')) LIKE '%charter%' THEN 0
+           WHEN lower(coalesce(title, '')) LIKE '%roadmap%' THEN 1
+           WHEN lower(coalesce(title, '')) LIKE '%mvp%' THEN 2
+           ELSE 3 END,
+      length(coalesce(content, '')) DESC
+    LIMIT 15
+    `,
+    [term, topic],
+  );
+}
+
+/** True when SQL ETA answer has no roadmap/dates — chat pipeline should try RAG. */
+export function isWeakProjectEtaAnswer(answer: string) {
+  return (
+    /No explicit completion date/i.test(answer) &&
+    !/Product Charter|roadmap|Play Store|Stabilise|May|June|20\d{2}/i.test(answer)
+  );
+}
+
+async function buildProjectEtaAnswer(topic: string): Promise<string | null> {
+  const hubRows = await lookupByTitle(topic, true);
+  const related = await findRelatedProjectPages(topic);
+  const tokens = projectTopicTokens(topic);
+  const seen = new Set<string>();
+  const pages: Array<NotionPageRow & { content?: string | null }> = [];
+
+  for (const row of [...hubRows, ...related]) {
+    if (!row.id || seen.has(row.id)) continue;
+    seen.add(row.id);
+    pages.push(row);
+  }
+
+  if (!pages.length) return null;
+
+  const hub = pages.find(
+    (row) => (row.title ?? "").trim().toLowerCase() === topic.trim().toLowerCase(),
+  ) ?? pages[0];
+
+  const charterPage =
+    pages.find((row) => /product charter|roadmap/i.test(row.title ?? "")) ?? null;
+  const charterSection =
+    (charterPage?.content ? extractCharterSection(charterPage.content, tokens) : null) ??
+    pages.map((row) => extractCharterSection(row.content ?? "", tokens)).find(Boolean);
+
+  const roadmapBullets = charterSection
+    ? extractTimelineBullets(charterSection)
+    : pages
+        .flatMap((row) => extractTimelineBullets(extractPageBody(row.content, 600), 4))
+        .slice(0, 6);
+
+  const dateMentions = [
+    ...new Set(
+      pages.flatMap((row) =>
+        extractDateMentions(`${row.title ?? ""}\n${extractPageBody(row.content, 2000)}`),
+      ),
+    ),
+  ];
+
+  const mvpPages = pages
+    .filter((row) => /mvp|release|version|\d+\.\d+/i.test(row.title ?? ""))
+    .slice(0, 5);
+
+  const lines: string[] = [
+    `### ETA / completion — **${topic}**`,
+    "",
+    hub
+      ? `**Hub page:** ${formatLink(hub.title || topic, hub.url)} — status: **${hub.status || "not set"}**${hub.owner ? ` · owner: ${hub.owner}` : ""}`
+      : "",
+  ];
+
+  if (charterSection && roadmapBullets.length) {
+    lines.push(
+      "",
+      "**Planned milestones** (from synced roadmap / Product Charter):",
+      ...roadmapBullets.map((b) => `- ${b}`),
+    );
+  }
+
+  if (dateMentions.length) {
+    lines.push("", "**Dates / targets mentioned in related pages:**", ...dateMentions.map((d) => `- ${d}`));
+  }
+
+  if (mvpPages.length) {
+    lines.push("", "**Version / release pages:**");
+    for (const row of mvpPages) {
+      lines.push(
+        `- ${formatLink(row.title || "Untitled", row.url)} — **${row.status || "not set"}**`,
+      );
+    }
+  }
+
+  const hasSubstance = charterSection || dateMentions.length > 0 || roadmapBullets.length > 0;
+  if (!hasSubstance) {
+    const body = extractPageBody(hub?.content, 500);
+    if (body) {
+      lines.push("", "**Page content:**", body);
+    }
+    lines.push(
+      "",
+      "_No fixed calendar ETA in synced Notion — only status on the hub page. Check project tracker databases in Notion for due dates._",
+    );
+    return isWeakProjectEtaAnswer(lines.join("\n")) ? null : lines.join("\n");
+  }
+
+  lines.push(
+    "",
+    dateMentions.length
+      ? "_Use the dates above as the best ETA signals from synced Notion._"
+      : "_No single due-date field — milestones above are the completion plan from synced Notion._",
+  );
+
+  const relatedLinks = pages
+    .filter((row) => row.id !== hub?.id)
+    .slice(0, 4)
+    .map((row) => formatLink(row.title || "Untitled", row.url));
+
+  if (relatedLinks.length) {
+    lines.push("", `**Related pages:** ${relatedLinks.join(", ")}`);
+  }
+
+  return lines.filter((line) => line !== "").join("\n");
 }
 
 async function lookupByTitle(title: string, includeContent = false) {
@@ -804,7 +1285,16 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         `_Check the exact name spelling in Notion (e.g. **Tamanna a**), or use **Sync changes** if assignments were updated recently._`
       );
     }
-    return `${formatListHeader(rows.length, `assigned to ${person}${yearNote}${docTitle ? ` and matching "${docTitle}"` : ""}`)}\n\n${formatRows(
+
+    if (asksForProjectsOnly(parsed.raw)) {
+      return formatAssignedProjectsAnswer(person, rows, yearNote);
+    }
+
+    const listLabel = asksForTasksOnly(parsed.raw)
+      ? `task(s) assigned to ${person}${yearNote}${docTitle ? ` matching "${docTitle}"` : ""}`
+      : `page(s) assigned to ${person}${yearNote}${docTitle ? ` matching "${docTitle}"` : ""}`;
+
+    return `${formatListHeader(rows.length, listLabel)}\n\n${formatRows(
       rows,
       (row) => {
         const edited =
@@ -1049,17 +1539,17 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
   }
 
   if (parsed.kind === "blocker_list") {
-    const scopeTerm = docTitle ? `%${escapeLike(docTitle)}%` : null;
+    const applyScope = docTitle && !isWorkspaceScope(docTitle);
+    const scopeTerm = applyScope ? `%${escapeLike(normalizeTopic(docTitle))}%` : null;
     const rows = await query<NotionPageRow>(
       `
       SELECT id, title, url, owner, status, doc_type, content
       FROM notion_pages
       WHERE
-        lower(coalesce(status, '')) LIKE '%block%'
-        OR lower(coalesce(status, '')) IN ('on hold', 'waiting', 'stuck')
-        OR lower(coalesce(title, '')) LIKE '%blocker%'
-        OR lower(coalesce(content, '')) LIKE '%ship blocker%'
-        OR lower(coalesce(content, '')) LIKE '%blocker comments%'
+        (
+          lower(coalesce(status, '')) LIKE '%block%'
+          OR lower(coalesce(status, '')) IN ('on hold', 'waiting', 'stuck')
+        )
         ${scopeTerm ? `AND (lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\' OR lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\')` : ""}
       ORDER BY
         CASE WHEN lower(coalesce(status, '')) LIKE '%block%' THEN 0 ELSE 1 END,
@@ -1070,51 +1560,14 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     );
 
     if (!rows.length) {
-      return `No pages with explicit **blocker** status or blocker mentions found${docTitle ? ` for "${docTitle}"` : ""} in synced Notion data.`;
+      return `No pages with **Blocked** or **On Hold** status found${docTitle && !isWorkspaceScope(docTitle) ? ` for "${docTitle}"` : " in synced Notion data"}.`;
     }
 
-    return `${formatListHeader(rows.length, `possible blockers / open issues${docTitle ? ` (${docTitle})` : ""}`)}\n\n${formatRows(
-      rows,
-      (row) => {
-        const snippet = contentSnippet(row.content, 280);
-        return `**${formatLink(row.title || "Untitled", row.url)}** — status: **${row.status || "not set"}**${row.owner ? ` · owner: ${row.owner}` : ""}${snippet ? `\n  ${snippet}` : ""}`;
-      },
-    )}`;
+    return formatBlockerListAnswer(rows, docTitle);
   }
 
   if (parsed.kind === "project_eta" && docTitle) {
-    const rows = await lookupByTitle(docTitle, true);
-    if (!rows.length) return null;
-
-    const lines = rows.slice(0, 8).map((row) => {
-      const body = extractPageBody(row.content, 800);
-      const dueMatch = (row.content || "").match(/due[^:\n]*:\s*([^\n]+)/i);
-      const dateMatch = (row.content || "").match(
-        /(?:target|launch|release|completion|deadline)[^:\n]*:\s*([^\n]+)/i,
-      );
-      const eta = dueMatch?.[1]?.trim() || dateMatch?.[1]?.trim();
-      return [
-        `**${formatLink(row.title || "Untitled", row.url)}**`,
-        `Status: **${row.status || "not set"}**`,
-        row.owner ? `Owner: ${row.owner}` : "",
-        eta ? `Date in page: ${eta}` : "_No ETA/deadline field found on this page_",
-        body ? `\n${body.slice(0, 400)}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
-    });
-
-    return [
-      `### ETA / completion — **${docTitle}**`,
-      "",
-      `_No single workspace-wide ETA is stored unless Notion pages include due dates. Related pages:_`,
-      "",
-      lines.join("\n\n---\n\n"),
-      "",
-      rows.some((r) => (r.content || "").match(/due|deadline|eta|completion date/i))
-        ? ""
-        : "\n**No explicit completion date** found in synced content for this project. Check the linked Notion pages or project tracker databases.",
-    ].join("\n");
+    return buildProjectEtaAnswer(docTitle);
   }
 
   if (parsed.kind === "project_summary" && docTitle) {

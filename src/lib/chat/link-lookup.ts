@@ -1,63 +1,166 @@
 import type { ChatHistoryItem } from "@/lib/ai/gemini";
 import { buildContextualSearchQuery } from "@/lib/chat/history";
+import {
+  containsPhrase,
+  extractAllBracketContents,
+  extractBracketContent,
+  extractMarkdownH2Title,
+  splitOnTitleSeparators,
+  splitWords,
+  stripLeadingPrefixes,
+  toLower,
+} from "@/lib/shared/text-utils";
+
+const LINK_PHRASES = [
+  "notion link",
+  "notion url",
+  " link",
+  " url",
+  "open in notion",
+  "share the link",
+  "share link",
+];
+
+const SKIP_BRACKET_TITLES = new Set([
+  "open in notion",
+  "database:",
+  "page:",
+  "[database",
+  "untitled",
+]);
+
+const PAGE_QUESTION_PREFIXES = [
+  "what is",
+  "what's",
+  "what are",
+  "tell me about",
+  "can you tell me about",
+  "summarize",
+  "summary of",
+  "explain",
+  "describe",
+  "structuring",
+];
+
+const MANAGER_QUESTION_STARTS = [
+  "who is the project manager",
+  "who is the project lead",
+  "who is the project owner",
+  "who is the manager",
+  "who is assigned",
+  "which is the project manager",
+];
+
+const TITLE_HEAD_PREFIXES = [
+  "what is",
+  "what's",
+  "what are",
+  "tell me about",
+  "can you tell me about",
+  "summarize",
+  "summary of",
+  "explain",
+  "describe",
+  "give me",
+];
 
 export function isNotionLinkRequest(message: string) {
-  return (
-    /\b(notion\s+)?(link|url)\b/i.test(message) ||
-    /\bopen\s+in\s+notion\b/i.test(message) ||
-    /\bshare\s+(?:the\s+)?(?:notion\s+)?link\b/i.test(message)
-  );
+  const lower = toLower(message);
+  return LINK_PHRASES.some((phrase) => containsPhrase(lower, phrase));
 }
 
-const SKIP_BRACKET_TITLE =
-  /^(?:open in notion|database:|page:|\[database|untitled)$/i;
+function isSkippedBracketTitle(title: string) {
+  const lower = toLower(title);
+  if (SKIP_BRACKET_TITLES.has(lower)) return true;
+  return lower.startsWith("[database");
+}
 
-const PAGE_QUESTION_PREFIX =
-  /^(?:what is|what's|what are|tell me about|can you tell me about|summarize|summary of|explain|describe|structuring)\b/i;
-
-const SKIP_USER_TURN_FOR_LINK =
-  /^(?:who|which)\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm|owner|assigned)\b/i;
+function hasDashOrColon(text: string) {
+  return text.includes("—") || text.includes("–") || text.includes("-") || text.includes(":");
+}
 
 function titleFromUserTurn(content: string) {
   const line = content.split("\n")[0]?.trim() ?? "";
   if (line.length < 8 || isNotionLinkRequest(line)) return null;
-  if (SKIP_USER_TURN_FOR_LINK.test(line)) return null;
 
-  if (PAGE_QUESTION_PREFIX.test(line) || /[—–-]/.test(line)) {
-    const head = line
-      .replace(
-        /^(?:what is|what's|what are|tell me about|can you tell me about|summarize|summary of|explain|describe|give me)\s+(?:the\s+)?/i,
-        "",
-      )
-      .split(/[—–:-]/)[0]
-      ?.trim();
+  const lower = toLower(line);
+  if (MANAGER_QUESTION_STARTS.some((start) => lower.startsWith(start))) return null;
+
+  const looksLikePageQuestion =
+    PAGE_QUESTION_PREFIXES.some((prefix) => lower.startsWith(prefix)) || hasDashOrColon(line);
+
+  if (looksLikePageQuestion) {
+    const head = splitOnTitleSeparators(
+      stripLeadingPrefixes(line, TITLE_HEAD_PREFIXES),
+    )[0];
     if (head && head.length >= 8) return head;
   }
 
-  if (line.length >= 12 && !/^(who|which|can i get)\b/i.test(line)) {
-    return line.split(/[—–:-]/)[0]?.trim() || line;
+  if (line.length >= 12 && !lower.startsWith("who ") && !lower.startsWith("which ") && !lower.startsWith("can i get")) {
+    return splitOnTitleSeparators(line)[0]?.trim() || line;
   }
 
   return null;
 }
 
+function extractTitleFromLinkPhrase(message: string) {
+  const lower = toLower(message);
+
+  const quoteMarkers = ['"', "'"];
+  for (const quote of quoteMarkers) {
+    const linkFor = `link for ${quote}`;
+    const urlFor = `url for ${quote}`;
+    const index = Math.max(lower.indexOf(linkFor), lower.indexOf(urlFor));
+    if (index === -1) continue;
+
+    const quoteStart = message.indexOf(quote, index);
+    if (quoteStart === -1) continue;
+
+    const quoteEnd = message.indexOf(quote, quoteStart + 1);
+    if (quoteEnd === -1) continue;
+
+    const title = message.slice(quoteStart + 1, quoteEnd).trim();
+    if (title.length >= 3) return title;
+  }
+
+  const triggers = ["link for ", "link of ", "link to ", "url for ", "url of ", "url to "];
+  for (const trigger of triggers) {
+    const index = lower.indexOf(trigger);
+    if (index === -1) continue;
+
+    let rest = message.slice(index + trigger.length).trim();
+    if (rest.toLowerCase().startsWith("the ")) rest = rest.slice(4).trim();
+    if (rest.toLowerCase().startsWith("page ")) rest = rest.slice(5).trim();
+
+    const end = Math.min(
+      rest.indexOf("?") === -1 ? rest.length : rest.indexOf("?"),
+      rest.length,
+    );
+    const title = rest.slice(0, end).trim();
+
+    const pronouns = new Set(["it", "this", "that"]);
+    if (title.length >= 3 && !pronouns.has(toLower(title))) return title;
+  }
+
+  return null;
+}
+
+function messageUsesPronoun(message: string) {
+  const words = splitWords(message).map((w) => toLower(w));
+  return words.includes("it") || words.includes("this") || words.includes("that");
+}
+
 /** Resolve page title from brackets, explicit text, or chat history ("link for it"). */
 export function extractReferencedTitle(message: string, history: ChatHistoryItem[]) {
-  const bracket = message.match(/\[([^\]]+)\]/);
-  if (bracket?.[1]) {
-    const title = bracket[1].trim();
-    if (title.length >= 3 && !SKIP_BRACKET_TITLE.test(title)) return title;
+  const fromBrackets = extractBracketContent(message);
+  if (fromBrackets && fromBrackets.length >= 3 && !isSkippedBracketTitle(fromBrackets)) {
+    return fromBrackets;
   }
 
-  const named =
-    message.match(/(?:link|url)\s+(?:of|for|to)\s+(?:the\s+)?(?:page\s+)?["']([^"']+)["']/i) ??
-    message.match(/(?:link|url)\s+(?:of|for|to)\s+(?:the\s+)?(.+?)(?:\?|$)/i);
-  if (named?.[1]) {
-    const title = named[1].trim();
-    if (title.length >= 3 && !/^(it|this|that)$/i.test(title)) return title;
-  }
+  const fromLinkPhrase = extractTitleFromLinkPhrase(message);
+  if (fromLinkPhrase) return fromLinkPhrase;
 
-  if (!/\b(it|this|that)\b/i.test(message)) return null;
+  if (!messageUsesPronoun(message)) return null;
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
     if (history[i].role !== "user") continue;
@@ -67,19 +170,15 @@ export function extractReferencedTitle(message: string, history: ChatHistoryItem
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
     if (history[i].role !== "bot") continue;
-    const heading = history[i].content.match(/^##\s+(.+?)(?:\n|$)/m);
-    if (heading?.[1]) {
-      const title = heading[1].trim();
-      if (title.length >= 3) return title;
-    }
+    const heading = extractMarkdownH2Title(history[i].content);
+    if (heading && heading.length >= 3) return heading;
   }
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
-    const brackets = history[i].content.match(/\[([^\]]+)\]/g);
-    if (!brackets?.length) continue;
+    const brackets = extractAllBracketContents(history[i].content);
     for (let j = brackets.length - 1; j >= 0; j -= 1) {
-      const last = brackets[j].slice(1, -1).trim();
-      if (last.length >= 3 && !SKIP_BRACKET_TITLE.test(last)) return last;
+      const title = brackets[j];
+      if (title.length >= 3 && !isSkippedBracketTitle(title)) return title;
     }
   }
 

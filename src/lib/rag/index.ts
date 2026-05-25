@@ -5,4 +5,10 @@
  */
 export { buildNotionContextForChat, prefetchPagesFromQuestion } from "@/lib/rag/build-context";
 export { semanticSearch } from "@/lib/rag/semantic-search";
-export { hybridChunkContext, hasNotionChunks } from "@/lib/rag/hybrid-search";
+export {
+  hybridChunkContext,
+  hybridChunkContextFromQueries,
+  hasNotionChunks,
+} from "@/lib/rag/hybrid-search";
+export { expandSearchQueries, isMultiQueryRagEnabled } from "@/lib/chat/multi-query";
+export { selectWithMMR, isMmrEnabled } from "@/lib/rag/mmr";

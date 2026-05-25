@@ -91,7 +91,7 @@ function toParsedQuery(question: string, data: ClassifiedIntent): ParsedQuery | 
 }
 
 const SYSTEM_PROMPT = `
-You classify questions about a synced Notion workspace into a strict JSON intent for a database router.
+You classify questions about NavGurukul's workplace Notion workspace (HRMS, leave policies, projects, onboarding, team docs) into a strict JSON intent for a database router.
 Return ONLY JSON. Do not answer the user's question.
 
 Allowed intents (use exactly one):

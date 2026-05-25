@@ -1,10 +1,10 @@
 /**
- * Rule-based question classifier (regex).
+ * Rule-based question classifier (legacy regex patterns).
  *
- * Input: raw user question string
- * Output: { kind, personName?, docTitle?, year?, ... }
+ * New code should prefer `@/lib/shared/text-utils` (plain string helpers) or the LLM
+ * classifier in `intent-classifier.ts`. Regex here is only for fast routing fallbacks.
  *
- * Called by `query/resolve-query.ts`. LLM classifier runs only when regex confidence is low.
+ * Flow: `resolve-query.ts` tries these rules first, then LLM when confidence is low.
  */
 export type { ParsedQuery, QueryKind, QuerySource } from "@/lib/query/types";
 
@@ -335,7 +335,7 @@ export function parseQueryByRules(question: string): RulesQuery {
   }
 
   const topicAssignedToPersonMatch = question.match(
-    /^(?!who\s+(?:is\s+)?assigned\s+to)(?!what\s+tasks?\s+assigned\s+to)(?:only\s+one\s+|one\s+|single\s+)?(?:tasks?|projects?|work|data|docs?|documents?|pages?)?\s*(?:of|for|in|on|about|related to)?\s*(.+?)\s+(?:assigned|assign|given)\s+to\s+(.+?)(?:\?|$)/i,
+    /^(?!who\s+(?:is\s+)?assigned\s+to)(?!what\s+tasks?\s+assigned\s+to)(?!which\s+project\s+.+\s+is\s+assigned)(?!what\s+project\s+.+\s+is\s+assigned)(?:only\s+one\s+|one\s+|single\s+)?(?:tasks?|projects?|work|data|docs?|documents?|pages?)?\s*(?:of|for|in|on|about|related to)?\s*(.+?)\s+(?:assigned|assign|given)\s+to\s+(.+?)(?:\?|$)/i,
   );
   if (topicAssignedToPersonMatch?.[1] && topicAssignedToPersonMatch?.[2]) {
     return {
@@ -387,11 +387,12 @@ export function parseQueryByRules(question: string): RulesQuery {
 
   if (
     /\b(?:what|which)\s+projects?\s+(?:is|are)\s+(.+?)\s+assigned\b/i.test(q) ||
+    /\b(?:what|which)\s+projects?\s+(.+?)\s+is\s+assigned(?:\s+to)?\b/i.test(q) ||
     /\bwhat\s+projects?\s+(?:is|are)\s+(.+?)\s+assigned\s+to\b/i.test(q)
   ) {
-    const assignedPersonMatch = question.match(
-      /(?:what|which)\s+projects?\s+(?:is|are)\s+(.+?)\s+assigned(?:\s+to)?/i,
-    );
+    const assignedPersonMatch =
+      question.match(/(?:what|which)\s+projects?\s+(?:is|are)\s+(.+?)\s+assigned(?:\s+to)?/i) ??
+      question.match(/(?:what|which)\s+projects?\s+(.+?)\s+is\s+assigned(?:\s+to)?/i);
     if (assignedPersonMatch?.[1]) {
       const person = cleanPersonName(assignedPersonMatch[1]);
       if (person) {
@@ -517,11 +518,20 @@ export function parseQueryByRules(question: string): RulesQuery {
 
   // blockers across workspace / project
   if (/\bblockers?\b/i.test(q)) {
-    const scope = extractAfter(question, [
-      /blockers?\s+(?:in|across|for)\s+(?:the\s+)?(?:projects?\s+in\s+)?(.+?)(?:\?|$)/i,
-      /(?:all|every)\s+(?:the\s+)?blockers?\s+(?:in|for)\s+(.+?)(?:\?|$)/i,
-    ]);
-    return { kind: "blocker_list", docTitle: scope ? stripDocWords(scope) : undefined, raw: question };
+    const workspaceWide =
+      /\b(?:navgurukul|ng)\b/i.test(q) && /\bworkspace\b/i.test(q);
+    const scope = workspaceWide
+      ? undefined
+      : extractAfter(question, [
+          /blockers?\s+(?:in|across|for)\s+(?:the\s+)?(?:projects?\s+in\s+)?(.+?)(?:\?|$)/i,
+          /(?:all|every)\s+(?:the\s+)?blockers?\s+(?:in|for)\s+(.+?)(?:\?|$)/i,
+          /blockers?\s+in\s+(?:the\s+)?(.+?)\s+projects?/i,
+        ]);
+    return {
+      kind: "blocker_list",
+      docTitle: scope ? stripDocWords(scope) : undefined,
+      raw: question,
+    };
   }
 
   // ETA / completion date for a named project

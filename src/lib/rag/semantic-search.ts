@@ -1,7 +1,22 @@
 import { escapeLike } from "@/lib/db/sql-utils";
 import { embedText } from "@/lib/ai/embeddings";
-import { hasNotionChunks, hybridChunkContext } from "@/lib/rag/hybrid-search";
+import {
+  hasNotionChunks,
+  hybridChunkContext,
+  hybridChunkContextFromQueries,
+} from "@/lib/rag/hybrid-search";
+import {
+  dedupeByTextOverlap,
+  isMmrEnabled,
+  parsePgVector,
+  selectWithMMR,
+  type MMRCandidate,
+} from "@/lib/rag/mmr";
 import { query } from "@/lib/db";
+import {
+  explicitTitleFromQuery,
+  titleCandidates,
+} from "@/lib/rag/search-titles";
 import { simplifySearchQuery } from "@/lib/shared/search-query";
 
 type SearchRow = {
@@ -29,6 +44,28 @@ function getTopK() {
   return Math.floor(readPositiveNumber(process.env.VECTOR_SEARCH_TOP_K, DEFAULT_TOP_K));
 }
 
+function getPageCandidateLimit() {
+  const topK = getTopK();
+  return Math.floor(readPositiveNumber(process.env.VECTOR_SEARCH_CANDIDATES, topK * 3));
+}
+
+function refinePageRows(rows: SearchRow[], topK: number): SearchRow[] {
+  if (!rows.length) return rows;
+
+  const candidates = rows.map((row) => ({
+    ...row,
+    id: row.id,
+    relevance: row.similarity ?? row.rank ?? 0,
+    embedding: parsePgVector((row as SearchRow & { embedding_literal?: string }).embedding_literal),
+    text: `${row.title ?? ""}\n${row.content ?? ""}`.slice(0, 8000),
+    page_id: row.id,
+  })) as (SearchRow & MMRCandidate)[];
+
+  const deduped = dedupeByTextOverlap(candidates, 0.85);
+  if (!isMmrEnabled()) return deduped.slice(0, topK);
+  return selectWithMMR(deduped, topK);
+}
+
 function getMinSimilarity() {
   return readPositiveNumber(process.env.VECTOR_SEARCH_MIN_SIMILARITY, DEFAULT_MIN_SIMILARITY);
 }
@@ -37,52 +74,6 @@ function getMaxContextChars() {
   return Math.floor(
     readPositiveNumber(process.env.VECTOR_SEARCH_MAX_CONTEXT_CHARS, DEFAULT_MAX_CONTEXT_CHARS),
   );
-}
-
-function explicitTitleFromQuery(searchQuery: string) {
-  const bracket = searchQuery.match(/\[([^\]]+)\]/);
-  if (bracket?.[1] && bracket[1].trim().length >= 3) return bracket[1].trim();
-
-  for (const line of searchQuery.split("\n")) {
-    const bullet = line.match(/^-\s+(.+)/);
-    if (!bullet) continue;
-    const text = bullet[1].trim();
-    if (text.startsWith("Current question:")) continue;
-    if (/\b(link|url|notion)\b/i.test(text) && text.length < 80) continue;
-    const head = text
-      .replace(
-        /^(what is|what's|summarize|summary of|explain|describe|tell me about|can i get|give me)\s+/i,
-        "",
-      )
-      .split(/[—–:-]/)[0]
-      ?.trim();
-    if (head && head.length >= 8) return head;
-  }
-
-  return null;
-}
-
-function titleCandidates(searchQuery: string) {
-  const normalized = searchQuery
-    .replace(/[“”]/g, "\"")
-    .replace(/[‘’]/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const splitCandidates = normalized
-    .split(/\s+(?:—|–|-|:)\s+/)
-    .map((part) => part.trim())
-    .filter((part) => part.length >= 3);
-
-  const questionRemoved = normalized
-    .replace(
-      /^(?:can you\s+)?(summarize|summary of|explain|describe|what is|what's|tell me about|provide me with|provide|give me|give all data of|give data of|show me|show)\s+/i,
-      "",
-    )
-    .replace(/\b(what is|what's|core idea|main idea|summary|explain|provide|details?)\b.*$/i, "")
-    .trim();
-
-  return Array.from(new Set([splitCandidates[0], questionRemoved, normalized].filter(Boolean))).slice(0, 3);
 }
 
 function titleKeywords(searchQuery: string) {
@@ -152,9 +143,10 @@ async function vectorSearch(searchQuery: string) {
 
   const vectorLiteral = `[${embedding.join(",")}]`;
   const topK = getTopK();
+  const cand = getPageCandidateLimit();
   const minSimilarity = getMinSimilarity();
 
-  const rows = await query<SearchRow>(
+  const rows = await query<SearchRow & { embedding_literal?: string }>(
     `
     SELECT
       id,
@@ -164,17 +156,18 @@ async function vectorSearch(searchQuery: string) {
       created_by,
       status,
       content,
-      1 - (embedding <=> $1::vector) AS similarity
+      1 - (embedding <=> $1::vector) AS similarity,
+      embedding::text AS embedding_literal
     FROM notion_pages
     WHERE embedding IS NOT NULL
       AND 1 - (embedding <=> $1::vector) >= $2
     ORDER BY embedding <=> $1::vector ASC
     LIMIT $3
     `,
-    [vectorLiteral, minSimilarity, topK],
+    [vectorLiteral, minSimilarity, cand],
   );
 
-  return rows;
+  return refinePageRows(rows, topK);
 }
 
 async function titleSearch(searchQuery: string) {
@@ -225,6 +218,7 @@ function mergeSearchRows(primary: SearchRow[], secondary: SearchRow[]) {
 
 async function fullTextSearch(searchQuery: string) {
   const topK = getTopK();
+  const cand = getPageCandidateLimit();
   const cleanedQuery = simplifySearchQuery(searchQuery);
 
   const rows = await query<SearchRow>(
@@ -258,10 +252,10 @@ async function fullTextSearch(searchQuery: string) {
     ORDER BY rank DESC
     LIMIT $2
     `,
-    [cleanedQuery, topK],
+    [cleanedQuery, cand],
   );
 
-  if (rows.length) return rows;
+  if (rows.length) return refinePageRows(rows, topK);
 
   const terms = cleanedQuery
     .split(/\s+/)
@@ -271,7 +265,7 @@ async function fullTextSearch(searchQuery: string) {
 
   if (!terms.length) return [];
 
-  return query<SearchRow>(
+  const fallback = await query<SearchRow>(
     `
     SELECT id, title, url, owner, created_by, status, content, 0 AS rank
     FROM notion_pages
@@ -292,12 +286,33 @@ async function fullTextSearch(searchQuery: string) {
       title ASC
     LIMIT $${terms.length + 1}
     `,
-    [...terms.map((term) => `%${term.replace(/[%_]/g, "\\$&")}%`), topK],
+    [...terms.map((term) => `%${term.replace(/[%_]/g, "\\$&")}%`), cand],
   );
+
+  return refinePageRows(fallback, topK);
 }
 
-export async function semanticSearch(searchQuery: string): Promise<string> {
-  const cleaned = searchQuery.trim();
+function normalizeSearchQueries(
+  searchQuery: string | string[],
+): { primary: string; all: string[] } {
+  const list = (Array.isArray(searchQuery) ? searchQuery : [searchQuery])
+    .map((q) => q.trim())
+    .filter(Boolean);
+
+  const seen = new Set<string>();
+  const all: string[] = [];
+  for (const q of list) {
+    const key = q.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    all.push(q);
+  }
+
+  return { primary: all[0] ?? "", all };
+}
+
+export async function semanticSearch(searchQuery: string | string[]): Promise<string> {
+  const { primary: cleaned, all: queries } = normalizeSearchQueries(searchQuery);
   if (!cleaned) return "";
 
   const explicitTitle = explicitTitleFromQuery(cleaned);
@@ -306,7 +321,10 @@ export async function semanticSearch(searchQuery: string): Promise<string> {
     : await titleSearch(cleaned);
 
   if (await hasNotionChunks()) {
-    const chunkPart = await hybridChunkContext(cleaned);
+    const chunkPart =
+      queries.length > 1
+        ? await hybridChunkContextFromQueries(queries)
+        : await hybridChunkContext(cleaned);
     if (chunkPart) {
       const titlePart = titleRows.length ? `${formatContext(titleRows)}\n\n---\n\n` : "";
       return `${titlePart}${chunkPart}`;
@@ -317,14 +335,30 @@ export async function semanticSearch(searchQuery: string): Promise<string> {
   const embeddingsAvailable = await hasEmbeddings();
 
   if (embeddingsAvailable) {
-    rows = await vectorSearch(cleaned);
+    const vectorSets = await Promise.all(queries.map((q) => vectorSearch(q)));
+    const seen = new Set<string>();
+    for (const set of vectorSets) {
+      for (const row of set) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        rows.push(row);
+      }
+    }
   }
 
   if (!rows.length) {
     if (process.env.NODE_ENV !== "production") {
       console.log("[search] using full-text fallback");
     }
-    rows = await fullTextSearch(cleaned);
+    const ftsSets = await Promise.all(queries.map((q) => fullTextSearch(q)));
+    const seen = new Set<string>();
+    for (const set of ftsSets) {
+      for (const row of set) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        rows.push(row);
+      }
+    }
   }
 
   rows = mergeSearchRows(titleRows, rows);

@@ -1,3 +1,5 @@
+import { keepLettersNumbersAndSpaces, splitWords, toLower } from "@/lib/shared/text-utils";
+
 /** Shared query cleanup for full-text and hybrid search. */
 export function simplifySearchQuery(searchQuery: string) {
   const stopWords = new Set([
@@ -37,12 +39,9 @@ export function simplifySearchQuery(searchQuery: string) {
     "whose",
   ]);
 
-  const keywords = searchQuery
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .map((word) => word.trim())
-    .filter((word) => word.length > 1 && !stopWords.has(word));
+  const keywords = splitWords(keepLettersNumbersAndSpaces(toLower(searchQuery))).filter(
+    (word) => word.length > 1 && !stopWords.has(word),
+  );
 
   return keywords.join(" ").trim() || searchQuery.trim();
 }

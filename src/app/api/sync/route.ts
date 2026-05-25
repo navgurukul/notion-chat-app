@@ -1,6 +1,6 @@
 import { NextResponse, NextRequest } from "next/server";
 import { isSessionResponse, requireSession } from "@/lib/auth";
-import { query } from "@/lib/db";
+import { getNotionLastSyncRun, query } from "@/lib/db";
 import { syncNotionToPostgres } from "@/lib/ingestion";
 
 type LastSyncRow = {
@@ -11,6 +11,11 @@ export async function GET() {
   try {
     const session = await requireSession();
     if (isSessionResponse(session)) return session;
+
+    const lastRun = await getNotionLastSyncRun();
+    if (lastRun) {
+      return NextResponse.json({ synced_at: lastRun });
+    }
 
     const rows = await query<LastSyncRow>(
       "SELECT MAX(synced_at)::text AS last_synced_at FROM notion_pages",
@@ -35,7 +40,9 @@ export async function POST(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const force = searchParams.get("force") === "true";
-    const embed = searchParams.get("embed") !== "false";
+    const embed =
+      searchParams.get("embed") === "true" &&
+      process.env.EMBEDDINGS_ENABLED !== "false";
     const refreshContent = searchParams.get("refreshContent") === "true";
 
     const result = await syncNotionToPostgres({ force, embed, refreshContent });

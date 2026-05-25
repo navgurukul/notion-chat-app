@@ -6,4 +6,10 @@ export {
   getJsonCompletion,
   type ChatHistoryItem,
 } from "@/lib/ai/gemini";
-export { embedText, embedBatch, buildEmbeddingText, EMBEDDING_DIMENSIONS } from "@/lib/ai/embeddings";
+export {
+  embedText,
+  embedBatch,
+  buildEmbeddingText,
+  EMBEDDING_DIMENSIONS,
+  isEmbeddingsEnabled,
+} from "@/lib/ai/embeddings";

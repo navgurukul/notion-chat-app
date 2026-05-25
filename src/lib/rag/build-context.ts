@@ -2,7 +2,7 @@
  * Build text context for Gemini: keyword page prefetch + chunk/vector search.
  */
 import { escapeLike, query } from "@/lib/db";
-import { extractCrossDocSummaryTopic } from "@/lib/query/normalize";
+import { extractQuestionTerms } from "@/lib/rag/question-terms";
 import { simplifySearchQuery } from "@/lib/shared/search-query";
 import { semanticSearch } from "@/lib/rag/semantic-search";
 
@@ -21,100 +21,23 @@ type PageRow = {
 const PREFETCH_LIMIT = 12;
 const BODY_SNIPPET_CHARS = 1200;
 
-/** Pull meaningful tokens from a natural-language question. */
-export function extractQuestionTerms(question: string) {
-  const stop = new Set([
-    "a",
-    "an",
-    "and",
-    "are",
-    "about",
-    "any",
-    "can",
-    "could",
-    "current",
-    "do",
-    "does",
-    "for",
-    "from",
-    "give",
-    "how",
-    "in",
-    "is",
-    "it",
-    "me",
-    "of",
-    "on",
-    "or",
-    "please",
-    "progress",
-    "show",
-    "status",
-    "summarize",
-    "summary",
-    "tell",
-    "the",
-    "this",
-    "to",
-    "what",
-    "when",
-    "where",
-    "which",
-    "who",
-    "why",
-    "you",
-    "your",
-  ]);
+const PROPERTIES_MARKER = "=== PROPERTIES ===";
+const CONTENT_MARKER = "=== CONTENT ===";
 
-  const tokens = question
-    .replace(/[“”‘’]/g, "'")
-    .replace(/[^a-zA-Z0-9'\s-]/g, " ")
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 2 && !stop.has(t.toLowerCase()));
+function stripNotionBodyMarkers(raw: string) {
+  let body = raw;
 
-  const phrases: string[] = [];
-  const progressMatch = question.match(
-    /(?:progress|status)\s+on\s+(?:the\s+(?:project\s+)?)?([a-zA-Z0-9][\w\s'-]{1,40})/i,
-  );
-  if (progressMatch?.[1]) phrases.push(progressMatch[1].trim());
-
-  const aboutMatch = question.match(
-    /(?:tell me about|about|regarding)\s+(?:the\s+)?([a-zA-Z0-9][\w\s'-]{2,60})/i,
-  );
-  if (aboutMatch?.[1]) phrases.push(aboutMatch[1].trim());
-
-  const crossDocTopic = extractCrossDocSummaryTopic(question);
-  if (crossDocTopic) phrases.unshift(crossDocTopic);
-
-  const moduleMatch = question.match(
-    /\b(?:for\s+)?(?:the\s+)?([a-zA-Z][\w\s'-]{2,40}?)\s+module\b/i,
-  );
-  if (moduleMatch?.[1]) {
-    const phrase = moduleMatch[1].replace(/^(?:this|that)\s+/i, "").trim();
-    if (phrase.length >= 3) {
-      phrases.push(phrase);
-      phrases.push(`${phrase} module`);
-    }
+  if (body.includes(PROPERTIES_MARKER) && body.includes(CONTENT_MARKER)) {
+    const contentIndex = body.indexOf(CONTENT_MARKER);
+    body = body.slice(contentIndex + CONTENT_MARKER.length);
   }
 
-  const paymentsMatch = question.match(/\bpayments?\b/i);
-  if (paymentsMatch) phrases.push("payment", "payments", "PRD");
-
-  const whyTopicMatch = question.match(
-    /\b(?:why|how)\b.+\b(?:for|in|on)\s+(?:the\s+)?([a-zA-Z][\w\s'-]{2,40})\b/i,
-  );
-  if (whyTopicMatch?.[1]) phrases.push(whyTopicMatch[1].trim());
-
-  return Array.from(new Set([...phrases, ...tokens])).slice(0, 8);
+  return body.split(PROPERTIES_MARKER).join("").split(CONTENT_MARKER).join("").trim();
 }
 
 function formatPageSection(row: PageRow) {
   const title = row.title || "Untitled";
-  const body = (row.content || "")
-    .replace(/=== PROPERTIES ===[\s\S]*?=== CONTENT ===/g, "")
-    .replace(/=== PROPERTIES ===|=== CONTENT ===/g, "")
-    .trim();
+  const body = stripNotionBodyMarkers(row.content || "");
   const snippet =
     body.length > BODY_SNIPPET_CHARS ? `${body.slice(0, BODY_SNIPPET_CHARS)}...` : body;
 
@@ -223,10 +146,15 @@ export async function prefetchPagesFromQuestion(question: string): Promise<strin
  * Unified context for the LLM: database pages first, then chunk/vector search.
  * Ensures answers can use real synced Notion data even when embeddings are sparse.
  */
-export async function buildNotionContextForChat(searchQuery: string): Promise<string> {
+export async function buildNotionContextForChat(
+  searchQuery: string | string[],
+): Promise<string> {
+  const queries = Array.isArray(searchQuery) ? searchQuery : [searchQuery];
+  const primary = queries.find((q) => q.trim())?.trim() ?? "";
+
   const [prefetch, semantic] = await Promise.all([
-    prefetchPagesFromQuestion(searchQuery),
-    semanticSearch(searchQuery),
+    prefetchPagesFromQuestion(primary),
+    semanticSearch(queries.length > 1 ? queries : primary),
   ]);
 
   if (!prefetch && !semantic) return "";

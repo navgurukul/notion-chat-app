@@ -79,14 +79,22 @@ export default function ChatPage() {
   }, [status, router]);
 
   useEffect(() => {
+    const tick = () => setSyncClock(Date.now());
+    const intervalId = setInterval(tick, 30_000);
+    const onFocus = () => tick();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
+
+  useEffect(() => {
     if (status !== "authenticated") return;
 
     const loadInitialData = async () => {
       setIsLoadingChats(true);
       try {
-        const stored = localStorage.getItem(LAST_SYNC_STORAGE_KEY);
-        if (stored) setLastSyncedAt(stored);
-
         const [syncResponse, chatsResponse] = await Promise.all([
           fetch("/api/sync"),
           fetch("/api/chats"),
@@ -96,8 +104,12 @@ export default function ChatPage() {
           const data = await syncResponse.json();
           if (typeof data?.synced_at === "string" && data.synced_at) {
             setLastSyncedAt(data.synced_at);
+            setSyncClock(Date.now());
             localStorage.setItem(LAST_SYNC_STORAGE_KEY, data.synced_at);
           }
+        } else {
+          const stored = localStorage.getItem(LAST_SYNC_STORAGE_KEY);
+          if (stored) setLastSyncedAt(stored);
         }
 
         if (!chatsResponse.ok) throw new Error("Failed to load chats");
@@ -440,7 +452,9 @@ export default function ChatPage() {
 
   const handleLogout = async () => {
     setThinkingByMessage({});
-    signOut();
+    localStorage.removeItem(LAST_SYNC_STORAGE_KEY);
+    localStorage.removeItem(LAST_CHAT_SESSION_KEY);
+    await signOut({ callbackUrl: "/login" });
   };
 
   const runSync = async (mode: "incremental" | "full") => {
@@ -452,7 +466,7 @@ export default function ChatPage() {
     const params =
       mode === "full"
         ? "force=true&refreshContent=true&embed=true"
-        : "refreshContent=true&embed=true";
+        : "embed=true";
 
     try {
       const response = await fetch(`/api/sync?${params}`, { method: "POST" });
@@ -486,16 +500,28 @@ export default function ChatPage() {
     runSync("full");
   };
 
+  const parseSyncTimestamp = (value: string) => {
+    const trimmed = value.trim();
+    if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(trimmed)) {
+      return new Date(trimmed).getTime();
+    }
+    if (trimmed.includes("T")) {
+      return new Date(trimmed).getTime();
+    }
+    return new Date(trimmed.replace(" ", "T") + "Z").getTime();
+  };
+
   const formatRelativeSyncTime = (isoTime: string | null) => {
     if (!isoTime) return "Last synced: never";
-    const syncTime = new Date(isoTime).getTime();
+    const syncTime = parseSyncTimestamp(isoTime);
     if (!Number.isFinite(syncTime)) return "Last synced: unknown";
 
-    const now = syncClock;
-    const diffMs = Math.max(0, now - syncTime);
+    const diffMs = Math.max(0, syncClock - syncTime);
+    const diffSec = Math.floor(diffMs / 1000);
     const diffMins = Math.floor(diffMs / 60000);
 
-    if (diffMins < 1) return "Last synced: just now";
+    if (diffSec < 15) return "Last synced: just now";
+    if (diffSec < 60) return `Last synced: ${diffSec} sec ago`;
     if (diffMins < 60) return `Last synced: ${diffMins} min ago`;
 
     const diffHours = Math.floor(diffMins / 60);
@@ -503,6 +529,13 @@ export default function ChatPage() {
 
     const diffDays = Math.floor(diffHours / 24);
     return `Last synced: ${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
+  };
+
+  const formatSyncTimeTitle = (isoTime: string | null) => {
+    if (!isoTime) return "No sync recorded yet";
+    const syncTime = parseSyncTimestamp(isoTime);
+    if (!Number.isFinite(syncTime)) return isoTime;
+    return new Date(syncTime).toLocaleString();
   };
 
   if (status === "loading") {
@@ -531,8 +564,9 @@ export default function ChatPage() {
               <h3 className="text-xl font-bold">Full rebuild?</h3>
             </div>
             <p className="text-white/60 text-sm mb-8 leading-relaxed">
-              This re-syncs every Notion page and can take hours. Use{" "}
-              <span className="text-white/80">Sync changes</span> for routine updates.
+              This re-syncs every Notion page from Notion and rebuilds embeddings.
+              It can take many hours. For routine updates use{" "}
+              <span className="text-white/80">Sync changes</span> (also embeds when enabled in server .env).
             </p>
             <div className="flex gap-3">
               <button
@@ -617,9 +651,9 @@ export default function ChatPage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <h3 className="text-xl font-bold mb-2">Erase Chat History?</h3>
+            <h3 className="text-xl font-bold mb-2">Sign out?</h3>
             <p className="text-white/60 text-sm mb-6 leading-relaxed">
-              Your chats are now stored securely in PostgreSQL. Logging out will end this session, but it will not delete saved chat history.
+              You will be logged out of this browser session. Your saved chats in PostgreSQL are not deleted.
             </p>
             <div className="flex gap-3">
               <button
@@ -662,6 +696,15 @@ export default function ChatPage() {
               <p className="text-sm font-medium truncate">{session.user?.name}</p>
               <p className="text-xs text-white/40 truncate">{session.user?.email}</p>
             </div>
+            <button
+              type="button"
+              onClick={() => setShowLogoutConfirm(true)}
+              className="shrink-0 p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
 
           <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3 space-y-3">
@@ -705,8 +748,11 @@ export default function ChatPage() {
                       : "Sync Notion"}
               </span>
             </button>
-            <p className="mt-2 px-1 text-[10px] text-white/45 leading-snug">
-              {formatRelativeSyncTime(lastSyncedAt)}
+            <p
+              className="mt-2 px-1 text-[10px] text-white/45 leading-snug"
+              title={formatSyncTimeTitle(lastSyncedAt)}
+            >
+              {isSyncing ? "Sync in progress…" : formatRelativeSyncTime(lastSyncedAt)}
             </p>
             <button
               type="button"
@@ -782,11 +828,12 @@ export default function ChatPage() {
 
         <div className="p-4 border-t border-white/10">
           <button
+            type="button"
             onClick={() => setShowLogoutConfirm(true)}
-            className="w-full p-3 rounded-xl flex items-center gap-3 text-white/60 hover:text-white hover:bg-white/5 transition-colors"
+            className="w-full p-3 rounded-xl flex items-center justify-center gap-2 border border-white/10 bg-white/5 text-white/70 hover:text-white hover:bg-white/[0.08] transition-colors font-medium text-sm"
           >
-            <LogOut className="w-5 h-5" />
-            Sign Out
+            <LogOut className="w-4 h-4" />
+            Log out
           </button>
         </div>
       </aside>

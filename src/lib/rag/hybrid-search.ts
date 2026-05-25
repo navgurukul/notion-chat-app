@@ -1,5 +1,12 @@
 import { embedText } from "@/lib/ai/embeddings";
 import { query } from "@/lib/db";
+import {
+  dedupeByTextOverlap,
+  isMmrEnabled,
+  parsePgVector,
+  selectWithMMR,
+  type MMRCandidate,
+} from "@/lib/rag/mmr";
 import { simplifySearchQuery } from "@/lib/shared/search-query";
 
 type ChunkHybridRow = {
@@ -16,6 +23,7 @@ type ChunkHybridRow = {
   sem_score: number;
   kw_score: number;
   final_score: number;
+  embedding_literal?: string | null;
 };
 
 function readPositiveNumber(value: string | undefined, fallback: number) {
@@ -28,7 +36,27 @@ function getHybridTopK() {
 }
 
 function getHybridCandidateLimit() {
-  return Math.floor(readPositiveNumber(process.env.HYBRID_CHUNK_CANDIDATES, 40));
+  return Math.floor(readPositiveNumber(process.env.HYBRID_CHUNK_CANDIDATES, 60));
+}
+
+function refineChunkResults(rows: ChunkHybridRow[], topK: number) {
+  if (!rows.length) return rows;
+
+  const candidates: (ChunkHybridRow & MMRCandidate)[] = rows.map((row) => ({
+    ...row,
+    id: row.chunk_id,
+    relevance: row.final_score,
+    embedding: parsePgVector(row.embedding_literal),
+    text: row.chunk_content ?? "",
+    page_id: row.page_id,
+  }));
+
+  const deduped = dedupeByTextOverlap(candidates, 0.88);
+  if (!isMmrEnabled()) {
+    return deduped.slice(0, topK);
+  }
+
+  return selectWithMMR(deduped, topK);
 }
 
 function getMaxContextChars() {
@@ -92,16 +120,31 @@ function formatChunkContext(rows: ChunkHybridRow[]) {
   return sections.join("\n\n---\n\n");
 }
 
+/** Merge chunk rows from multiple queries; keep the best score per chunk. */
+export function mergeHybridChunkRows(rowSets: ChunkHybridRow[][]): ChunkHybridRow[] {
+  const byId = new Map<string, ChunkHybridRow>();
+
+  for (const rows of rowSets) {
+    for (const row of rows) {
+      const existing = byId.get(row.chunk_id);
+      if (!existing || row.final_score > existing.final_score) {
+        byId.set(row.chunk_id, row);
+      }
+    }
+  }
+
+  return [...byId.values()].sort((a, b) => b.final_score - a.final_score);
+}
+
 /**
- * Hybrid retrieval over `notion_chunks`: vector similarity + FTS, merged with weighted score.
+ * Hybrid retrieval over `notion_chunks` (raw rows, before MMR).
  * Falls back to FTS-only when the query embedding is unavailable.
  */
-export async function hybridChunkContext(searchQuery: string): Promise<string | null> {
+export async function fetchHybridChunkRows(searchQuery: string): Promise<ChunkHybridRow[]> {
   const raw = searchQuery.trim();
-  if (!raw) return null;
+  if (!raw) return [];
 
   const ftsInput = simplifySearchQuery(raw).trim() || raw.trim();
-  const topK = getHybridTopK();
   const cand = getHybridCandidateLimit();
   const wSem = getSemWeight();
   const wKw = getKwWeight();
@@ -110,10 +153,8 @@ export async function hybridChunkContext(searchQuery: string): Promise<string | 
   const embedding = await embedText(raw);
   const vectorLiteral = embedding ? `[${embedding.join(",")}]` : null;
 
-  let rows: ChunkHybridRow[];
-
   if (vectorLiteral) {
-    rows = await query<ChunkHybridRow>(
+    return query<ChunkHybridRow>(
       `
       WITH sem AS (
         SELECT
@@ -122,7 +163,7 @@ export async function hybridChunkContext(searchQuery: string): Promise<string | 
         FROM notion_chunks c
         WHERE c.embedding IS NOT NULL
         ORDER BY c.embedding <=> $1::vector ASC
-        LIMIT $4
+        LIMIT $3
       ),
       kw AS (
         SELECT
@@ -131,7 +172,7 @@ export async function hybridChunkContext(searchQuery: string): Promise<string | 
         FROM notion_chunks c
         WHERE c.fts @@ plainto_tsquery('english', $2)
         ORDER BY kw_score DESC NULLS LAST
-        LIMIT $4
+        LIMIT $3
       ),
       ids AS (
         SELECT id FROM sem
@@ -151,7 +192,8 @@ export async function hybridChunkContext(searchQuery: string): Promise<string | 
         p.status,
         COALESCE(sem.sem_score, 0)::float8 AS sem_score,
         COALESCE(kw.kw_score, 0)::float8 AS kw_score,
-        (($5 * COALESCE(sem.sem_score, 0) + $6 * COALESCE(kw.kw_score, 0)) / $7)::float8 AS final_score
+        (($4 * COALESCE(sem.sem_score, 0) + $5 * COALESCE(kw.kw_score, 0)) / $6)::float8 AS final_score,
+        c.embedding::text AS embedding_literal
       FROM ids
       JOIN notion_chunks c ON c.id = ids.id
       JOIN notion_pages p ON p.id = c.page_id
@@ -160,10 +202,11 @@ export async function hybridChunkContext(searchQuery: string): Promise<string | 
       ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
       LIMIT $3
       `,
-      [vectorLiteral, ftsInput, topK, cand, wSem, wKw, wSum],
+      [vectorLiteral, ftsInput, cand, wSem, wKw, wSum],
     );
-  } else {
-    rows = await query<ChunkHybridRow>(
+  }
+
+  return query<ChunkHybridRow>(
       `
       SELECT
         c.id AS chunk_id,
@@ -185,10 +228,45 @@ export async function hybridChunkContext(searchQuery: string): Promise<string | 
       ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
       LIMIT $2
       `,
-      [ftsInput, topK],
+      [ftsInput, cand],
     );
+}
+
+/**
+ * Multi-Query RAG: run hybrid search for each query, merge, then MMR + format.
+ */
+export async function hybridChunkContextFromQueries(
+  searchQueries: string[],
+): Promise<string | null> {
+  const unique = [
+    ...new Set(searchQueries.map((q) => q.trim()).filter(Boolean)),
+  ];
+  if (!unique.length) return null;
+
+  const topK = getHybridTopK();
+  const rowSets = await Promise.all(unique.map((q) => fetchHybridChunkRows(q)));
+  const merged = mergeHybridChunkRows(rowSets);
+
+  if (!merged.length) return null;
+
+  const refined = refineChunkResults(merged, topK);
+
+  if (process.env.NODE_ENV !== "production") {
+    console.log("[retrieval] multi_query_chunks", {
+      queries: unique.length,
+      candidates: merged.length,
+      selected: refined.length,
+      mmr: isMmrEnabled(),
+    });
   }
 
-  if (!rows.length) return null;
-  return formatChunkContext(rows);
+  return formatChunkContext(refined);
+}
+
+/**
+ * Hybrid retrieval over `notion_chunks`: vector similarity + FTS, merged with weighted score.
+ * Falls back to FTS-only when the query embedding is unavailable.
+ */
+export async function hybridChunkContext(searchQuery: string): Promise<string | null> {
+  return hybridChunkContextFromQueries([searchQuery]);
 }

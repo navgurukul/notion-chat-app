@@ -1,3 +1,10 @@
+import {
+  extractBetweenMarkers,
+  removeStreamMarkers,
+  splitParagraphs,
+  toLower,
+} from "@/lib/shared/text-utils";
+
 export const STREAM_TAGS = {
   thinkingStart: "[[THINKING]]",
   thinkingEnd: "[[/THINKING]]",
@@ -5,16 +12,38 @@ export const STREAM_TAGS = {
   answerEnd: "[[/ANSWER]]",
 } as const;
 
-const STREAM_TAG_PATTERN = /\[\[(?:\/)?(?:THINKING|ANSWER)\]\]/gi;
-const INTERNAL_REASONING_PREFIX =
-  /^(?:the user is asking|i will scan|i need to search|let me search)[\s\S]*?(?=\n\n|\n#|\n-|\n\*|$)/i;
+const INTERNAL_REASONING_STARTS = [
+  "the user is asking",
+  "i will scan",
+  "i need to search",
+  "let me search",
+];
+
+function stripInternalReasoningPrefix(text: string) {
+  const lower = toLower(text);
+  for (const start of INTERNAL_REASONING_STARTS) {
+    if (!lower.startsWith(start)) continue;
+
+    const doubleNewline = text.indexOf("\n\n");
+    const hashLine = text.indexOf("\n#");
+    const dashLine = text.indexOf("\n-");
+    const starLine = text.indexOf("\n*");
+
+    const cutPoints = [doubleNewline, hashLine, dashLine, starLine].filter((n) => n > 0);
+    const cutAt = cutPoints.length > 0 ? Math.min(...cutPoints) : text.length;
+
+    return text.slice(cutAt).trim();
+  }
+
+  return text.trim();
+}
 
 export function stripStreamTags(text: string) {
-  return text.replace(STREAM_TAG_PATTERN, "");
+  return removeStreamMarkers(text);
 }
 
 export function stripInternalReasoning(text: string) {
-  return text.replace(INTERNAL_REASONING_PREFIX, "").trim();
+  return stripInternalReasoningPrefix(text);
 }
 
 /** Collapse accidental full-text repeats from stream parsing. */
@@ -29,28 +58,47 @@ export function dedupeRepeatedAnswer(text: string) {
     return first;
   }
 
-  const paragraphs = trimmed.split(/\n{2,}/);
+  const paragraphs = splitParagraphs(trimmed);
   const unique: string[] = [];
-  for (const p of paragraphs) {
-    const norm = p.trim().toLowerCase();
-    if (!norm) continue;
-    if (unique.some((u) => u.trim().toLowerCase() === norm)) continue;
-    unique.push(p);
+  const seen = new Set<string>();
+
+  for (const paragraph of paragraphs) {
+    const norm = toLower(paragraph);
+    if (!norm || seen.has(norm)) continue;
+    seen.add(norm);
+    unique.push(paragraph);
   }
+
   return unique.join("\n\n");
 }
 
 /** Extract the final answer from a streamed model response (client display + server persistence). */
 export function extractFinalAnswer(rawBuffer: string) {
-  const answerBlock = rawBuffer.match(/\[\[ANSWER\]\]([\s\S]*?)(?:\[\[\/ANSWER\]\]|$)/i)?.[1];
+  const answerBlock = extractBetweenMarkers(
+    rawBuffer,
+    STREAM_TAGS.answerStart,
+    STREAM_TAGS.answerEnd,
+  );
+
   let result = "";
 
-  if (answerBlock?.trim()) {
+  if (answerBlock) {
     result = stripInternalReasoning(stripStreamTags(answerBlock));
   } else {
-    const afterThinking = rawBuffer
-      .replace(/\[\[THINKING\]\][\s\S]*?\[\[\/THINKING\]\]/i, "")
-      .trim();
+    let afterThinking = rawBuffer;
+    const thinkingBlock = extractBetweenMarkers(
+      rawBuffer,
+      STREAM_TAGS.thinkingStart,
+      STREAM_TAGS.thinkingEnd,
+    );
+    if (thinkingBlock !== null) {
+      const start = rawBuffer.toUpperCase().indexOf(STREAM_TAGS.thinkingStart);
+      const end = rawBuffer.toUpperCase().indexOf(STREAM_TAGS.thinkingEnd);
+      if (start !== -1 && end !== -1) {
+        afterThinking = rawBuffer.slice(end + STREAM_TAGS.thinkingEnd.length).trim();
+      }
+    }
+
     if (afterThinking) {
       result = stripInternalReasoning(stripStreamTags(afterThinking));
     }

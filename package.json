@@ -11,6 +11,7 @@
     "export:notion": "tsx scripts/notion-to-s3.ts",
     "search:s3": "tsx scripts/search-s3.ts",
     "sync:notion": "tsx scripts/sync-notion.ts",
+    "sync:notion:full": "tsx scripts/sync-notion.ts --force --refresh-content",
     "embed:missing": "tsx scripts/embed-missing.ts",
     "verify:chat-routes": "tsx scripts/verify-chat-routes.ts",
     "test:e2e": "tsx scripts/e2e-pipeline-test.ts",

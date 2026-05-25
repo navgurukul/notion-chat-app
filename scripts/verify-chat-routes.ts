@@ -20,7 +20,7 @@ const CASES: Array<{
   {
     question: "What projects is Tamanna assigned to?",
     expectKind: "assigned_list",
-    mustInclude: ["Tamanna"],
+    mustInclude: ["Tamanna", "DataPivots"],
   },
   {
     question: "can you tell me about Employee Onboarding Hub",
@@ -40,7 +40,7 @@ const CASES: Array<{
   {
     question: "What is the ETA for completion of the project journaling app?",
     expectKind: "project_eta",
-    mustInclude: ["Journaling"],
+    mustInclude: ["Journaling", "Play Store"],
   },
   {
     question: "Who is the most active team member in Stub?",
@@ -132,6 +132,11 @@ const CASES: Array<{
     question: "which project komal is working currently",
     expectKind: "activity_summary",
     mustInclude: ["komal", "Reflection"],
+  },
+  {
+    question: "which project komal is assigned to ?",
+    expectKind: "assigned_list",
+    mustInclude: ["komal", "Reflection Platform"],
   },
   {
     question: "Compare Oscar MVP and Oscar App — what's the difference in scope?",

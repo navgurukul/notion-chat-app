@@ -1,41 +1,94 @@
+import {
+  containsAnyPhrase,
+  containsPhrase,
+  extractYear,
+  splitWords,
+  toLower,
+} from "@/lib/shared/text-utils";
+
 export function extractYearFromQuestion(question: string): number | undefined {
-  const match = question.match(/\b(20\d{2})\b/);
-  if (!match?.[1]) return undefined;
-  const year = Number.parseInt(match[1], 10);
-  return year >= 2020 && year <= 2099 ? year : undefined;
+  return extractYear(question);
 }
 
-/** Remove trailing "in (year) 2025" from a captured person name. */
-export function stripYearSuffixFromPerson(value: string): string {
-  return value
-    .replace(/\s+in\s+(?:the\s+)?(?:year\s+)?(20\d{2})\s*$/i, "")
-    .replace(/\s+(?:for|during)\s+(?:the\s+)?(?:year\s+)?(20\d{2})\s*$/i, "")
-    .trim();
+const YEAR_SUFFIX_TRIGGERS = [" in ", " for ", " during "];
+
+/** Remove trailing "in 2025" / "for the year 2025" from a captured person name. */
+export function stripYearSuffixFromPerson(value: string) {
+  let text = value.trim();
+
+  for (const trigger of YEAR_SUFFIX_TRIGGERS) {
+    const lower = toLower(text);
+    const index = lower.lastIndexOf(trigger);
+    if (index === -1) continue;
+
+    const tail = text.slice(index + trigger.length).trim();
+    const tailWords = splitWords(tail);
+
+    if (tailWords[0]?.toLowerCase() === "the") tailWords.shift();
+    if (tailWords[0]?.toLowerCase() === "year") tailWords.shift();
+
+    const yearWord = tailWords[0];
+    const year = yearWord ? Number.parseInt(yearWord, 10) : NaN;
+
+    if (year >= 2020 && year <= 2099) {
+      text = text.slice(0, index).trim();
+    }
+  }
+
+  return text;
 }
 
-const CROSS_DOC_NOISE = /^(?:main|the|themes?|all|across|related|docs?|documents?|pages?)$/i;
+const CROSS_DOC_NOISE = new Set([
+  "main",
+  "the",
+  "theme",
+  "themes",
+  "all",
+  "across",
+  "related",
+  "doc",
+  "docs",
+  "document",
+  "documents",
+  "page",
+  "pages",
+]);
+
+function isCrossDocNoiseWord(word: string) {
+  return CROSS_DOC_NOISE.has(toLower(word));
+}
+
+function wordBeforePhrase(text: string, phrase: string) {
+  const lower = toLower(text);
+  const index = lower.indexOf(toLower(phrase));
+  if (index === -1) return null;
+
+  const before = text.slice(0, index).trim();
+  const words = splitWords(before);
+  if (!words.length) return null;
+
+  let candidate = words[words.length - 1];
+  if (candidate.endsWith("-related")) {
+    candidate = candidate.slice(0, "-related".length);
+  }
+
+  if (!candidate || isCrossDocNoiseWord(candidate)) return null;
+  return candidate.trim();
+}
 
 /** Project/product name from "Zuvy-related docs", "themes across all Oscar pages", etc. */
 export function extractCrossDocSummaryTopic(question: string): string | undefined {
   const q = question.trim();
 
-  const relatedMatch = q.match(/\b([A-Za-z][\w'-]{1,40})-related\s+(?:docs?|documents?|pages?)\b/i);
-  if (relatedMatch?.[1] && !CROSS_DOC_NOISE.test(relatedMatch[1])) {
-    return relatedMatch[1].trim();
-  }
+  const fromRelated = wordBeforePhrase(q, "-related docs") ?? wordBeforePhrase(q, "-related documents");
+  if (fromRelated) return fromRelated;
 
-  const acrossMatch = q.match(
-    /\bacross\s+all\s+(?:the\s+)?([A-Za-z][\w'-]{1,40})(?:-related)?\s+(?:docs?|documents?|pages?)\b/i,
-  );
-  if (acrossMatch?.[1] && !CROSS_DOC_NOISE.test(acrossMatch[1])) {
-    return acrossMatch[1].trim();
-  }
+  const fromAcross = wordBeforePhrase(q, " across all ");
+  if (fromAcross && containsPhrase(q, "doc")) return fromAcross;
 
-  const themesMatch = q.match(
-    /\b(?:main\s+)?themes?\s+across\s+(?:all\s+)?(?:the\s+)?([A-Za-z][\w'-]{1,40})(?:-related)?(?:\s+(?:docs?|documents?|pages?))?\b/i,
-  );
-  if (themesMatch?.[1] && !CROSS_DOC_NOISE.test(themesMatch[1])) {
-    return themesMatch[1].trim();
+  if (containsPhrase(q, "themes across")) {
+    const topic = wordBeforePhrase(q, " themes across ");
+    if (topic) return topic;
   }
 
   return undefined;
@@ -43,22 +96,39 @@ export function extractCrossDocSummaryTopic(question: string): string | undefine
 
 export function isCrossDocSummaryQuestion(question: string): boolean {
   if (extractCrossDocSummaryTopic(question)) return true;
-  const q = question.toLowerCase();
-  return (
-    (/\b(across\s+all|main\s+themes|themes\s+across|all\s+.+\s+related)\b/.test(q) ||
-      /\b.related\s+(?:docs?|documents?|pages?)\b/.test(q)) &&
-    /\b(summarize|summary|summarise|themes?|overview)\b/.test(q)
-  );
+
+  const q = toLower(question);
+  const hasCrossDocPhrase = containsAnyPhrase(q, [
+    "across all",
+    "main themes",
+    "themes across",
+    "related docs",
+    "related documents",
+    "related pages",
+  ]);
+
+  const hasSummaryPhrase = containsAnyPhrase(q, [
+    "summarize",
+    "summary",
+    "summarise",
+    "theme",
+    "themes",
+    "overview",
+  ]);
+
+  return hasCrossDocPhrase && hasSummaryPhrase;
 }
 
-/** Reject phrase-like captures that are not a single Notion page title (not a strict length cap). */
+/** Reject phrase-like captures that are not a single Notion page title. */
 export function looksLikeSinglePageTitle(title: string): boolean {
   const t = title.trim();
   if (t.length < 4) return false;
-  // Real Notion titles can be long; only block absurdly long captures (runaway regex).
-  if (t.split(/\s+/).length > 45 || t.length > 280) return false;
-  if (/\b(across\s+all|main\s+themes|related\s+docs?|all\s+.+\s+related)\b/i.test(t)) {
-    return false;
-  }
+  if (splitWords(t).length > 45 || t.length > 280) return false;
+
+  const lower = toLower(t);
+  if (containsPhrase(lower, "across all")) return false;
+  if (containsPhrase(lower, "main themes")) return false;
+  if (containsPhrase(lower, "related doc")) return false;
+
   return true;
 }

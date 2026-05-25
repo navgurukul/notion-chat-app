@@ -7,12 +7,17 @@ import { sanitizeChatHistory } from "@/lib/chat/history";
 import {
   extractReferencedTitle,
   isNotionLinkRequest,
-  resolveSemanticSearchQuery,
 } from "@/lib/chat/link-lookup";
+import { expandSearchQueries } from "@/lib/chat/multi-query";
+import { reformulateSearchQuery } from "@/lib/chat/query-reformulation";
 import { streamGeminiAnswer } from "@/lib/chat/stream-response";
 import { resolveQuery } from "@/lib/query/resolve-query";
 import type { ParsedQuery } from "@/lib/query/types";
-import { handleMetadataQuery, lookupPageLinkByTitle } from "@/lib/sql/answers";
+import {
+  handleMetadataQuery,
+  isWeakProjectEtaAnswer,
+  lookupPageLinkByTitle,
+} from "@/lib/sql/answers";
 import { buildNotionContextForChat } from "@/lib/rag/build-context";
 
 export type ChatRequestBody = {
@@ -33,7 +38,7 @@ type PipelineContext = {
  * 1. Link shortcut (no AI)
  * 2. Classify question (router)
  * 3. SQL answer when possible
- * 4. RAG context + Gemini stream
+ * 4. History-aware query reformulation → RAG retrieval → LLM stream
  */
 export async function runChatPipeline(session: Session, body: ChatRequestBody) {
   const message = validateMessage(body.message);
@@ -139,12 +144,18 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
 
   const directAnswer = await handleMetadataQuery(parsed);
   if (directAnswer) {
-    if (process.env.NODE_ENV !== "production") {
-      console.log(
-        `[chat] mode=${parsed.kind} search=sql_direct answer_chars=${directAnswer.length}`,
-      );
+    if (parsed.kind === "project_eta" && isWeakProjectEtaAnswer(directAnswer)) {
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[chat] mode=project_eta search=sql_weak fallback=semantic");
+      }
+    } else {
+      if (process.env.NODE_ENV !== "production") {
+        console.log(
+          `[chat] mode=${parsed.kind} search=sql_direct answer_chars=${directAnswer.length}`,
+        );
+      }
+      return jsonAnswer(ctx.sessionId, directAnswer);
     }
-    return jsonAnswer(ctx.sessionId, directAnswer);
   }
 
   if (STRUCTURED_QUERY_KINDS.has(parsed.kind) && parsed.docTitle?.trim()) {
@@ -162,12 +173,35 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
 }
 
 async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
-  let searchQuery = resolveSemanticSearchQuery(ctx.message, ctx.history);
+  const { searchQuery: reformulated, method } = await reformulateSearchQuery(
+    ctx.message,
+    ctx.history,
+  );
+
+  let searchQuery = reformulated;
   if (parsed.kind === "semantic" && parsed.docTitle?.trim()) {
-    searchQuery = `${parsed.docTitle.trim()} ${searchQuery}`;
+    const title = parsed.docTitle.trim();
+    const lower = searchQuery.toLowerCase();
+    if (!lower.includes(title.toLowerCase())) {
+      searchQuery = `${title} ${searchQuery}`;
+    }
   }
 
-  const notionContext = await buildNotionContextForChat(searchQuery);
+  const { queries: searchQueries, method: multiQueryMethod } = await expandSearchQueries(
+    ctx.message,
+    ctx.history,
+    searchQuery,
+  );
+
+  if (process.env.NODE_ENV !== "production") {
+    console.log("[chat] retrieval_query", {
+      method,
+      multi_query: multiQueryMethod,
+      search_queries: searchQueries,
+    });
+  }
+
+  const notionContext = await buildNotionContextForChat(searchQueries);
   if (!notionContext.trim()) {
     return jsonAnswer(
       ctx.sessionId,

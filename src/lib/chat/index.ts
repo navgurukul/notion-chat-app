@@ -8,6 +8,11 @@ export { runChatPipeline, ChatValidationError, ChatNotFoundError } from "@/lib/c
 export type { ChatRequestBody } from "@/lib/chat/pipeline";
 export { sanitizeChatHistory, buildContextualSearchQuery } from "@/lib/chat/history";
 export {
+  reformulateSearchQuery,
+  type ReformulatedSearchQuery,
+  type QueryReformulationMethod,
+} from "@/lib/chat/query-reformulation";
+export {
   isNotionLinkRequest,
   extractReferencedTitle,
   resolveSemanticSearchQuery,
