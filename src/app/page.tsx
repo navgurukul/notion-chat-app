@@ -672,7 +672,7 @@ export default function ChatPage() {
             </div>
             <h3 className="text-xl font-bold mb-2">Sign out?</h3>
             <p className="text-white/60 text-sm mb-6 leading-relaxed">
-              You will be logged out of this browser session. Your saved chats in PostgreSQL are not deleted.
+              You'll be signed out. Your chats are saved and will be here when you sign back in.
             </p>
             <div className="flex gap-3">
               <button
