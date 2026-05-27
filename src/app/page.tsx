@@ -3,7 +3,7 @@
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
-import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2 } from "lucide-react";
+import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -61,12 +61,11 @@ export default function ChatPage() {
   const [syncClock, setSyncClock] = useState(Date.now());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const botMessageIndexRef = useRef<number | null>(null);
-  /** Index of the next bot bubble; set when the user message is appended (setState updaters run later). */
   const pendingBotMessageIndexRef = useRef<number | null>(null);
-  /** Prevents session message reload from wiping in-flight user/bot bubbles. */
   const chatInFlightRef = useRef(false);
   const messagesLoadGenerationRef = useRef(0);
   const activeSessionIdRef = useRef<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
@@ -694,13 +693,23 @@ export default function ChatPage() {
       )}
 
       {/* Sidebar */}
-      <aside className="w-80 bg-white/5 border-r border-white/10 backdrop-blur-xl flex flex-col">
+      <aside className={`${sidebarOpen ? "w-80" : "w-0"} shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out bg-white/5 border-r border-white/10 backdrop-blur-xl flex flex-col`}>
         <div className="p-6 border-b border-white/10">
+          {/* Header row: logo + title + toggle button on the far right */}
           <div className="flex items-center gap-3 mb-6">
             <div className="p-2 rounded-lg bg-blue-600">
               <MessageSquare className="w-6 h-6" />
             </div>
-            <h1 className="text-xl font-bold tracking-tight">Notion AI</h1>
+            <h1 className="text-xl font-bold tracking-tight flex-1">Notion AI</h1>
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(false)}
+              className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/10 transition-colors"
+              title="Close sidebar"
+              aria-label="Close sidebar"
+            >
+              <PanelLeftClose className="w-5 h-5" />
+            </button>
           </div>
 
           <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
@@ -714,17 +723,7 @@ export default function ChatPage() {
             )}
             <div className="flex-1 overflow-hidden">
               <p className="text-sm font-medium truncate">{session.user?.name}</p>
-              <p className="text-xs text-white/40 truncate">{session.user?.email}</p>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowLogoutConfirm(true)}
-              className="shrink-0 p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors"
-              title="Sign out"
-              aria-label="Sign out"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
           </div>
 
           <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3 space-y-3">
@@ -795,9 +794,11 @@ export default function ChatPage() {
             New Chat
           </button>
 
+          {/* Recent Chats header — single MessageSquare icon for all chats */}
           <div className="flex items-center justify-between mb-3 px-2">
-            <div className="text-xs font-semibold text-white/30 uppercase tracking-wider">
-              Recent Chats
+            <div className="flex items-center gap-2 text-white/30">
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span className="text-xs font-semibold uppercase tracking-wider">Recent Chats</span>
             </div>
             <button
               onClick={clearActiveChat}
@@ -847,6 +848,7 @@ export default function ChatPage() {
         </div>
 
         <div className="p-4 border-t border-white/10">
+          <p className="text-xs text-white/35 truncate text-center mb-2">{session.user?.email}</p>
           <button
             type="button"
             onClick={() => setShowLogoutConfirm(true)}
@@ -859,9 +861,20 @@ export default function ChatPage() {
       </aside>
 
       {/* Main Chat Area */}
-      <main className="flex-1 flex flex-col relative text-white">
-        {/* Header */}
-        <header className="h-16 border-b border-white/10 flex items-center px-8 bg-[#0a0a0a]/50 backdrop-blur-md z-10">
+      <main className="flex-1 flex flex-col relative text-white min-w-0">
+        {/* Header — toggle open button shown here only when sidebar is closed */}
+        <header className="h-16 border-b border-white/10 flex items-center gap-3 px-4 bg-[#0a0a0a]/50 backdrop-blur-md z-10">
+          {!sidebarOpen && (
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              className="p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+              title="Open sidebar"
+              aria-label="Open sidebar"
+            >
+              <PanelLeftOpen className="w-5 h-5" />
+            </button>
+          )}
           <h2 className="text-lg font-medium">Chat Assistant</h2>
         </header>
 
