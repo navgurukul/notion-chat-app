@@ -13,6 +13,7 @@ import {
   extractYearFromQuestion,
   isCrossDocSummaryQuestion,
   looksLikeSinglePageTitle,
+  normalizePersonNameForMatch,
   stripYearSuffixFromPerson,
 } from "@/lib/query/normalize";
 
@@ -44,6 +45,16 @@ function cleanPageTitle(value: string) {
     .trim();
 }
 
+/** Strip question framing words often captured after the second page name in compare queries. */
+function cleanComparePageTitle(value: string) {
+  return cleanPageTitle(value)
+    .replace(
+      /\s+(?:scope|status|overview|features?|roadmap|differences?|comparison)(?:\s+in\s+scope)?$/i,
+      "",
+    )
+    .trim();
+}
+
 function stripDocWords(value: string) {
   return value
     .replace(
@@ -68,7 +79,7 @@ function cleanPersonName(value: string | null) {
   if (/^(what|which|who|when|where|why|how|is|was|are|were|task|tasks|project|projects|work|manager|lead|only|one)$/i.test(cleaned)) {
     return null;
   }
-  return cleaned;
+  return normalizePersonNameForMatch(cleaned);
 }
 
 export function isNoiseTopic(topic?: string) {
@@ -98,6 +109,21 @@ function extractPageTitle(text: string, patterns: RegExp[]): string | null {
 
 /** Activity / recency questions — must run before the broad worked_on_list gate. */
 function parseActivityQuery(question: string, q: string): RulesQuery | null {
+  const teamRosterMatch =
+    question.match(
+      /\bwho(?:\s+all|\s+else)?\s+(?:is|are)\s+(?:all\s+)?(?:working|work(?:ing)?)\s+(?:on\s+)?(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
+    ) ??
+    question.match(
+      /\b(?:who\s+all|which\s+people|list\s+(?:all\s+)?(?:people|members|team))\b[\s\S]*?\b(?:working|work(?:ing)?)\s+(?:on\s+)?(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
+    );
+  if (teamRosterMatch?.[1]) {
+    return {
+      kind: "team_roster",
+      docTitle: stripDocWords(teamRosterMatch[1]),
+      raw: question,
+    };
+  }
+
   const projectWorkedInYearMatch =
     question.match(
       /\b(?:all\s+(?:the\s+)?)?projects?\s+(.+?)\s+(?:has|have)\s+worked(?:\s+on)?(?:\s+in\s+(20\d{2}))?/i,
@@ -190,8 +216,18 @@ function parseActivityQuery(question: string, q: string): RulesQuery | null {
     }
   }
 
+  const whatIsPersonWorkingMatch = question.match(
+    /\bwhat\s+(?:is|'s|are)\s+(.+?)\s+working\s+on\b/i,
+  );
+  if (whatIsPersonWorkingMatch?.[1]) {
+    const person = cleanPersonName(whatIsPersonWorkingMatch[1]);
+    if (person) {
+      return withYear(question, { kind: "activity_summary", personName: person });
+    }
+  }
+
   if (
-    !/\b(mostly|most)\s+active\b/i.test(q) &&
+    !/\b(mostly|most|least|lowest|bottom)\s+active\b/i.test(q) &&
     !/\brecently\s+worked\b/i.test(q) &&
     !/\bworking\s+on\s+lately\b/i.test(q) &&
     !/\b(last|latest)\s+edited\b/i.test(q) &&
@@ -256,7 +292,7 @@ function parseActivityQuery(question: string, q: string): RulesQuery | null {
   }
 
   const teamActiveMatch = question.match(
-    /who\s+is\s+(?:the\s+)?(?:most|mostly)\s+active\s+(?:team\s+member|person|contributor|member)?\s*(?:in|on|for)\s+(.+?)(?:\?|$)/i,
+    /who\s+is\s+(?:the\s+)?(?:(?:most|mostly|least|lowest|bottom)\s+active)\s+(?:team\s+member|person|contributor|member)?\s*(?:in|on|for)\s+(.+?)(?:\?|$)/i,
   );
   if (teamActiveMatch?.[1]) {
     return {
@@ -287,8 +323,8 @@ export function extractCompareTitles(question: string): { a: string; b: string }
     /\bcompare\s+(.+?)\s+and\s+(.+?)(?:\s*[—–-]|\s*[,;]|\s+what\b|\s+what'?s\b|\?|$)/i,
   );
   if (!match?.[1] || !match?.[2]) return null;
-  const a = cleanPageTitle(match[1].trim());
-  const b = cleanPageTitle(match[2].trim());
+  const a = cleanComparePageTitle(match[1].trim());
+  const b = cleanComparePageTitle(match[2].trim());
   if (a.length < 2 || b.length < 2) return null;
   return { a, b };
 }
@@ -475,6 +511,17 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "worked_on_list", personName: cleanPersonName(personName) ?? undefined, raw: question };
   }
 
+  // "Which project does Souvik own?" / "what projects does X own?"
+  const personOwnsProjectsMatch = question.match(
+    /\b(?:which|what)\s+projects?\s+(?:does|do)\s+(.+?)\s+own\b/i,
+  );
+  if (personOwnsProjectsMatch?.[1]) {
+    const person = cleanPersonName(personOwnsProjectsMatch[1]);
+    if (person) {
+      return { kind: "owner_list", personName: person, raw: question };
+    }
+  }
+
   // "Which project is Souvik the owner of?" → list pages owned by person
   const personIsOwnerOfMatch = question.match(
     /\b(?:which|what)\s+projects?\s+(?:is|are)\s+(.+?)\s+the\s+owner\s+of/i,
@@ -486,6 +533,14 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
+  const whoOwnDashMatch = question.match(/\bwho\s+owns?\s*[-–—]\s*(.+?)(?:\?|$)/i);
+  if (whoOwnDashMatch?.[1]) {
+    const docTitle = cleanPageTitle(whoOwnDashMatch[1].trim());
+    if (docTitle.length >= 2) {
+      return { kind: "owner_of", docTitle, raw: question };
+    }
+  }
+
   // owner of
   if (
     /\bwho\s+(is\s+the\s+)?owner\s+of\b/i.test(q) ||
@@ -493,6 +548,7 @@ export function parseQueryByRules(question: string): RulesQuery {
     /\bwho\s+owns\b/i.test(q)
   ) {
     const docTitle = extractAfter(question, [
+      /who\s+owns?\s*[-–—]\s*(.+?)(?:\?|$)/i,
       /who\s+owns\s+(?:the\s+)?(.+)$/i,
       /owner\s+of\s+(?:the\s+)?(.+)$/i,
       /who\s+(?:is\s+the\s+)?owner\s+of\s+(?:the\s+)?(.+)$/i,
@@ -595,6 +651,24 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
+  const projectCostMatch = question.match(
+    /^(.+?)\s+project\s+what\s+is\s+the\s+(cost\s+estimation|cost\s+estimate|budget)(?:\?|$)/i,
+  );
+  if (projectCostMatch?.[1]) {
+    const topic = stripDocWords(projectCostMatch[1].trim());
+    if (topic.length >= 3) {
+      return { kind: "page_about", docTitle: topic, raw: question };
+    }
+  }
+
+  if (/\b(cost\s+estimation|cost\s+estimate|what\s+is\s+the\s+budget)\b/i.test(q)) {
+    const topicFromStart = question.match(/^(.+?)\s+(?:project\s+)?(?:what\s+is|what's).*(?:cost|budget)/i);
+    const topic = topicFromStart?.[1] ? stripDocWords(topicFromStart[1]) : "";
+    if (topic.length >= 4) {
+      return { kind: "page_about", docTitle: topic, raw: question };
+    }
+  }
+
   const leadingTitle = extractLeadingPageTitle(question);
   if (leadingTitle) {
     return { kind: "page_about", docTitle: leadingTitle, raw: question };
@@ -626,7 +700,44 @@ export function parseQueryByRules(question: string): RulesQuery {
       /what'?s\s+happening\s+(?:with|on|in)?\s*(?:the\s+)?(.+?)(?:\?|$)/i,
     ]);
     if (docTitle && looksLikeSinglePageTitle(docTitle)) {
+      if (
+        /\bsummar/i.test(q) &&
+        docTitle.split(/\s+/).length <= 3 &&
+        !/[-–—]/.test(docTitle) &&
+        !/\b(hub|report|platform|session|proposal)\b/i.test(docTitle)
+      ) {
+        return { kind: "semantic", docTitle: stripDocWords(docTitle), raw: question };
+      }
       return { kind: "page_about", docTitle, raw: question };
+    }
+  }
+
+  if (
+    /\b(tell me about|explain|how does|how do|what is the)\b/i.test(q) &&
+    /\b(policy|policies|leave|comp[- ]?off|approval\s+process|onboarding\s+(?:policy|flow|process)|workflow)\b/i.test(
+      q,
+    ) &&
+    !/[—–].{8,}/.test(question)
+  ) {
+    const topicMatch = question.match(
+      /(?:tell me about|explain|how does|how do|what is the)\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+    );
+    const topic = topicMatch?.[1] ? stripDocWords(topicMatch[1]) : "";
+    if (topic.length >= 4 && topic.length < 80) {
+      return { kind: "semantic", docTitle: topic, raw: question };
+    }
+  }
+
+  if (
+    /\bwhat\s+does\b/i.test(q) &&
+    /\b(hub|onboarding)\b/i.test(q)
+  ) {
+    const hubMatch = question.match(
+      /\bwhat\s+does\s+(?:the\s+)?(.+?\bhub)\b/i,
+    );
+    const topic = hubMatch?.[1] ? stripDocWords(hubMatch[1]) || hubMatch[1].trim() : "";
+    if (topic.length >= 8) {
+      return { kind: "semantic", docTitle: topic, raw: question };
     }
   }
 
@@ -640,7 +751,8 @@ export function parseQueryByRules(question: string): RulesQuery {
     !/\b(eta|blocker)\b/i.test(q) &&
     !/\brisks?\b/i.test(q) &&
     !/\bcompare\b/i.test(q) &&
-    !/\bonboarding\s+tasks?\b/i.test(q)
+    !/\bonboarding\s+tasks?\b/i.test(q) &&
+    !/\bworking\s+on\b/i.test(q)
   ) {
     const docTitle = extractAfter(question, [
       /(?:tell me about|tell me more about|give me an overview of|overview of)\s+(?:the\s+)?(.+?)(?:\?|$)/i,
@@ -651,7 +763,8 @@ export function parseQueryByRules(question: string): RulesQuery {
       docTitle &&
       docTitle.length >= 4 &&
       looksLikeSinglePageTitle(docTitle) &&
-      !/\b(status|type|kind)\s+of\b/i.test(q)
+      !/\b(status|type|kind)\s+of\b/i.test(q) &&
+      !/\b(policy|policies|leave|comp[- ]?off|approval)\b/i.test(q)
     ) {
       return { kind: "page_about", docTitle, raw: question };
     }

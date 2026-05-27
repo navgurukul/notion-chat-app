@@ -311,7 +311,10 @@ function normalizeSearchQueries(
   return { primary: all[0] ?? "", all };
 }
 
-export async function semanticSearch(searchQuery: string | string[]): Promise<string> {
+export async function semanticSearch(
+  searchQuery: string | string[],
+  options?: { skipHybrid?: boolean },
+): Promise<string> {
   const { primary: cleaned, all: queries } = normalizeSearchQueries(searchQuery);
   if (!cleaned) return "";
 
@@ -320,7 +323,7 @@ export async function semanticSearch(searchQuery: string | string[]): Promise<st
     ? mergeSearchRows(await titleSearch(explicitTitle), await titleSearch(cleaned))
     : await titleSearch(cleaned);
 
-  if (await hasNotionChunks()) {
+  if (!options?.skipHybrid && (await hasNotionChunks())) {
     const chunkPart =
       queries.length > 1
         ? await hybridChunkContextFromQueries(queries)

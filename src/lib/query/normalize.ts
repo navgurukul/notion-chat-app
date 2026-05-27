@@ -13,6 +13,14 @@ export function extractYearFromQuestion(question: string): number | undefined {
 const YEAR_SUFFIX_TRIGGERS = [" in ", " for ", " during "];
 
 /** Remove trailing "in 2025" / "for the year 2025" from a captured person name. */
+/** Strip common honorifics ("amruta ji" → "amruta") for owner/assignee SQL matching. */
+export function normalizePersonNameForMatch(name: string) {
+  return name
+    .trim()
+    .replace(/\s+(?:ji|jee|ji\.|sir|ma'?am|ben|bhai|didi|madam)\s*$/i, "")
+    .trim();
+}
+
 export function stripYearSuffixFromPerson(value: string) {
   let text = value.trim();
 

@@ -13,6 +13,7 @@ const HIGH_PRECISION_KINDS = new Set<QueryKind>([
   "blocker_list",
   "project_eta",
   "team_activity",
+  "team_roster",
 ]);
 
 const NOISY_ENTITY = /^(is|was|are|were|only|one|what|who|which|task|tasks|project|projects|work|manager|lead)$/i;
@@ -51,6 +52,7 @@ export function scoreRegexParse(
       "compare_pages",
       "project_eta",
       "team_activity",
+      "team_roster",
     ].includes(parsed.kind);
     const needsPerson = false;
     if (needsTitle && !parsed.docTitle?.trim()) return 0.4;

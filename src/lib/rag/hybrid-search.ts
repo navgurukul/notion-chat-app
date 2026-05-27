@@ -140,11 +140,16 @@ export function mergeHybridChunkRows(rowSets: ChunkHybridRow[][]): ChunkHybridRo
  * Hybrid retrieval over `notion_chunks` (raw rows, before MMR).
  * Falls back to FTS-only when the query embedding is unavailable.
  */
-export async function fetchHybridChunkRows(searchQuery: string): Promise<ChunkHybridRow[]> {
+export async function fetchHybridChunkRows(
+  searchQuery: string,
+  titleBoost?: string,
+): Promise<ChunkHybridRow[]> {
   const raw = searchQuery.trim();
   if (!raw) return [];
 
-  const ftsInput = simplifySearchQuery(raw).trim() || raw.trim();
+  const boostTitle = titleBoost?.trim() || "";
+  const boostPattern = boostTitle ? `%${boostTitle.replace(/[%_\\]/g, "")}%` : "";
+  const ftsInput = simplifySearchQuery(boostTitle || raw).trim() || raw.trim();
   const cand = getHybridCandidateLimit();
   const wSem = getSemWeight();
   const wKw = getKwWeight();
@@ -192,7 +197,13 @@ export async function fetchHybridChunkRows(searchQuery: string): Promise<ChunkHy
         p.status,
         COALESCE(sem.sem_score, 0)::float8 AS sem_score,
         COALESCE(kw.kw_score, 0)::float8 AS kw_score,
-        (($4 * COALESCE(sem.sem_score, 0) + $5 * COALESCE(kw.kw_score, 0)) / $6)::float8 AS final_score,
+        (
+          ($4 * COALESCE(sem.sem_score, 0) + $5 * COALESCE(kw.kw_score, 0)) / $6
+          + CASE
+              WHEN $7 <> '' AND lower(coalesce(p.title, '')) LIKE lower($7) THEN 0.2
+              ELSE 0
+            END
+        )::float8 AS final_score,
         c.embedding::text AS embedding_literal
       FROM ids
       JOIN notion_chunks c ON c.id = ids.id
@@ -202,7 +213,7 @@ export async function fetchHybridChunkRows(searchQuery: string): Promise<ChunkHy
       ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
       LIMIT $3
       `,
-      [vectorLiteral, ftsInput, cand, wSem, wKw, wSum],
+      [vectorLiteral, ftsInput, cand, wSem, wKw, wSum, boostPattern],
     );
   }
 
@@ -232,35 +243,59 @@ export async function fetchHybridChunkRows(searchQuery: string): Promise<ChunkHy
     );
 }
 
+export type HybridChunkRetrieval = {
+  rows: ChunkHybridRow[];
+  context: string | null;
+  queries: string[];
+};
+
+/** Hybrid search with scores (for confidence gate + diagnostics). */
+export async function runHybridChunkRetrieval(
+  searchQueries: string[],
+  titleBoost?: string,
+): Promise<HybridChunkRetrieval> {
+  const unique = [...new Set(searchQueries.map((q) => q.trim()).filter(Boolean))];
+  if (!unique.length) {
+    return { rows: [], context: null, queries: [] };
+  }
+
+  const topK = getHybridTopK();
+  const rowSets = await Promise.all(
+    unique.map((q) => fetchHybridChunkRows(q, titleBoost)),
+  );
+  const merged = mergeHybridChunkRows(rowSets);
+
+  if (!merged.length) {
+    return { rows: [], context: null, queries: unique };
+  }
+
+  const refined = refineChunkResults(merged, topK);
+  return {
+    rows: refined,
+    context: formatChunkContext(refined),
+    queries: unique,
+  };
+}
+
 /**
  * Multi-Query RAG: run hybrid search for each query, merge, then MMR + format.
  */
 export async function hybridChunkContextFromQueries(
   searchQueries: string[],
 ): Promise<string | null> {
-  const unique = [
-    ...new Set(searchQueries.map((q) => q.trim()).filter(Boolean)),
-  ];
-  if (!unique.length) return null;
+  const { context, rows, queries } = await runHybridChunkRetrieval(searchQueries);
 
-  const topK = getHybridTopK();
-  const rowSets = await Promise.all(unique.map((q) => fetchHybridChunkRows(q)));
-  const merged = mergeHybridChunkRows(rowSets);
-
-  if (!merged.length) return null;
-
-  const refined = refineChunkResults(merged, topK);
-
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && rows.length) {
     console.log("[retrieval] multi_query_chunks", {
-      queries: unique.length,
-      candidates: merged.length,
-      selected: refined.length,
+      queries: queries.length,
+      candidates: rows.length,
+      selected: rows.length,
       mmr: isMmrEnabled(),
+      top_score: rows[0]?.final_score,
     });
   }
 
-  return formatChunkContext(refined);
+  return context;
 }
 
 /**

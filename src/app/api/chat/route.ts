@@ -20,6 +20,15 @@ export async function POST(req: NextRequest) {
     return handleChatPost(session, body);
   } catch (error) {
     console.error("Chat API Error:", error);
+    const { isGeminiQuotaError, GEMINI_QUOTA_USER_MESSAGE } = await import(
+      "@/lib/ai/provider-errors"
+    );
+    if (isGeminiQuotaError(error)) {
+      return NextResponse.json(
+        { error: GEMINI_QUOTA_USER_MESSAGE, answer: GEMINI_QUOTA_USER_MESSAGE },
+        { status: 429 },
+      );
+    }
     return NextResponse.json({ error: "Failed to get response" }, { status: 500 });
   }
 }

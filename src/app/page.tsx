@@ -369,8 +369,6 @@ export default function ChatPage() {
         body: JSON.stringify({ message: userMessage, history, sessionId }),
       });
 
-      if (!response.ok) throw new Error("Failed to get response");
-
       const contentType = response.headers.get("content-type") ?? "";
 
       if (contentType.includes("application/json")) {
@@ -382,13 +380,35 @@ export default function ChatPage() {
           typeof (data as { answer: unknown }).answer === "string"
             ? (data as { answer: string }).answer
             : null;
+        const errorText =
+          data &&
+          typeof data === "object" &&
+          "error" in data &&
+          typeof (data as { error: unknown }).error === "string"
+            ? (data as { error: string }).error
+            : null;
+
         if (answer !== null) {
           setBotMessageAt(botIndex, answer);
           clearThinkingAt(botIndex);
           refreshChatSessions().catch((error) => console.error("Failed to refresh chats:", error));
           return;
         }
+
+        if (!response.ok) {
+          setBotMessageAt(botIndex, errorText || answer || "Failed to get response");
+          clearThinkingAt(botIndex);
+          return;
+        }
+
         throw new Error("Invalid chat response");
+      }
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "");
+        setBotMessageAt(botIndex, errText || "Failed to get response");
+        clearThinkingAt(botIndex);
+        return;
       }
 
       const reader = response.body?.getReader();
@@ -903,7 +923,7 @@ export default function ChatPage() {
                       </div>
                     )}
                     {(msg.content.trim() || showThinking) && (
-                      <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
+                      <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed prose-headings:mt-4 prose-headings:mb-2 prose-h2:text-base prose-h3:text-sm prose-h4:text-sm prose-ul:my-2 prose-li:my-0.5 prose-table:text-sm prose-th:border prose-th:border-white/15 prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-white/15 prose-td:px-2 prose-td:py-1 prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
                         {msg.content.trim() ? (
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
@@ -965,7 +985,7 @@ export default function ChatPage() {
             </button>
           </form>
           <p className="text-center text-[10px] text-white/20 mt-4 uppercase tracking-[0.2em]">
-            Powered by Notion & Gemini AI
+            Powered by Notion & OpenAI
           </p>
         </div>
       </main>

@@ -1,7 +1,7 @@
 /**
  * RAG layer — find relevant Notion text for open-ended questions.
  *
- * Flow: question → search chunks/pages → context string for Gemini
+ * Flow: question → search chunks/pages → context string for the chat LLM
  */
 export { buildNotionContextForChat, prefetchPagesFromQuestion } from "@/lib/rag/build-context";
 export { semanticSearch } from "@/lib/rag/semantic-search";

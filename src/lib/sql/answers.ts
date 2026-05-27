@@ -5,8 +5,22 @@
  */
 import { escapeLike, query } from "@/lib/db";
 import type { ActivityRow, NotionPageRow, WorkedOnRow } from "@/lib/shared/notion-types";
+import { normalizePersonNameForMatch } from "@/lib/query/normalize";
 import { isNoiseTopic } from "@/lib/query/rules";
 import type { ParsedQuery } from "@/lib/query/types";
+import {
+  compactSnippet,
+  formatCompareAnswer,
+  formatCompactListItem,
+  formatCostEstimationPage,
+  formatPageCard,
+} from "@/lib/sql/format-display";
+import { filterPagesForProjectTopic, primaryTopicToken } from "@/lib/sql/project-scope";
+import {
+  aggregatePeopleOnProject,
+  extractProjectScopeTopic,
+  fetchProjectPages,
+} from "@/lib/sql/team-roster";
 
 const SQL_RESULT_LIMIT = 20;
 const HISTORICAL_PROJECT_LIMIT = 50;
@@ -73,7 +87,7 @@ export async function lookupPageLinkByTitle(docTitle: string): Promise<string | 
 }
 
 function formatListHeader(count: number, label: string) {
-  return `### ${count} doc(s) ${label}`;
+  return `## ${count} result(s) — ${label}`;
 }
 
 function formatRows(rows: NotionPageRow[], formatter: (row: NotionPageRow) => string) {
@@ -98,13 +112,8 @@ function extractPageBody(content?: string | null, maxLength = 2400) {
   return body.length > maxLength ? `${body.slice(0, maxLength)}...` : body;
 }
 
-function contentSnippet(content?: string | null, maxLength = 450) {
-  const cleaned = (content || "")
-    .replace(/=== PROPERTIES ===|=== CONTENT ===/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!cleaned) return "";
-  return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength)}...` : cleaned;
+function contentSnippet(content?: string | null, maxLength = 200) {
+  return compactSnippet(content, maxLength);
 }
 
 const PROJECT_THEMES = [
@@ -419,10 +428,10 @@ async function formatAssignedProjectsAnswer(
 
   const lines: string[] = [];
   lines.push(
-    `### Projects for **${person}**${yearNote}`,
+    `## Projects — **${person}**${yearNote}`,
     "",
-    `_From **${rows.length}** owned/assigned task pages plus project team rosters in synced Notion._`,
-    `_For every task, ask: **"What tasks is ${person} assigned to?"**_`,
+    `_${rows.length} owned/assigned pages + team rosters in synced Notion._`,
+    `_Task list: ask **"What tasks is ${person} assigned to?"**_`,
     "",
   );
 
@@ -515,7 +524,7 @@ function formatBlockerListAnswer(
     : "_Across all synced Notion pages._";
 
   const lines: string[] = [
-    `### ${rows.length} blocker / open issue(s)${scopeLabel && !isWorkspaceScope(scopeLabel) ? ` — ${scopeLabel}` : ""}`,
+    `## Blockers — ${rows.length} item(s)${scopeLabel && !isWorkspaceScope(scopeLabel) ? ` (${scopeLabel})` : ""}`,
     "",
     scopeNote,
     "",
@@ -523,13 +532,11 @@ function formatBlockerListAnswer(
 
   const renderSection = (label: string, sectionRows: NotionPageRow[]) => {
     if (!sectionRows.length) return;
-    lines.push(`**${label} (${sectionRows.length}):**`);
+    lines.push(`**${label} (${sectionRows.length})**`, "");
     for (const row of sectionRows) {
       const theme = inferProjectThemeForPage(row);
-      const themeTag = theme ? ` · ${theme}` : "";
-      const snippet = contentSnippet(row.content, 200);
       lines.push(
-        `- **${formatLink(row.title || "Untitled", row.url)}** — **${row.status || "not set"}**${row.owner ? ` · ${row.owner}` : ""}${themeTag}${snippet ? `\n  ${snippet}` : ""}`,
+        `- ${formatCompactListItem(row, theme ? [theme] : undefined)}`,
       );
     }
     lines.push("");
@@ -578,46 +585,7 @@ async function buildComparePages(titleA: string, titleB: string) {
     return pageNotSyncedMessage(`${titleA} / ${titleB}`);
   }
 
-  function formatPageBlock(label: string, rows: NotionPageRow[]) {
-    if (!rows.length) {
-      return `### ${label}\n\n_Not found in synced Notion — try **Sync changes**._`;
-    }
-    const row = rows[0];
-    const body = extractPageBody(row.content, 900);
-    const meta = [
-      row.status ? `**Status:** ${row.status}` : "",
-      row.owner ? `**Owner:** ${row.owner}` : "",
-      row.doc_type ? `**Type:** ${row.doc_type}` : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    return [
-      `### ${label}: ${row.title || "Untitled"}`,
-      meta,
-      body || "_No body text in sync._",
-      row.url ? formatLink("Open in Notion", row.url) : "",
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-  }
-
-  return [
-    `## Compare: **${titleA}** vs **${titleB}**`,
-    "",
-    "_Scope and status from synced Notion pages (not AI inference)._",
-    "",
-    formatPageBlock(titleA, rowsA),
-    "",
-    "---",
-    "",
-    formatPageBlock(titleB, rowsB),
-    "",
-    rowsA.length && rowsB.length
-      ? "_Ask about a specific page title for more detail._"
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return formatCompareAnswer(titleA, titleB, rowsA[0] ?? null, rowsB[0] ?? null);
 }
 
 async function buildRisksAnswer(topic: string) {
@@ -826,23 +794,24 @@ function formatActivityRowLine(row: NotionPageRow & { notion_edited_at?: string 
 }
 
 async function lookupProjectStatusPages(topic: string) {
-  const term = `%${escapeLike(topic)}%`;
-  return query<NotionPageRow>(
+  const ranked = await searchProjectPages(topic);
+  const scoped = filterPagesForProjectTopic(topic, ranked);
+  if (scoped.length) return scoped.slice(0, SQL_RESULT_LIMIT);
+
+  const token = primaryTopicToken(topic);
+  const term = `%${escapeLike(token)}%`;
+  const fallback = await query<NotionPageRow & { content: string | null }>(
     `
-    SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status
+    SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
     FROM notion_pages
-    WHERE
-      lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
-      OR to_tsvector('english', coalesce(title, '')) @@ plainto_tsquery('english', $2)
-    ORDER BY
-      CASE WHEN lower(coalesce(title, '')) = lower($2) THEN 0 ELSE 1 END,
-      CASE WHEN lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\' THEN 0 ELSE 1 END,
-      length(coalesce(title, '')) ASC,
-      title ASC
-    LIMIT ${SQL_RESULT_LIMIT}
+    WHERE lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
+    ORDER BY length(coalesce(title, '')) ASC, title ASC
+    LIMIT 40
     `,
-    [term, topic],
+    [term],
   );
+  const filtered = filterPagesForProjectTopic(topic, fallback);
+  return filtered.slice(0, SQL_RESULT_LIMIT);
 }
 
 const TITLE_STOP_WORDS = new Set([
@@ -940,6 +909,25 @@ function extractDateMentions(text: string) {
   return [...found].slice(0, 8);
 }
 
+function partitionDateMentions(mentions: string[]) {
+  const currentYear = new Date().getFullYear();
+  const current: string[] = [];
+  const older: string[] = [];
+
+  for (const mention of mentions) {
+    const yearMatch = mention.match(/\b(20\d{2})\b/);
+    if (!yearMatch) {
+      current.push(mention);
+      continue;
+    }
+    const year = Number.parseInt(yearMatch[1], 10);
+    if (year >= currentYear) current.push(mention);
+    else older.push(mention);
+  }
+
+  return { current, older };
+}
+
 async function findRelatedProjectPages(topic: string) {
   const tokens = projectTopicTokens(topic);
   const primary = tokens[0] ?? topic.split(/\s+/)[0] ?? topic;
@@ -1020,10 +1008,10 @@ async function buildProjectEtaAnswer(topic: string): Promise<string | null> {
     .slice(0, 5);
 
   const lines: string[] = [
-    `### ETA / completion — **${topic}**`,
+    `## ETA — **${topic}**`,
     "",
     hub
-      ? `**Hub page:** ${formatLink(hub.title || topic, hub.url)} — status: **${hub.status || "not set"}**${hub.owner ? ` · owner: ${hub.owner}` : ""}`
+      ? `**Hub:** ${formatLink(hub.title || topic, hub.url)} · **${hub.status || "not set"}**${hub.owner ? ` · ${hub.owner}` : ""}`
       : "",
   ];
 
@@ -1036,7 +1024,23 @@ async function buildProjectEtaAnswer(topic: string): Promise<string | null> {
   }
 
   if (dateMentions.length) {
-    lines.push("", "**Dates / targets mentioned in related pages:**", ...dateMentions.map((d) => `- ${d}`));
+    const { current, older } = partitionDateMentions(dateMentions);
+    if (current.length) {
+      lines.push("", "**Dates / targets (current / near-term):**", ...current.map((d) => `- ${d}`));
+    }
+    if (older.length) {
+      lines.push(
+        "",
+        "**Older mentions (may be outdated):**",
+        ...older.map((d) => `- ${d}`),
+      );
+    }
+    if (!current.length && older.length) {
+      lines.push(
+        "",
+        "_Only older dates found in sync — confirm the latest roadmap in Notion before relying on these._",
+      );
+    }
   }
 
   if (mvpPages.length) {
@@ -1080,22 +1084,33 @@ async function buildProjectEtaAnswer(topic: string): Promise<string | null> {
   return lines.filter((line) => line !== "").join("\n");
 }
 
+function stripTitleEmoji(title: string) {
+  return title
+    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function lookupByTitle(title: string, includeContent = false) {
-  const term = `%${escapeLike(title)}%`;
+  const strippedTitle = stripTitleEmoji(title);
+  const lookupTitles = [...new Set([title, strippedTitle].filter((t) => t.length > 0))];
+  const term = `%${escapeLike(strippedTitle || title)}%`;
   const columns = includeContent
     ? "id, title, url, owner, created_by, last_edited_by, doc_type, status, content"
     : "id, title, url, owner, created_by, last_edited_by, doc_type, status";
 
-  const exact = await query<NotionPageRow>(
-    `
-    SELECT ${columns}
-    FROM notion_pages
-    WHERE lower(trim(coalesce(title, ''))) = lower(trim($1))
-    LIMIT 3
-    `,
-    [title],
-  );
-  if (exact.length === 1) return exact;
+  for (const lookupTitle of lookupTitles) {
+    const exact = await query<NotionPageRow>(
+      `
+      SELECT ${columns}
+      FROM notion_pages
+      WHERE lower(trim(coalesce(title, ''))) = lower(trim($1))
+      LIMIT 3
+      `,
+      [lookupTitle],
+    );
+    if (exact.length === 1) return exact;
+  }
 
   const candidates = await query<NotionPageRow>(
     `
@@ -1122,7 +1137,8 @@ async function lookupByTitle(title: string, includeContent = false) {
 }
 
 export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string | null> {
-  const person = parsed.personName?.trim();
+  const personRaw = parsed.personName?.trim();
+  const person = personRaw ? normalizePersonNameForMatch(personRaw) : undefined;
   const docTitle = parsed.docTitle?.trim();
 
   if (parsed.kind === "owner_list" && person) {
@@ -1301,14 +1317,10 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
           "notion_edited_at" in row && row.notion_edited_at
             ? String(row.notion_edited_at).slice(0, 10)
             : "";
-        const metadata = [
-          `owner/assignee: ${row.owner || "Unknown"}`,
-          row.status ? `status: ${row.status}` : "",
-          row.doc_type ? `type: ${row.doc_type}` : "",
-          edited ? `last edited: ${edited}` : "",
-        ].filter(Boolean).join(" · ");
-        const snippet = docTitle ? contentSnippet(row.content) : "";
-        return `**${formatLink(row.title || "Untitled", row.url)}** — ${metadata}${snippet ? `\n  ${snippet}` : ""}`;
+        return formatCompactListItem(row, [
+          row.owner ? `assignee: ${row.owner}` : "assignee: Unknown",
+          edited ? `edited: ${edited}` : "",
+        ].filter(Boolean));
       },
     )}`;
   }
@@ -1494,47 +1506,69 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     )}`;
   }
 
-  if (parsed.kind === "team_activity" && docTitle) {
-    const topicTerm = `%${escapeLike(docTitle)}%`;
-    type TeamRow = { last_edited_by: string; owner: string | null; edit_count: string };
-    const byEditor = await query<TeamRow>(
-      `
-      SELECT
-        person AS last_edited_by,
-        max(owner) AS owner,
-        COUNT(*)::text AS edit_count
-      FROM (
-        SELECT
-          coalesce(nullif(trim(last_edited_by), ''), nullif(trim(owner), ''), 'Unknown') AS person,
-          owner
-        FROM notion_pages
-        WHERE
-          lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
-          OR lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
-      ) scoped
-      WHERE person <> 'Unknown'
-      GROUP BY person
-      ORDER BY COUNT(*) DESC
-      LIMIT 10
-      `,
-      [topicTerm],
-    );
+  if (parsed.kind === "team_roster" && docTitle) {
+    const scopeTopic = extractProjectScopeTopic(parsed.raw, docTitle);
+    const pages = await fetchProjectPages(scopeTopic);
+    const members = aggregatePeopleOnProject(pages);
 
-    if (!byEditor.length) {
-      return `No activity signals found for workspace/topic **${docTitle}** in synced Notion data (no owner/last-editor fields on matching pages). Try **Sync changes** to refresh metadata.`;
+    if (!members.length) {
+      return [
+        `### Team on **${scopeTopic}**`,
+        "",
+        `No people found in synced Notion for this project (checked **Owner**, **assignee/captain** lines, and **team roster** text in page content).`,
+        "",
+        `_Run **Sync changes**, or confirm pages mention the project name and list assignees in Notion._`,
+      ].join("\n");
     }
 
-    const top = byEditor[0];
     return [
-      `### Most active in **${docTitle}** (by pages owned/edited in Notion)`,
+      `### Who is working on **${scopeTopic}**`,
       "",
-      `**Top match:** **${top.last_edited_by}** — ${top.edit_count} related page(s) in the index.`,
+      `Found **${members.length}** people across **${pages.length}** related page(s) in Notion (owner, assignee, captain, team roster, editor — not only formal Owner):`,
       "",
-      byEditor
-        .map((row, i) => `${i + 1}. **${row.last_edited_by}** — ${row.edit_count} page(s)`)
+      members
+        .map((member, i) => {
+          const roles = member.roles.length ? member.roles.join(", ") : "mentioned";
+          return `${i + 1}. **${member.name}** — ${member.pageCount} page(s) — _${roles}_`;
+        })
         .join("\n"),
       "",
-      `_Based on Notion owner / last-edited-by fields on pages mentioning "${docTitle}". Re-sync if dates look stale._`,
+      `_Re-sync if someone is missing. Ask **"Who is the most active team member in ${scopeTopic}?"** for a ranked view._`,
+    ].join("\n");
+  }
+
+  if (parsed.kind === "team_activity" && docTitle) {
+    const scopeTopic = extractProjectScopeTopic(parsed.raw, docTitle);
+    const isLeastActive = /\b(least|lowest|bottom)\s+active\b/i.test(parsed.raw);
+    const pages = await fetchProjectPages(scopeTopic);
+    const members = aggregatePeopleOnProject(pages);
+    const ranked = isLeastActive ? [...members].reverse() : members;
+
+    if (!ranked.length) {
+      return [
+        `### ${isLeastActive ? "Least active" : "Most active"} in **${scopeTopic}**`,
+        "",
+        `Synced Notion pages for **${scopeTopic}** do not list people as owner, assignee, or in team roster text.`,
+        "",
+        `_Try **Sync changes**, or ask **"Who all are working on ${scopeTopic}?"** for the full team list._`,
+      ].join("\n");
+    }
+
+    const top = ranked[0];
+    return [
+      `### ${isLeastActive ? "Least active" : "Most active"} in **${scopeTopic}** (by related Notion pages)`,
+      "",
+      `**${isLeastActive ? "Least active match" : "Top match"}:** **${top.name}** — ${top.pageCount} related page(s).`,
+      "",
+      ranked
+        .slice(0, 15)
+        .map((member, i) => {
+          const roles = member.roles.slice(0, 3).join(", ");
+          return `${i + 1}. **${member.name}** — ${member.pageCount} page(s)${roles ? ` _(${roles})_` : ""}`;
+        })
+        .join("\n"),
+      "",
+      `_Counts owner, assignee, captain, team roster, and editor signals on pages matching **${scopeTopic}**. Re-sync if data looks stale._`,
     ].join("\n");
   }
 
@@ -1587,30 +1621,49 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
   }
 
   if (parsed.kind === "page_about" && docTitle) {
+    const isCostQuestion = /\b(cost\s+estimation|cost\s+estimate|budget|pricing)\b/i.test(
+      parsed.raw,
+    );
+
+    if (isCostQuestion) {
+      const topicTerm = `%${escapeLike(docTitle)}%`;
+      const costRows = await query<NotionPageRow & { content: string | null }>(
+        `
+        SELECT id, title, url, owner, created_by, doc_type, status, content
+        FROM notion_pages
+        WHERE
+          (lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
+           OR lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\')
+          AND (
+            lower(coalesce(title, '')) LIKE '%cost%'
+            OR lower(coalesce(title, '')) LIKE '%budget%'
+            OR lower(coalesce(content, '')) LIKE '%cost estimation%'
+          )
+        ORDER BY
+          CASE WHEN lower(coalesce(title, '')) LIKE '%cost estimation%' THEN 0
+               WHEN lower(coalesce(title, '')) LIKE '%cost%' THEN 1
+               ELSE 2 END,
+          length(coalesce(title, '')) ASC
+        LIMIT 3
+        `,
+        [topicTerm],
+      );
+      if (costRows[0]) {
+        return formatCostEstimationPage(costRows[0]);
+      }
+    }
+
     const rows = await lookupByTitle(docTitle, true);
     if (!rows.length) return pageNotSyncedMessage(docTitle);
 
     if (rows.length === 1) {
       const row = rows[0];
-      const body = extractPageBody(row.content);
+      if (isCostQuestion || /₹|cost estimation/i.test(row.content ?? "")) {
+        return formatCostEstimationPage(row);
+      }
       const { name: ownerName, label: ownerLabel } = resolvePageOwner(row);
-      const meta = [
-        ownerName ? `${ownerLabel}: ${ownerName}` : "",
-        row.status ? `Status: ${row.status}` : "",
-        row.doc_type ? `Type: ${row.doc_type}` : "",
-      ]
-        .filter(Boolean)
-        .join(" · ");
-
-      return [
-        `## ${row.title || docTitle}`,
-        meta ? `_${meta}_` : "",
-        "",
-        body || "_No page body stored yet — try **Sync changes** to refresh content._",
-        row.url ? `\n\n${formatLink("Open in Notion", row.url)}` : "",
-      ]
-        .filter((line) => line !== "")
-        .join("\n");
+      if (!row.owner && ownerName) row.owner = ownerName;
+      return formatPageCard(row);
     }
 
     return `### ${rows.length} pages matching "${docTitle}"\n\n${formatRows(rows, (row) => {

@@ -26,11 +26,8 @@ The current exporter uses Notion workspace search and uploads all accessible pag
 After exporting Notion content with `npm run export:notion`, start ingestion from the app's sync button and verify retrieval with `npm run test:bedrock`.
 
 ### AI Provider
-- `AI_PROVIDER`: Selects the provider to use (`gemini` or `deepseek`).
-- `GEMINI_API_KEY`: Obtained from [Google AI Studio](https://aistudio.google.com/).
-- `GEMINI_MODEL`: Gemini model name (for example, `gemini-2.5-flash`).
-- `DEEPSEEK_API_KEY`: DeepSeek API key.
-- `DEEPSEEK_MODEL`: DeepSeek model name (for example, `deepseek-chat`).
+- Chat uses OpenAI (same `OPENAI_API_KEY` already used for embeddings).
+- `OPENAI_CHAT_MODEL`: OpenAI chat model name (example: `gpt-4o-mini`).
 
 ## 🔗 Connecting Notion
 1. Go to your Notion Database.

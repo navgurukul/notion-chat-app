@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { Session } from "next-auth";
 import type { ChatHistoryItem } from "@/lib/ai/gemini";
 import { addChatMessage, ensureSessionBelongsToUser, getOrCreateUser } from "@/lib/chat/store";
-import { MAX_MESSAGE_LENGTH, STRUCTURED_QUERY_KINDS } from "@/lib/chat/constants";
+import { MAX_MESSAGE_LENGTH } from "@/lib/chat/constants";
 import { sanitizeChatHistory } from "@/lib/chat/history";
 import {
   extractReferencedTitle,
@@ -13,12 +13,48 @@ import { reformulateSearchQuery } from "@/lib/chat/query-reformulation";
 import { streamGeminiAnswer } from "@/lib/chat/stream-response";
 import { resolveQuery } from "@/lib/query/resolve-query";
 import type { ParsedQuery } from "@/lib/query/types";
+import { handleMetadataQuery, lookupPageLinkByTitle } from "@/lib/sql/answers";
 import {
-  handleMetadataQuery,
-  isWeakProjectEtaAnswer,
-  lookupPageLinkByTitle,
-} from "@/lib/sql/answers";
-import { buildNotionContextForChat } from "@/lib/rag/build-context";
+  isSqlMissAnswer,
+  isTeamActivityMetadataGap,
+  shouldFallbackToRag,
+} from "@/lib/chat/answer-quality";
+import {
+  isMetadataOnlyKind,
+  metadataNotFoundAnswer,
+} from "@/lib/chat/routing-policy";
+import { logChatRoute, logRetrievalDiagnostics } from "@/lib/chat/retrieval-diagnostics";
+import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
+import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag/retrieval-confidence";
+
+function stripTitleEmoji(title: string) {
+  return title
+    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Use the user's project name for RAG, not a misleading canonical page title. */
+function resolveRagTitleBoost(parsed: ParsedQuery, message: string) {
+  if (parsed.kind === "team_activity") {
+    const match = message.match(
+      /(?:most|mostly)\s+active\s+(?:team\s+member|person|contributor|member)?\s*(?:in|on|for)\s+([^?.!]+?)(?:\?|$)/i,
+    );
+    const scope = match?.[1]
+      ?.replace(/\b(team|workspace|project|projects)\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (scope) return stripTitleEmoji(scope);
+  }
+  return parsed.docTitle ? stripTitleEmoji(parsed.docTitle) : "";
+}
+
+function isExplicitPageQuestion(message: string, docTitle?: string) {
+  if (!docTitle?.trim()) return false;
+  const needle = stripTitleEmoji(docTitle).toLowerCase();
+  if (needle.length < 4) return false;
+  return message.toLowerCase().includes(needle.slice(0, Math.min(needle.length, 24)));
+}
 
 export type ChatRequestBody = {
   message?: unknown;
@@ -142,48 +178,64 @@ function logParsedQuery(parsed: ParsedQuery) {
 async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
   if (parsed.kind === "semantic") return null;
 
+  const metadataOnly = isMetadataOnlyKind(parsed.kind);
   const directAnswer = await handleMetadataQuery(parsed);
-  if (directAnswer) {
-    if (parsed.kind === "project_eta" && isWeakProjectEtaAnswer(directAnswer)) {
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[chat] mode=project_eta search=sql_weak fallback=semantic");
-      }
-    } else {
-      if (process.env.NODE_ENV !== "production") {
-        console.log(
-          `[chat] mode=${parsed.kind} search=sql_direct answer_chars=${directAnswer.length}`,
-        );
-      }
+
+  if (metadataOnly) {
+    if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer)) {
+      logChatRoute("sql_hit", parsed, { answer_chars: directAnswer.length });
       return jsonAnswer(ctx.sessionId, directAnswer);
     }
+    if (parsed.kind === "team_activity" && isTeamActivityMetadataGap(directAnswer)) {
+      logChatRoute("sql_weak_rag", parsed, { team_activity_metadata_gap: true });
+      return null;
+    }
+    logChatRoute("sql_miss_metadata", parsed, { had_sql: Boolean(directAnswer) });
+    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed));
   }
 
-  if (STRUCTURED_QUERY_KINDS.has(parsed.kind) && parsed.docTitle?.trim()) {
-    return jsonAnswer(
-      ctx.sessionId,
-      `I couldn't find **${parsed.docTitle.trim()}** in the synced Notion database. Use **Sync changes** in the sidebar, then try again.`,
-    );
+  if (directAnswer && !shouldFallbackToRag(parsed, directAnswer)) {
+    logChatRoute("sql_hit", parsed, { answer_chars: directAnswer.length });
+    return jsonAnswer(ctx.sessionId, directAnswer);
   }
 
-  if (process.env.NODE_ENV !== "production") {
-    console.log(`[chat] mode=${parsed.kind} search=sql_empty fallback=semantic`);
+  if (directAnswer) {
+    logChatRoute("sql_weak_rag", parsed, { answer_chars: directAnswer.length });
+  } else {
+    logChatRoute("sql_weak_rag", parsed, { sql_empty: true });
   }
 
   return null;
 }
 
 async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
-  const { searchQuery: reformulated, method } = await reformulateSearchQuery(
-    ctx.message,
-    ctx.history,
-  );
+  if (isMetadataOnlyKind(parsed.kind) && parsed.kind !== "team_activity") {
+    logChatRoute("sql_miss_metadata", parsed, { blocked_rag: true });
+    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed));
+  }
 
-  let searchQuery = reformulated;
-  if (parsed.kind === "semantic" && parsed.docTitle?.trim()) {
-    const title = parsed.docTitle.trim();
+  const titleBoost = resolveRagTitleBoost(parsed, ctx.message);
+  const explicitPage = isExplicitPageQuestion(ctx.message, parsed.docTitle);
+
+  let searchQuery: string;
+  let method = "original";
+
+  if (explicitPage && titleBoost) {
+    searchQuery = titleBoost;
+  } else {
+    const reformulated = await reformulateSearchQuery(ctx.message, ctx.history);
+    searchQuery = reformulated.searchQuery;
+    method = reformulated.method;
+  }
+
+  const hints: string[] = [];
+  if (titleBoost && !explicitPage) hints.push(titleBoost);
+  if (parsed.personName?.trim()) hints.push(parsed.personName.trim());
+  if (hints.length && !explicitPage) {
+    const hintBlock = hints.join(" ");
     const lower = searchQuery.toLowerCase();
-    if (!lower.includes(title.toLowerCase())) {
-      searchQuery = `${title} ${searchQuery}`;
+    if (!hints.every((h) => lower.includes(h.toLowerCase()))) {
+      searchQuery = `${hintBlock} ${searchQuery}`;
     }
   }
 
@@ -193,15 +245,19 @@ async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
     searchQuery,
   );
 
-  if (process.env.NODE_ENV !== "production") {
-    console.log("[chat] retrieval_query", {
-      method,
-      multi_query: multiQueryMethod,
-      search_queries: searchQueries,
-    });
-  }
+  logChatRoute("semantic_rag", parsed, {
+    reformulation: method,
+    multi_query: multiQueryMethod,
+    search_queries: searchQueries,
+  });
 
-  const notionContext = await buildNotionContextForChat(searchQueries);
+  const { context: notionContext, confidence, chunkHits } =
+    await buildNotionContextWithConfidence(searchQueries, {
+      titleBoost: titleBoost || undefined,
+    });
+
+  logRetrievalDiagnostics(parsed, searchQueries, confidence, chunkHits);
+
   if (!notionContext.trim()) {
     return jsonAnswer(
       ctx.sessionId,
@@ -209,8 +265,8 @@ async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
     );
   }
 
-  if (process.env.NODE_ENV !== "production") {
-    console.log(`[chat] mode=semantic context_chars=${notionContext.length}`);
+  if (!confidence.ok) {
+    return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE);
   }
 
   return streamGeminiAnswer(ctx.message, notionContext, ctx.history, ctx.sessionId);

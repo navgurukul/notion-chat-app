@@ -1,5 +1,5 @@
 /**
- * AI layer — embeddings (search) and Gemini (answers).
+ * AI layer — embeddings (search) and OpenAI (answers).
  */
 export {
   getChatStream,

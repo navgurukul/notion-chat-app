@@ -1,16 +1,30 @@
 import { getChatStream } from "@/lib/ai/gemini";
 import type { ChatHistoryItem } from "@/lib/ai/gemini";
+import { GEMINI_QUOTA_USER_MESSAGE, isGeminiQuotaError } from "@/lib/ai/provider-errors";
 import { addChatMessage } from "@/lib/chat/store";
 import { extractFinalAnswer } from "@/lib/chat/stream-tags";
 
-/** Stream Gemini tokens to the browser and save the final answer to the chat session. */
+/** Stream OpenAI tokens to the browser and save the final answer to the chat session. */
 export async function streamGeminiAnswer(
   message: string,
   notionContext: string,
   chatHistory: ChatHistoryItem[],
   sessionId: string | null,
 ) {
-  const stream = await getChatStream(message, notionContext, chatHistory);
+  let stream: Awaited<ReturnType<typeof getChatStream>>;
+  try {
+    stream = await getChatStream(message, notionContext, chatHistory);
+  } catch (error) {
+    if (isGeminiQuotaError(error)) {
+      if (sessionId) await addChatMessage(sessionId, "bot", GEMINI_QUOTA_USER_MESSAGE);
+      return new Response(GEMINI_QUOTA_USER_MESSAGE, {
+        status: 429,
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
+    }
+    throw error;
+  }
+
   const encoder = new TextEncoder();
 
   const readableStream = new ReadableStream({

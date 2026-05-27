@@ -1,9 +1,15 @@
 /**
- * Build text context for Gemini: keyword page prefetch + chunk/vector search.
+ * Build text context for the chat LLM: keyword page prefetch + chunk/vector search.
  */
 import { escapeLike, query } from "@/lib/db";
 import { extractQuestionTerms } from "@/lib/rag/question-terms";
 import { simplifySearchQuery } from "@/lib/shared/search-query";
+import { runHybridChunkRetrieval } from "@/lib/rag/hybrid-search";
+import {
+  assessRetrievalConfidence,
+  type ChunkRetrievalHit,
+  type RetrievalConfidenceResult,
+} from "@/lib/rag/retrieval-confidence";
 import { semanticSearch } from "@/lib/rag/semantic-search";
 
 type PageRow = {
@@ -142,21 +148,7 @@ export async function prefetchPagesFromQuestion(question: string): Promise<strin
   return sections.join("\n\n---\n\n");
 }
 
-/**
- * Unified context for the LLM: database pages first, then chunk/vector search.
- * Ensures answers can use real synced Notion data even when embeddings are sparse.
- */
-export async function buildNotionContextForChat(
-  searchQuery: string | string[],
-): Promise<string> {
-  const queries = Array.isArray(searchQuery) ? searchQuery : [searchQuery];
-  const primary = queries.find((q) => q.trim())?.trim() ?? "";
-
-  const [prefetch, semantic] = await Promise.all([
-    prefetchPagesFromQuestion(primary),
-    semanticSearch(queries.length > 1 ? queries : primary),
-  ]);
-
+function assembleChatContext(prefetch: string, semantic: string) {
   if (!prefetch && !semantic) return "";
   if (!prefetch) return semantic;
   if (!semantic) {
@@ -170,4 +162,55 @@ export async function buildNotionContextForChat(
     "## Additional excerpts (search index)",
     semantic,
   ].join("\n\n");
+}
+
+export type ChatContextBuild = {
+  context: string;
+  confidence: RetrievalConfidenceResult;
+  chunkHits: ChunkRetrievalHit[];
+};
+
+/**
+ * Unified context for the LLM with retrieval confidence (evidence gate).
+ */
+export async function buildNotionContextForChat(
+  searchQuery: string | string[],
+): Promise<string> {
+  const built = await buildNotionContextWithConfidence(searchQuery);
+  return built.context;
+}
+
+export async function buildNotionContextWithConfidence(
+  searchQuery: string | string[],
+  options?: { titleBoost?: string },
+): Promise<ChatContextBuild> {
+  const queries = Array.isArray(searchQuery) ? searchQuery : [searchQuery];
+  const primary = queries.find((q) => q.trim())?.trim() ?? "";
+  const titleBoost = options?.titleBoost?.trim();
+
+  const [prefetch, hybrid] = await Promise.all([
+    prefetchPagesFromQuestion(titleBoost || primary),
+    runHybridChunkRetrieval(queries, titleBoost),
+  ]);
+
+  let semantic = hybrid.context ?? "";
+  if (!semantic) {
+    semantic = await semanticSearch(queries.length > 1 ? queries : primary, {
+      skipHybrid: true,
+    });
+  }
+
+  const context = assembleChatContext(prefetch, semantic);
+  const chunkHits: ChunkRetrievalHit[] = hybrid.rows.map((row) => ({
+    chunk_id: row.chunk_id,
+    page_id: row.page_id,
+    title: row.title,
+    final_score: row.final_score,
+    sem_score: row.sem_score,
+    kw_score: row.kw_score,
+  }));
+
+  const confidence = assessRetrievalConfidence(chunkHits, prefetch.length);
+
+  return { context, confidence, chunkHits };
 }

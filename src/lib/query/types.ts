@@ -12,6 +12,7 @@ export type QueryKind =
   | "status_of"
   | "activity_summary"
   | "team_activity"
+  | "team_roster"
   | "blocker_list"
   | "project_eta"
   | "page_about"

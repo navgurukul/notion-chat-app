@@ -98,11 +98,11 @@ async function testRagPath() {
   }
 
   pass(
-    "RAG path (prefetch + search → ready for Gemini)",
+    "RAG path (prefetch + search → ready for OpenAI)",
     `kind=semantic · prefetch=${prefetch.length} chars · full_context=${context.length} chars · Zuvy=yes`,
   );
 
-  if (process.env.GEMINI_API_KEY?.trim()) {
+  if (process.env.OPENAI_API_KEY?.trim()) {
     try {
       const { getChatStream } = await import("../src/lib/ai/gemini");
       const stream = await getChatStream(question, context.slice(0, 12000), []);
@@ -112,15 +112,15 @@ async function testRagPath() {
         if (text.length > 200) break;
       }
       if (text.trim().length > 50) {
-        pass("RAG path — Gemini stream (sample)", `first_chars=${text.trim().slice(0, 80)}...`);
+        pass("RAG path — OpenAI stream (sample)", `first_chars=${text.trim().slice(0, 80)}...`);
       } else {
-        fail("RAG path — Gemini stream", "stream returned too little text");
+        fail("RAG path — OpenAI stream", "stream returned too little text");
       }
     } catch (error) {
-      fail("RAG path — Gemini stream", error instanceof Error ? error.message : String(error));
+      fail("RAG path — OpenAI stream", error instanceof Error ? error.message : String(error));
     }
   } else {
-    pass("RAG path — Gemini stream", "skipped (no GEMINI_API_KEY)");
+    pass("RAG path — OpenAI stream", "skipped (no OPENAI_API_KEY)");
   }
 }
 

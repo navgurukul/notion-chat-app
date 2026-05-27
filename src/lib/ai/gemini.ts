@@ -1,4 +1,9 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import {
+  getChatResponse as getOpenAIChatResponse,
+  getJsonCompletion as getOpenAIJsonCompletion,
+  getChatStream as getOpenAIChatStream,
+} from "@/lib/ai/openai";
 
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 const DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions";
@@ -95,13 +100,12 @@ function buildSystemPrompt(
     Use the conversation history only for follow-ups and pronouns — not as facts.
 
     RULES:
-    1. Answer from the retrieved context. Summarize clearly (bullets/sections when helpful).
-    2. Include concrete facts: status, owner, titles, and short excerpts when relevant.
-    3. End with source page title(s) and Notion URLs from the context when available.
-    4. Page titles may include emoji (e.g. "🚀 Employee Onboarding Hub" = "Employee Onboarding Hub").
-    5. If the context mentions the topic (even partially), answer from it — do not say you could not find it.
-    6. Only if the context has zero relevant pages, say: "I couldn't find this in the current Notion data."
-    7. Do not invent facts, people, dates, or counts not present in the context.
+    1. Answer ONLY from the retrieved context. Do not invent facts, people, dates, or amounts.
+    2. Start with a direct answer in 1–2 sentences, then ### sections with bullets (max 6–8 per section).
+    3. Every important claim must be supported by the context. End with **Sources:** listing page titles as markdown links from the context.
+    4. If context is partial, say what you found and what is missing — do not guess.
+    5. Only if the context has zero relevant pages, say: "I couldn't find this in the current Notion data."
+    6. Page titles may include emoji; treat them as the same page name without emoji.
 
     ${streamingInstruction}
 
@@ -290,67 +294,11 @@ export async function getChatResponse(
   context: string,
   history: ChatHistoryItem[] = [],
 ) {
-  try {
-    const provider = getAIProvider();
-    if (provider === "deepseek") {
-      return await getDeepSeekResponse(prompt, context, history);
-    }
-
-    const model = getGeminiClient().getGenerativeModel({
-      model: getGeminiModel(),
-    });
-
-    const result = await withRetry(
-      () => model.generateContent([buildSystemPrompt(context, history), prompt]),
-      "Gemini generateContent",
-    );
-    const response = await result.response;
-    return response.text();
-  } catch (error) {
-    console.error("AI Error:", error);
-    throw error;
-  }
+  return await getOpenAIChatResponse(prompt, context, history);
 }
 
 export async function getJsonCompletion(systemPrompt: string, prompt: string) {
-  const provider = getAIProvider();
-
-  if (provider === "deepseek") {
-    const response = await withRetry(
-      () =>
-        requestDeepSeek({
-          model: getDeepSeekModel(),
-          messages: buildDeepSeekJsonMessages(systemPrompt, prompt),
-          response_format: { type: "json_object" },
-          temperature: 0,
-          max_tokens: 220,
-        }),
-      "DeepSeek JSON completion",
-    );
-
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content) throw new Error("DeepSeek JSON response missing content.");
-    return content;
-  }
-
-  const model = getGeminiClient().getGenerativeModel({
-    model: getGeminiModel(),
-    generationConfig: {
-      temperature: 0,
-      maxOutputTokens: 220,
-      responseMimeType: "application/json",
-    },
-  });
-
-  const result = await withRetry(
-    () => model.generateContent([systemPrompt, prompt]),
-    "Gemini JSON completion",
-  );
-  const response = await result.response;
-  return response.text();
+  return await getOpenAIJsonCompletion(systemPrompt, prompt);
 }
 
 export async function getChatStream(
@@ -358,27 +306,5 @@ export async function getChatStream(
   context: string,
   history: ChatHistoryItem[] = [],
 ) {
-  try {
-    const provider = getAIProvider();
-    if (provider === "deepseek") {
-      return getDeepSeekStream(prompt, context, history);
-    }
-
-    const model = getGeminiClient().getGenerativeModel({
-      model: getGeminiModel(),
-    });
-
-    const result = await withRetry(
-      () =>
-        model.generateContentStream([
-          buildSystemPrompt(context, history, { streaming: true }),
-          prompt,
-        ]),
-      "Gemini generateContentStream",
-    );
-    return result.stream as ChatStream;
-  } catch (error) {
-    console.error("AI Stream Error:", error);
-    throw error;
-  }
+  return await getOpenAIChatStream(prompt, context, history);
 }

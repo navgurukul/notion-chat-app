@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { Session } from "next-auth";
+import { GEMINI_QUOTA_USER_MESSAGE, isGeminiQuotaError } from "@/lib/ai/provider-errors";
 import {
   ChatNotFoundError,
   ChatValidationError,
@@ -17,6 +18,12 @@ export async function handleChatPost(session: Session, body: ChatRequestBody) {
     }
     if (error instanceof ChatNotFoundError) {
       return NextResponse.json({ error: error.message }, { status: 404 });
+    }
+    if (isGeminiQuotaError(error)) {
+      return NextResponse.json(
+        { error: GEMINI_QUOTA_USER_MESSAGE, answer: GEMINI_QUOTA_USER_MESSAGE },
+        { status: 429 },
+      );
     }
     throw error;
   }

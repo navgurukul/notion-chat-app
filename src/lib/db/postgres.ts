@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -16,7 +16,7 @@ let schemaPromise: Promise<void> | null = null;
 const SCHEMA_ADVISORY_LOCK_ID = 9_152_4001;
 
 async function safeCreateTable(
-  client: Awaited<ReturnType<typeof pool.connect>>,
+  client: PoolClient,
   sql: string,
 ) {
   try {
@@ -62,7 +62,7 @@ const NOTION_PAGE_COLUMN_MIGRATIONS: ColumnMigration[] = [
 ];
 
 async function columnExists(
-  client: Awaited<ReturnType<typeof pool.connect>>,
+  client: PoolClient,
   table: string,
   column: string,
 ) {
@@ -81,7 +81,7 @@ async function columnExists(
 }
 
 async function tableExists(
-  client: Awaited<ReturnType<typeof pool.connect>>,
+  client: PoolClient,
   table: string,
 ) {
   const result = await client.query(
@@ -99,7 +99,7 @@ async function tableExists(
 
 /** v2 bootstrap used uuid id + notion_page_id; sync expects Notion page id as TEXT primary key. */
 async function reconcileNotionPagesSchema(
-  client: Awaited<ReturnType<typeof pool.connect>>,
+  client: PoolClient,
 ) {
   if (!(await tableExists(client, "notion_pages"))) return;
 
@@ -124,7 +124,7 @@ async function reconcileNotionPagesSchema(
 }
 
 async function ensureNotionChunksSchema(
-  client: Awaited<ReturnType<typeof pool.connect>>,
+  client: PoolClient,
 ) {
   await safeCreateTable(
     client,
@@ -164,7 +164,7 @@ async function ensureNotionChunksSchema(
 }
 
 async function addColumnIfMissing(
-  client: Awaited<ReturnType<typeof pool.connect>>,
+  client: PoolClient,
   { table, column, definition }: ColumnMigration,
 ) {
   const exists = await client.query(
@@ -186,7 +186,7 @@ async function addColumnIfMissing(
 }
 
 async function runColumnMigrations(
-  client: Awaited<ReturnType<typeof pool.connect>>,
+  client: PoolClient,
   migrations: ColumnMigration[],
 ) {
   for (const migration of migrations) {

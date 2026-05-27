@@ -23,6 +23,19 @@ const CASES: Array<{
     mustInclude: ["Tamanna", "DataPivots"],
   },
   {
+    question: "What is Tamanna working on?",
+    expectKind: "activity_summary",
+    mustInclude: ["Tamanna"],
+  },
+  {
+    question: "Tell me about leave policy",
+    expectKind: "semantic",
+  },
+  {
+    question: "Summarize Zuvy",
+    expectKind: "semantic",
+  },
+  {
     question: "can you tell me about Employee Onboarding Hub",
     expectKind: "page_about",
     mustInclude: ["Onboarding"],
@@ -93,6 +106,21 @@ const CASES: Array<{
     mustInclude: ["Souvik", "Oscar"],
   },
   {
+    question: "Which project does Souvik own?",
+    expectKind: "owner_list",
+    mustInclude: ["Souvik", "Oscar"],
+  },
+  {
+    question: "Which project does amruta ji own?",
+    expectKind: "owner_list",
+    mustInclude: ["Amruta", "Activity Tracker"],
+  },
+  {
+    question: "who own - Career Exploration Pilot",
+    expectKind: "owner_of",
+    mustInclude: ["Piyush"],
+  },
+  {
     question: "pages owned by souvik",
     expectKind: "owner_list",
     mustInclude: ["Souvik", "Oscar"],
@@ -142,6 +170,11 @@ const CASES: Array<{
     question: "Compare Oscar MVP and Oscar App — what's the difference in scope?",
     expectKind: "compare_pages",
     mustInclude: ["Oscar MVP", "Oscar App"],
+  },
+  {
+    question: "Compare Oscar MVP and Oscar App scope",
+    expectKind: "compare_pages",
+    mustInclude: ["Oscar MVP", "Oscar App", "In Development"],
   },
   {
     question: "What are the main risks mentioned for the Oscar mobile app?",

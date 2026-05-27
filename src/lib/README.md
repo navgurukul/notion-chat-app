@@ -14,7 +14,7 @@ User question (browser)
         │
         ├── sql/       ← direct Postgres answers
         │
-        └── rag/ + ai/ ← search Notion + Gemini
+                └── rag/ + ai/ ← search Notion + OpenAI
                 ▲
                 │
          ingestion/    ← sync Notion, chunk, embed (background)
@@ -30,7 +30,7 @@ User question (browser)
 | **query/** | Classify intent (`status_of`, `semantic`, …) | `query/resolve-query.ts` |
 | **sql/** | Structured answers from `notion_pages` | `sql/answers.ts` |
 | **rag/** | Retrieve context for open questions | `rag/build-context.ts` |
-| **ai/** | Gemini chat + embeddings | `ai/gemini.ts` |
+| **ai/** | OpenAI chat + embeddings | `ai/openai.ts` |
 | **ingestion/** | Notion sync → DB + chunks | `ingestion/sync.ts` |
 
 ## Infrastructure folders

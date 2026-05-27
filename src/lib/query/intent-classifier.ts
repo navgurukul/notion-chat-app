@@ -16,6 +16,7 @@ const ALL_KINDS: QueryKind[] = [
   "status_of",
   "activity_summary",
   "team_activity",
+  "team_roster",
   "blocker_list",
   "project_eta",
   "page_about",
@@ -47,6 +48,7 @@ const NEEDS_TITLE = new Set<QueryKind>([
   "page_about",
   "project_summary",
   "team_activity",
+  "team_roster",
   "blocker_list",
   "project_eta",
   "risks_for",
@@ -112,7 +114,8 @@ Intent guide:
 - onboarding_tasks: new hire onboarding checklist
 - blocker_list: blockers in a workspace/project
 - project_eta: deadline/completion date
-- team_activity: most active person in a team/project
+- team_activity: most/least active person in a team/project (based on question wording)
+- team_roster: who is working on a project (all contributors, not only owner)
 - semantic: open-ended why/how, synthesis, or unclear
 
 Rules:
