@@ -6,6 +6,7 @@ import { useEffect, useState, useRef } from "react";
 import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { hasKnowledgeBaseAccess } from "@/lib/shared/access";
 import {
   extractFinalAnswer,
   stripInternalReasoning,
@@ -58,7 +59,6 @@ export default function ChatPage() {
   const [syncMode, setSyncMode] = useState<"incremental" | "full" | null>(null);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
-  const [syncClock, setSyncClock] = useState(Date.now());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const botMessageIndexRef = useRef<number | null>(null);
   const pendingBotMessageIndexRef = useRef<number | null>(null);
@@ -66,6 +66,7 @@ export default function ChatPage() {
   const messagesLoadGenerationRef = useRef(0);
   const activeSessionIdRef = useRef<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const canManageKnowledgeBase = hasKnowledgeBaseAccess(session);
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
@@ -76,17 +77,6 @@ export default function ChatPage() {
       router.push("/login");
     }
   }, [status, router]);
-
-  useEffect(() => {
-    const tick = () => setSyncClock(Date.now());
-    const intervalId = setInterval(tick, 30_000);
-    const onFocus = () => tick();
-    window.addEventListener("focus", onFocus);
-    return () => {
-      clearInterval(intervalId);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, []);
 
   useEffect(() => {
     if (status !== "authenticated") return;
@@ -103,7 +93,6 @@ export default function ChatPage() {
           const data = await syncResponse.json();
           if (typeof data?.synced_at === "string" && data.synced_at) {
             setLastSyncedAt(data.synced_at);
-            setSyncClock(Date.now());
             localStorage.setItem(LAST_SYNC_STORAGE_KEY, data.synced_at);
           }
         } else {
@@ -211,11 +200,6 @@ export default function ChatPage() {
 
     loadSessionMessages();
   }, [activeSessionId, chatsReady]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setSyncClock(Date.now()), 60000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -496,7 +480,6 @@ export default function ChatPage() {
 
       if (typeof data?.synced_at === "string" && data.synced_at) {
         setLastSyncedAt(data.synced_at);
-        setSyncClock(Date.now());
         localStorage.setItem(LAST_SYNC_STORAGE_KEY, data.synced_at);
       }
 
@@ -531,30 +514,22 @@ export default function ChatPage() {
   };
 
   const formatRelativeSyncTime = (isoTime: string | null) => {
-    if (!isoTime) return "Last synced: never";
+    if (!isoTime) return "No sync recorded yet";
     const syncTime = parseSyncTimestamp(isoTime);
-    if (!Number.isFinite(syncTime)) return "Last synced: unknown";
+    if (!Number.isFinite(syncTime)) return "Unknown sync time";
 
-    const diffMs = Math.max(0, syncClock - syncTime);
+    const diffMs = Math.max(0, Date.now() - syncTime);
     const diffSec = Math.floor(diffMs / 1000);
     const diffMins = Math.floor(diffMs / 60000);
 
-    if (diffSec < 15) return "Last synced: just now";
-    if (diffSec < 60) return `Last synced: ${diffSec} sec ago`;
-    if (diffMins < 60) return `Last synced: ${diffMins} min ago`;
+    if (diffSec < 60) return diffSec < 15 ? "just now" : `${diffSec} sec ago`;
+    if (diffMins < 60) return `${diffMins} min ago`;
 
     const diffHours = Math.floor(diffMins / 60);
-    if (diffHours < 24) return `Last synced: ${diffHours} hr ago`;
+    if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? "" : "s"} ago`;
 
     const diffDays = Math.floor(diffHours / 24);
-    return `Last synced: ${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
-  };
-
-  const formatSyncTimeTitle = (isoTime: string | null) => {
-    if (!isoTime) return "No sync recorded yet";
-    const syncTime = parseSyncTimestamp(isoTime);
-    if (!Number.isFinite(syncTime)) return isoTime;
-    return new Date(syncTime).toLocaleString();
+    return `${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
   };
 
   if (status === "loading") {
@@ -731,56 +706,69 @@ export default function ChatPage() {
               <div className="w-2 h-2 shrink-0 rounded-full bg-blue-500 animate-pulse" />
               <span className="font-medium">Connected to Notion Database</span>
             </div>
-            <button
-              type="button"
-              onClick={handleIncrementalSync}
-              disabled={isSyncing}
-              title="Sync updated Notion pages"
-              className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 transition-all disabled:opacity-60 ${
-                isSyncing
-                  ? "bg-white/5 text-white/70"
-                  : syncStatus === "success"
-                    ? "bg-green-500/10 text-green-400"
-                    : syncStatus === "error"
-                      ? "bg-red-500/10 text-red-400"
-                      : "hover:bg-white/[0.08] text-white/80 hover:text-white"
-              }`}
-            >
-              {isSyncing ? (
-                <RefreshCw className="w-4 h-4 shrink-0 animate-spin text-blue-500" />
-              ) : syncStatus === "success" ? (
-                <CheckCircle className="w-4 h-4 shrink-0" />
-              ) : syncStatus === "error" ? (
-                <XCircle className="w-4 h-4 shrink-0" />
-              ) : (
-                <RefreshCw className="w-4 h-4 shrink-0" />
-              )}
-              <span className="flex-1 text-left text-sm font-semibold">
-                {isSyncing
-                  ? syncMode === "full"
-                    ? "Full rebuild..."
-                    : "Syncing..."
-                  : syncStatus === "success"
-                    ? "Synced"
-                    : syncStatus === "error"
-                      ? "Sync failed"
-                      : "Sync Notion"}
-              </span>
-            </button>
+            {canManageKnowledgeBase ? (
+              <>
+                <button
+                  type="button"
+                  onClick={handleIncrementalSync}
+                  disabled={isSyncing}
+                  title="Sync updated Notion pages"
+                  className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 transition-all disabled:opacity-60 ${
+                    isSyncing
+                      ? "bg-white/5 text-white/70"
+                      : syncStatus === "success"
+                        ? "bg-green-500/10 text-green-400"
+                        : syncStatus === "error"
+                          ? "bg-red-500/10 text-red-400"
+                          : "hover:bg-white/[0.08] text-white/80 hover:text-white"
+                  }`}
+                >
+                  {isSyncing ? (
+                    <RefreshCw className="w-4 h-4 shrink-0 animate-spin text-blue-500" />
+                  ) : syncStatus === "success" ? (
+                    <CheckCircle className="w-4 h-4 shrink-0" />
+                  ) : syncStatus === "error" ? (
+                    <XCircle className="w-4 h-4 shrink-0" />
+                  ) : (
+                    <RefreshCw className="w-4 h-4 shrink-0" />
+                  )}
+                  <span className="flex-1 text-left text-sm font-semibold">
+                    {isSyncing
+                      ? syncMode === "full"
+                        ? "Full rebuild..."
+                        : "Syncing..."
+                      : syncStatus === "success"
+                        ? "Synced"
+                        : syncStatus === "error"
+                          ? "Sync failed"
+                          : "Sync Notion"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowFullSyncConfirm(true)}
+                  disabled={isSyncing}
+                  className="mt-1.5 w-full text-left px-1 text-[10px] text-white/35 hover:text-amber-400/90 disabled:opacity-30 transition-colors"
+                >
+                  Full rebuild (all pages)…
+                </button>
+              </>
+            ) : (
+              <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-[11px] leading-relaxed text-white/70">
+                <div className="text-white/45 uppercase tracking-wide text-[10px] mb-1">
+                  Last sync by admin
+                </div>
+                <div className="font-medium text-white/90" title={formatRelativeSyncTime(lastSyncedAt)}>
+                  {formatRelativeSyncTime(lastSyncedAt)}
+                </div>
+              </div>
+            )}
             <p
               className="mt-2 px-1 text-[10px] text-white/45 leading-snug"
-              title={formatSyncTimeTitle(lastSyncedAt)}
+              title={formatRelativeSyncTime(lastSyncedAt)}
             >
               {isSyncing ? "Sync in progress…" : formatRelativeSyncTime(lastSyncedAt)}
             </p>
-            <button
-              type="button"
-              onClick={() => setShowFullSyncConfirm(true)}
-              disabled={isSyncing}
-              className="mt-1.5 w-full text-left px-1 text-[10px] text-white/35 hover:text-amber-400/90 disabled:opacity-30 transition-colors"
-            >
-              Full rebuild (all pages)…
-            </button>
           </div>
         </div>
 

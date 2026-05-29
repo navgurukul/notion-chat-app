@@ -2,10 +2,24 @@ import { NextResponse, NextRequest } from "next/server";
 import { isSessionResponse, requireSession } from "@/lib/auth";
 import { getNotionLastSyncRun, query } from "@/lib/db";
 import { syncNotionToPostgres } from "@/lib/ingestion";
+import { createRateLimiter } from "@/lib/shared/rate-limit";
+import { hasKnowledgeBaseAccess } from "@/lib/shared/access";
 
 type LastSyncRow = {
   last_synced_at: string | null;
 };
+
+const checkSyncRateLimit = createRateLimiter({
+  maxRequests: 1,
+  windowMs: 2 * 60_000,
+});
+
+function denySyncAccess() {
+  return NextResponse.json(
+    { error: "Forbidden: only tamanna@navgurukul.org can sync or rebuild the knowledge base." },
+    { status: 403 },
+  );
+}
 
 export async function GET() {
   try {
@@ -37,6 +51,18 @@ export async function POST(req: NextRequest) {
   try {
     const session = await requireSession();
     if (isSessionResponse(session)) return session;
+
+    if (!hasKnowledgeBaseAccess(session)) {
+      return denySyncAccess();
+    }
+
+    const userKey = session.user?.email?.toLowerCase() || "anonymous";
+    if (!checkSyncRateLimit(userKey)) {
+      return NextResponse.json(
+        { error: "Too many sync requests. Wait a couple of minutes before trying again." },
+        { status: 429 },
+      );
+    }
 
     const { searchParams } = new URL(req.url);
     const force = searchParams.get("force") === "true";
