@@ -24,8 +24,9 @@ import {
   metadataNotFoundAnswer,
 } from "@/lib/chat/routing-policy";
 import { logChatRoute, logRetrievalDiagnostics } from "@/lib/chat/retrieval-diagnostics";
-import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
+import { buildNotionContextWithConfidence, buildRetrievalOnlyAnswer } from "@/lib/rag/build-context";
 import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag/retrieval-confidence";
+import { checkLlmGenerationBudget } from "@/lib/shared/ai-budget";
 
 function stripTitleEmoji(title: string) {
   return title
@@ -267,6 +268,11 @@ async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
 
   if (!confidence.ok) {
     return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE);
+  }
+
+  const generationBudget = checkLlmGenerationBudget(session.user?.email || "anonymous");
+  if (!generationBudget.allowed) {
+    return jsonAnswer(ctx.sessionId, buildRetrievalOnlyAnswer(notionContext));
   }
 
   return streamGeminiAnswer(ctx.message, notionContext, ctx.history, ctx.sessionId);

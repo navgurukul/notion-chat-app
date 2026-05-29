@@ -164,6 +164,63 @@ function assembleChatContext(prefetch: string, semantic: string) {
   ].join("\n\n");
 }
 
+function extractPrefetchSections(context: string) {
+  const prefetchBlock = context
+    .split("\n\n---\n\n## Additional excerpts (search index)")[0]
+    .trim();
+  const prefetchSection = prefetchBlock
+    .replace(/^## Synced Notion pages \(from database\)\n\n/, "")
+    .trim();
+
+  if (!prefetchSection) return [];
+
+  return prefetchSection
+    .split("\n\n---\n\n")
+    .map((section) => section.trim())
+    .filter(Boolean);
+}
+
+function formatRetrievalPreviewSection(section: string) {
+  const lines = section
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const title = lines.find((line) => line.startsWith("Title:")) ?? "Title: Untitled";
+  const url = lines.find((line) => line.startsWith("URL:"));
+  const status = lines.find((line) => line.startsWith("Status:"));
+  const owner = lines.find((line) => line.startsWith("Owner:"));
+  const metadata = [status, owner].filter(Boolean).join(" · ");
+  const snippet = lines
+    .filter((line) => !/^(Title|URL|Status|Owner|Created by|Type):/i.test(line))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const clippedSnippet = snippet.length > 320 ? `${snippet.slice(0, 320)}...` : snippet;
+
+  return [title, metadata, url, clippedSnippet ? `Snippet: ${clippedSnippet}` : ""]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function buildRetrievalOnlyAnswer(context: string) {
+  const previewSections = extractPrefetchSections(context).slice(0, 3);
+
+  if (!previewSections.length) {
+    return "I found related Notion pages, but I couldn't build a compact preview. Try rephrasing with a page, project, or person name from Notion.";
+  }
+
+  const preview = previewSections.map((section) => formatRetrievalPreviewSection(section)).join(
+    "\n\n",
+  );
+
+  return [
+    "I found related Notion pages, but I'm returning the strongest matches without generating a full AI answer to stay within the AI budget.",
+    "",
+    preview,
+  ].join("\n");
+}
+
 export type ChatContextBuild = {
   context: string;
   confidence: RetrievalConfidenceResult;
