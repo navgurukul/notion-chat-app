@@ -72,7 +72,7 @@ function cleanPersonName(value: string | null) {
   if (!value) return null;
   const cleaned = stripYearSuffixFromPerson(
     stripDocWords(value)
-      .replace(/\s+(?:has|have|had)\s*$/i, "")
+      .replace(/\s+(?:is|are|was|were|has|have|had)\s*$/i, "")
       .replace(/^(?:did|does|do)\s+/i, ""),
   ).trim();
   if (!cleaned) return null;

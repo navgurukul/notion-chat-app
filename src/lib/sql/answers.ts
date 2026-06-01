@@ -355,7 +355,7 @@ async function findProjectRosterThemes(person: string) {
     WHERE
       (
         lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(content, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+        OR regexp_replace(lower(coalesce(content, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
       )
       AND (
         lower(coalesce(title, '')) LIKE '%datapivot%'
@@ -1153,7 +1153,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       FROM notion_pages
       WHERE
         lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+        OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
       ORDER BY
         CASE
           WHEN lower(coalesce(status, '')) IN ('in development', 'in progress', 'testing', 'prod ready') THEN 0
@@ -1256,7 +1256,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         )
         AND (
           lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
-          OR regexp_replace(lower(coalesce(content, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+          OR regexp_replace(lower(coalesce(content, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
         )
       )
     `;
@@ -1267,7 +1267,7 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       WHERE
         (
           lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-          OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+          OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
           OR ${assigneeInContentSql}
         )
         AND (
@@ -1350,9 +1350,9 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
         OR lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\'
         OR lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+        OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
+        OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
+        OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
         OR ${personPropertyInContentSql}
       )
     `;
@@ -1382,14 +1382,14 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         notion_edited_at::text AS notion_edited_at,
         CASE
           WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-            OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+            OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
             THEN 'owner'
           WHEN ${personPropertyInContentSql} THEN 'assignee'
           WHEN lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\'
-            OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+            OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
             THEN 'creator'
           WHEN lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
-            OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+            OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
             THEN 'last editor'
           ELSE 'mentioned'
         END AS match_source
@@ -1840,9 +1840,9 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
         OR lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\'
         OR lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+        OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
+        OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
+        OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
         OR ${personPropertyInContentSql}
       )
     `;
@@ -1907,23 +1907,23 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
           notion_edited_at::text AS notion_edited_at,
           CASE
             WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-              OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+              OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
               THEN 'owner'
             WHEN ${personPropertyInContentSql}
               THEN 'captain/assignee'
             WHEN lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
-              OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+              OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
               THEN 'last editor'
             ELSE 'creator'
           END AS activity_role,
           CASE
             WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-              OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+              OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
               THEN 1
             WHEN ${personPropertyInContentSql}
               THEN 2
             WHEN lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
-              OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2 ESCAPE '\\'
+              OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
               THEN 3
             ELSE 4
           END AS role_rank,
@@ -1976,19 +1976,23 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
           FROM notion_pages
           WHERE
             lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
-            AND ${topicFilterSql}
             AND (
-              $4::text IS NULL
+              $2::text IS NULL
+              OR lower(coalesce(title, '')) LIKE lower($2) ESCAPE '\\'
+              OR lower(coalesce(content, '')) LIKE lower($2) ESCAPE '\\'
+            )
+            AND (
+              $3::text IS NULL
               OR (
                 notion_edited_at IS NOT NULL
-                AND notion_edited_at >= $4::timestamptz
-                AND notion_edited_at < $5::timestamptz
+                AND notion_edited_at >= $3::timestamptz
+                AND notion_edited_at < $4::timestamptz
               )
             )
           ORDER BY status_rank ASC, notion_edited_at DESC NULLS LAST, title ASC
           LIMIT ${SQL_RESULT_LIMIT}
           `,
-          [personTerm, fuzzyPersonTerm, topicTerm, yearStart, yearEnd],
+          [personTerm, topicTerm, yearStart, yearEnd],
         );
 
     if (!rows.length) {

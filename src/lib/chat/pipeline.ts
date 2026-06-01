@@ -24,9 +24,8 @@ import {
   metadataNotFoundAnswer,
 } from "@/lib/chat/routing-policy";
 import { logChatRoute, logRetrievalDiagnostics } from "@/lib/chat/retrieval-diagnostics";
-import { buildNotionContextWithConfidence, buildRetrievalOnlyAnswer } from "@/lib/rag/build-context";
+import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
 import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag/retrieval-confidence";
-import { checkLlmGenerationBudget } from "@/lib/shared/ai-budget";
 
 function stripTitleEmoji(title: string) {
   return title
@@ -97,7 +96,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody) {
     return jsonAnswer(sessionId, "Ask for a Notion link using the page title, e.g. **link for Employee Onboarding Hub**.");
   }
 
-  return tryRagAnswer(parsed, ctx);
+  return tryRagAnswer(parsed, ctx, session);
 }
 
 function validateMessage(raw: unknown) {
@@ -209,7 +208,7 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
   return null;
 }
 
-async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
+async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext, session: Session) {
   if (isMetadataOnlyKind(parsed.kind) && parsed.kind !== "team_activity") {
     logChatRoute("sql_miss_metadata", parsed, { blocked_rag: true });
     return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed));
@@ -268,11 +267,6 @@ async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
 
   if (!confidence.ok) {
     return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE);
-  }
-
-  const generationBudget = checkLlmGenerationBudget(session.user?.email || "anonymous");
-  if (!generationBudget.allowed) {
-    return jsonAnswer(ctx.sessionId, buildRetrievalOnlyAnswer(notionContext));
   }
 
   return streamGeminiAnswer(ctx.message, notionContext, ctx.history, ctx.sessionId);

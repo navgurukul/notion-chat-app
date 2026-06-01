@@ -1,17 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSessionResponse, requireSession } from "@/lib/auth";
 import { handleChatPost } from "@/lib/chat/handler";
-import { checkRateLimit } from "@/lib/shared/rate-limit";
 
 export async function POST(req: NextRequest) {
   try {
     const session = await requireSession();
     if (isSessionResponse(session)) return session;
-
-    const userKey = session.user?.email || "anonymous";
-    if (!checkRateLimit(userKey) && process.env.CHAT_DEBUG === "true") {
-      console.warn("[chat] request burst limit reached; continuing with cost-aware routing");
-    }
 
     const body = await req.json();
     return handleChatPost(session, body);
