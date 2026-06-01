@@ -58,7 +58,7 @@ function cleanComparePageTitle(value: string) {
 function stripDocWords(value: string) {
   return value
     .replace(
-      /\b(page|doc|document|docs|pages|project|projects|task|tasks|work|worked|assigned|assign|assignee|given|got|to|the|a|an|all|every|some|any|only|one)\b/gi,
+      /\b(page|doc|document|docs|pages|project|projects|task|tasks|work|worked|assigned|assign|assignee|given|got|to|the|a|an|all|every|some|any|only|one|feature|features)\b/gi,
       "",
     )
     .replace(/^(what|which|who|where|when|why|how|was|is)\s+/i, "")
@@ -341,8 +341,28 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "project_manager_of", docTitle: docTitle ?? undefined, raw: question };
   }
 
+  // "What tasks are assigned to X in Y project?" — person + project scoped
+  // Must run BEFORE the year-only variant to capture the project in docTitle.
+  const tasksAssignedToPersonInProjectMatch = question.match(
+    /\b(?:which|what)\s+tasks?\s+(?:are\s+)?assigned\s+to\s+(.+?)\s+in\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
+  );
+  if (tasksAssignedToPersonInProjectMatch?.[1] && tasksAssignedToPersonInProjectMatch?.[2]) {
+    const person = cleanPersonName(tasksAssignedToPersonInProjectMatch[1]);
+    const project = stripDocWords(tasksAssignedToPersonInProjectMatch[2]);
+    // Only use as person+project if the second group is not a year
+    if (person && project && !/^20\d{2}$/.test(project.trim())) {
+      return {
+        kind: "assigned_list",
+        personName: person,
+        docTitle: project,
+        raw: question,
+      };
+    }
+  }
+
+  // "What tasks assigned to X (in 2024)?" — person only, optional year
   const tasksAssignedToYearMatch = question.match(
-    /\b(?:which|what)\s+tasks?\s+assigned\s+to\s+(.+?)(?:\s+in\s+(?:the\s+)?(?:year\s+)?(20\d{2}))?(?:\?|$)/i,
+    /\b(?:which|what)\s+tasks?\s+(?:are\s+)?assigned\s+to\s+(.+?)(?:\s+in\s+(?:the\s+)?(?:year\s+)?(20\d{2}))?(?:\?|$)/i,
   );
   if (tasksAssignedToYearMatch?.[1]) {
     const person = cleanPersonName(tasksAssignedToYearMatch[1]);
@@ -370,26 +390,31 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
+  // "assigned to [person] in/for [project]" — person + project
+  const personAssignedTopicMatch = question.match(
+    /(?:assigned|assign|given)\s+to\s+(.+?)\s+(?:for|in|on|about|related to)\s+(.+?)(?:\?|$)/i,
+  );
+  if (personAssignedTopicMatch?.[1] && personAssignedTopicMatch?.[2]) {
+    const person = cleanPersonName(personAssignedTopicMatch[1]);
+    const project = stripDocWords(personAssignedTopicMatch[2]);
+    if (person && project) {
+      return {
+        kind: "assigned_list",
+        personName: person,
+        docTitle: project,
+        raw: question,
+      };
+    }
+  }
+
   const topicAssignedToPersonMatch = question.match(
-    /^(?!who\s+(?:is\s+)?assigned\s+to)(?!what\s+tasks?\s+assigned\s+to)(?!which\s+project\s+.+\s+is\s+assigned)(?!what\s+project\s+.+\s+is\s+assigned)(?:only\s+one\s+|one\s+|single\s+)?(?:tasks?|projects?|work|data|docs?|documents?|pages?)?\s*(?:of|for|in|on|about|related to)?\s*(.+?)\s+(?:assigned|assign|given)\s+to\s+(.+?)(?:\?|$)/i,
+    /^(?!who\s+(?:is\s+)?assigned\s+to)(?!what\s+tasks?\s+(?:are\s+)?assigned\s+to)(?!which\s+project\s+.+\s+is\s+assigned)(?!what\s+project\s+.+\s+is\s+assigned)(?:only\s+one\s+|one\s+|single\s+)?(?:tasks?|projects?|work|data|docs?|documents?|pages?)?\s*(?:of|for|in|on|about|related to)?\s*(.+?)\s+(?:assigned|assign|given)\s+to\s+(.+?)(?:\?|$)/i,
   );
   if (topicAssignedToPersonMatch?.[1] && topicAssignedToPersonMatch?.[2]) {
     return {
       kind: "assigned_list",
       docTitle: stripDocWords(topicAssignedToPersonMatch[1]),
       personName: cleanPersonName(topicAssignedToPersonMatch[2]) ?? undefined,
-      raw: question,
-    };
-  }
-
-  const personAssignedTopicMatch = question.match(
-    /(?:assigned|assign|given)\s+to\s+(.+?)\s+(?:for|in|on|about|related to)\s+(.+?)(?:\?|$)/i,
-  );
-  if (personAssignedTopicMatch?.[1] && personAssignedTopicMatch?.[2]) {
-    return {
-      kind: "assigned_list",
-      personName: cleanPersonName(personAssignedTopicMatch[1]) ?? undefined,
-      docTitle: stripDocWords(personAssignedTopicMatch[2]),
       raw: question,
     };
   }

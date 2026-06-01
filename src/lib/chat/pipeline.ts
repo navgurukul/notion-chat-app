@@ -76,9 +76,24 @@ type PipelineContext = {
  * 3. SQL answer when possible
  * 4. History-aware query reformulation → RAG retrieval → LLM stream
  */
+/**
+ * Replace first-person pronouns with the logged-in user's first name so that
+ * "tasks assigned to me" correctly searches for the real Notion owner name.
+ * Only replaces standalone "me", "my", "I" (word boundaries) to avoid false hits
+ * inside other words.
+ */
+function resolveFirstPerson(message: string, session: Session): string {
+  const fullName = session?.user?.name?.trim();
+  if (!fullName) return message;
+  // Use first name only (e.g. "Tamanna" from "Tamanna Singh")
+  const firstName = fullName.split(/\s+/)[0];
+  return message.replace(/\b(me|my|myself|I)\b/g, firstName);
+}
+
 export async function runChatPipeline(session: Session, body: ChatRequestBody) {
-  const message = validateMessage(body.message);
-  const sessionId = await attachSession(session, body.sessionId, message);
+  const rawMessage = validateMessage(body.message);
+  const message = resolveFirstPerson(rawMessage, session);
+  const sessionId = await attachSession(session, body.sessionId, rawMessage);
   const history = sanitizeChatHistory(body.history);
 
   const ctx: PipelineContext = { message, history, sessionId };
