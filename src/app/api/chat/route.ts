@@ -11,19 +11,24 @@ export async function POST(req: NextRequest) {
       return session;
     }
 
-    const userKey =
-      session.user?.email ||
-      session.user?.name ||
-      "anonymous";
+    const userKey = session.user?.email ?? "anonymous";
 
-    const allowed = checkRateLimit(userKey);
+    const rateLimitResult = checkRateLimit(userKey);
 
-    if (!allowed) {
+    if (!rateLimitResult.allowed) {
       return NextResponse.json(
         {
-          error: "Too many requests. Please try again in a minute.",
+          error: `Too many requests. Please try again in ${rateLimitResult.retryAfterSeconds} seconds.`,
+          retryAfter: rateLimitResult.retryAfterSeconds,
         },
-        { status: 429 },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(
+              rateLimitResult.retryAfterSeconds,
+            ),
+          },
+        },
       );
     }
 
@@ -33,9 +38,8 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error("Chat API Error:", error);
 
-    const { isGeminiQuotaError, GEMINI_QUOTA_USER_MESSAGE } = await import(
-      "@/lib/ai/provider-errors"
-    );
+    const { isGeminiQuotaError, GEMINI_QUOTA_USER_MESSAGE } =
+      await import("@/lib/ai/provider-errors");
 
     if (isGeminiQuotaError(error)) {
       return NextResponse.json(
