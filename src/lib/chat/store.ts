@@ -154,3 +154,28 @@ export async function deleteChatSession(sessionId: string, userId: string) {
   );
   return rows.length > 0;
 }
+
+
+export async function getEmptyChatSession(userId: string) {
+  const rows = await query<ChatSessionRow>(
+    `
+    SELECT
+      cs.id,
+      cs.title,
+      cs.created_at::text,
+      cs.updated_at::text
+    FROM chat_sessions cs
+    LEFT JOIN chat_messages cm
+      ON cm.session_id = cs.id
+    WHERE cs.user_id = $1
+    GROUP BY cs.id
+    HAVING COUNT(cm.id) = 0
+    ORDER BY cs.updated_at DESC
+    LIMIT 1
+    `,
+    [userId],
+  );
+
+  return rows[0] ?? null;
+}
+

@@ -212,25 +212,44 @@ export default function ChatPage() {
     if (Array.isArray(data?.sessions)) setChatSessions(data.sessions);
   };
 
-  const createNewChat = async () => {
-    if (isLoading || isLoadingChats) return;
-    setIsLoadingChats(true);
-    try {
-      const response = await fetch("/api/chats", { method: "POST" });
-      if (!response.ok) throw new Error("Failed to create chat");
-      const data = await response.json();
-      if (data?.session) {
-        setChatSessions((prev) => [data.session, ...prev]);
-        setActiveSessionId(data.session.id);
-        setMessages([]);
-        setThinkingByMessage({});
-      }
-    } catch (error) {
-      console.error("Failed to create chat:", error);
-    } finally {
-      setIsLoadingChats(false);
+const createNewChat = async () => {
+  if (isLoading || isLoadingChats) return;
+
+  setIsLoadingChats(true);
+
+  try {
+    const response = await fetch("/api/chats", {
+      method: "POST",
+    });
+
+    if (!response.ok) {
+      throw new Error("Failed to create chat");
     }
-  };
+
+    const data = await response.json();
+
+    if (data?.session) {
+      setChatSessions((prev) => {
+        // Remove existing copy if already present
+        const filtered = prev.filter(
+          (chat) => chat.id !== data.session.id
+        );
+
+        // Put returned chat at top
+        return [data.session, ...filtered];
+      });
+
+      setActiveSessionId(data.session.id);
+      setMessages([]);
+      setThinkingByMessage({});
+    }
+  } catch (error) {
+    console.error("Failed to create chat:", error);
+  } finally {
+    setIsLoadingChats(false);
+  }
+};
+
 
   const clearActiveChat = async () => {
     if (!activeSessionId || isLoading) return;
