@@ -1,4 +1,4 @@
-const RATE_LIMIT_MAX_REQUESTS = 20;
+const RATE_LIMIT_MAX_REQUESTS = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
 type RateLimitEntry = { count: number; resetAt: number };
@@ -21,6 +21,7 @@ export function createRateLimiter(options: RateLimitOptions) {
     }
 
     if (entry.count >= options.maxRequests) return false;
+
     entry.count += 1;
     return true;
   };
