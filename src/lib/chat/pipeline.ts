@@ -26,6 +26,8 @@ import {
 import { logChatRoute, logRetrievalDiagnostics } from "@/lib/chat/retrieval-diagnostics";
 import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
 import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag/retrieval-confidence";
+import { normalizeLanguage } from "@/lib/chat/normalize-language";
+
 
 function stripTitleEmoji(title: string) {
   return title
@@ -92,10 +94,14 @@ function resolveFirstPerson(message: string, session: Session): string {
 
 export async function runChatPipeline(session: Session, body: ChatRequestBody) {
   const rawMessage = validateMessage(body.message);
-  const message = resolveFirstPerson(rawMessage, session);
+  
+  // Save raw message to DB, then build the processed version for the pipeline
   const sessionId = await attachSession(session, body.sessionId, rawMessage);
+  
+  const normalized = await normalizeLanguage(rawMessage);
+  const message = resolveFirstPerson(normalized, session);
+  
   const history = sanitizeChatHistory(body.history);
-
   const ctx: PipelineContext = { message, history, sessionId };
 
   const linkResponse = await tryNotionLinkAnswer(ctx);
@@ -196,6 +202,15 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
   const metadataOnly = isMetadataOnlyKind(parsed.kind);
   const directAnswer = await handleMetadataQuery(parsed);
 
+  // DEBUG LOG — remove after bug is found
+  console.log("[trySqlAnswer] debug", {
+    kind: parsed.kind,
+    metadataOnly,
+    directAnswerLength: directAnswer?.length ?? null,
+    directAnswerPreview: directAnswer?.slice(0, 80) ?? null,
+    isMiss: directAnswer ? isSqlMissAnswer(directAnswer) : "no answer",
+  });
+
   if (metadataOnly) {
     if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer)) {
       logChatRoute("sql_hit", parsed, { answer_chars: directAnswer.length });
@@ -222,6 +237,8 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
 
   return null;
 }
+
+
 
 async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext, session: Session) {
   if (isMetadataOnlyKind(parsed.kind) && parsed.kind !== "team_activity") {
@@ -284,5 +301,5 @@ async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext, session: 
     return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE);
   }
 
-  return streamGeminiAnswer(ctx.message, notionContext, ctx.history, ctx.sessionId);
+  return streamGeminiAnswer(ctx.message, notionContext, ctx.history, ctx.sessionId, parsed.kind);
 }

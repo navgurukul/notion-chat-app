@@ -4,7 +4,11 @@
  * No Gemini here. If this returns null, the chat pipeline falls back to RAG.
  */
 import { escapeLike, query } from "@/lib/db";
-import type { ActivityRow, NotionPageRow, WorkedOnRow } from "@/lib/shared/notion-types";
+import type {
+  ActivityRow,
+  NotionPageRow,
+  WorkedOnRow,
+} from "@/lib/shared/notion-types";
 import { normalizePersonNameForMatch } from "@/lib/query/normalize";
 import { isNoiseTopic } from "@/lib/query/rules";
 import type { ParsedQuery } from "@/lib/query/types";
@@ -15,7 +19,10 @@ import {
   formatCostEstimationPage,
   formatPageCard,
 } from "@/lib/sql/format-display";
-import { filterPagesForProjectTopic, primaryTopicToken } from "@/lib/sql/project-scope";
+import {
+  filterPagesForProjectTopic,
+  primaryTopicToken,
+} from "@/lib/sql/project-scope";
 import {
   aggregatePeopleOnProject,
   extractProjectScopeTopic,
@@ -45,7 +52,10 @@ function stripVowels(value: string) {
 
 function normalizeTopic(value: string) {
   return value
-    .replace(/\b(projects?|tasks?|work|worked|data|docs?|documents?|pages?)\b/gi, "")
+    .replace(
+      /\b(projects?|tasks?|work|worked|data|docs?|documents?|pages?)\b/gi,
+      "",
+    )
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -55,7 +65,10 @@ function formatLink(title: string, url: string | null) {
 }
 
 /** Notion pages often lack an Owner property; fall back to creator / editor. */
-function resolvePageOwner(row: NotionPageRow): { name: string | null; label: string } {
+function resolvePageOwner(row: NotionPageRow): {
+  name: string | null;
+  label: string;
+} {
   if (row.owner?.trim()) {
     return { name: row.owner.trim(), label: "Owner" };
   }
@@ -73,7 +86,9 @@ function resolvePageOwner(row: NotionPageRow): { name: string | null; label: str
 }
 
 /** Direct Notion URL lookup by page title (exact, then ranked partial). */
-export async function lookupPageLinkByTitle(docTitle: string): Promise<string | null> {
+export async function lookupPageLinkByTitle(
+  docTitle: string,
+): Promise<string | null> {
   const trimmed = docTitle.trim();
   if (trimmed.length < 2) return null;
 
@@ -90,9 +105,14 @@ function formatListHeader(count: number, label: string) {
   return `## ${count} result(s) — ${label}`;
 }
 
-function formatRows(rows: NotionPageRow[], formatter: (row: NotionPageRow) => string) {
+function formatRows(
+  rows: NotionPageRow[],
+  formatter: (row: NotionPageRow) => string,
+) {
   const visibleRows = rows.slice(0, SQL_RESULT_LIMIT);
-  const renderedRows = visibleRows.map((row) => `- ${formatter(row)}`).join("\n");
+  const renderedRows = visibleRows
+    .map((row) => `- ${formatter(row)}`)
+    .join("\n");
   if (rows.length <= SQL_RESULT_LIMIT) return renderedRows;
   return `${renderedRows}\n\n_Showing top ${SQL_RESULT_LIMIT}. Please narrow the question for more specific results._`;
 }
@@ -120,7 +140,15 @@ const PROJECT_THEMES = [
   {
     name: "Reports and Dashboards",
     hubTitleLike: "%reports and dashboard%",
-    signals: [/report/i, /dashboard/i, /pdf/i, /executive/i, /pagination/i, /widget/i, /key-insight/i],
+    signals: [
+      /report/i,
+      /dashboard/i,
+      /pdf/i,
+      /executive/i,
+      /pagination/i,
+      /widget/i,
+      /key-insight/i,
+    ],
   },
   {
     name: "Role-based access & platform",
@@ -130,7 +158,13 @@ const PROJECT_THEMES = [
   {
     name: "Reflection Platform",
     hubTitleLike: "%reflection%",
-    signals: [/reflection/i, /facilitator/i, /student view/i, /competency/i, /skill analysis/i],
+    signals: [
+      /reflection/i,
+      /facilitator/i,
+      /student view/i,
+      /competency/i,
+      /skill analysis/i,
+    ],
   },
   {
     name: "Meraki",
@@ -173,7 +207,8 @@ function rankProjectHubRow(
   }
 
   if (row.owner?.trim()) score += 5;
-  if (/in development|in progress|testing|scoping/i.test(row.status || "")) score += 4;
+  if (/in development|in progress|testing|scoping/i.test(row.status || ""))
+    score += 4;
   if (/crisis|high/i.test(content)) score += 1;
 
   const contentLen = (row.content || "").length;
@@ -203,9 +238,7 @@ async function searchProjectPages(topic: string) {
       ${tokens.length > 1 ? `OR lower(coalesce(title, '')) LIKE lower($2) ESCAPE '\\'` : ""}
     LIMIT 40
     `,
-    tokens.length > 1
-      ? [primary, `%${escapeLike(tokens[1])}%`]
-      : [primary],
+    tokens.length > 1 ? [primary, `%${escapeLike(tokens[1])}%`] : [primary],
   );
 
   return rows
@@ -251,16 +284,24 @@ async function buildProjectSummary(topic: string) {
     `**Scope (${pages.length} related pages in Notion):**`,
     activeStatuses.length
       ? `Active work: ${activeStatuses.join(", ")}`
-      : `_Statuses: ${[...statusCounts.entries()].slice(0, 6).map(([s, n]) => `${s} (${n})`).join(", ")}_`,
+      : `_Statuses: ${[...statusCounts.entries()]
+          .slice(0, 6)
+          .map(([s, n]) => `${s} (${n})`)
+          .join(", ")}_`,
     "",
     "**Key related pages:**",
   ];
 
   for (const row of related) {
-    const meta = [row.status ? `status: ${row.status}` : "", row.owner ? `owner: ${row.owner}` : ""]
+    const meta = [
+      row.status ? `status: ${row.status}` : "",
+      row.owner ? `owner: ${row.owner}` : "",
+    ]
       .filter(Boolean)
       .join(" · ");
-    lines.push(`- **${formatLink(row.title || "Untitled", row.url)}**${meta ? ` — ${meta}` : ""}`);
+    lines.push(
+      `- **${formatLink(row.title || "Untitled", row.url)}**${meta ? ` — ${meta}` : ""}`,
+    );
   }
 
   if (pages.length > 13) {
@@ -283,44 +324,69 @@ function asksForTasksOnly(raw: string) {
 }
 
 /** Person named on a project team roster or billing line in page body (not only Owner field). */
-function personOnProjectTeam(content: string | null | undefined, person: string) {
+function personOnProjectTeam(
+  content: string | null | undefined,
+  person: string,
+) {
   if (!content?.trim()) return false;
   const norm = person.toLowerCase().trim();
   const fuzzy = stripVowels(norm);
   const text = content.toLowerCase();
-  if (!text.includes(norm) && !text.replace(/[aeiou]/g, "").includes(fuzzy)) return false;
+  if (!text.includes(norm) && !text.replace(/[aeiou]/g, "").includes(fuzzy))
+    return false;
 
-  const firstName = norm.split(/\s+/)[0]?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") ?? norm;
+  const firstName =
+    norm.split(/\s+/)[0]?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") ?? norm;
   if (!firstName) return false;
 
-  if (new RegExp(`\\bdevs?\\b[\\s\\S]{0,500}${firstName}`, "i").test(content)) return true;
-  if (new RegExp(`\\bteam\\b[\\s\\S]{0,400}${firstName}`, "i").test(content)) return true;
-  if (new RegExp(`${firstName}[\\s\\S]{0,60}(?:per month|billable|rs\\s|\\d+,?\\d{3})`, "i").test(content))
+  if (new RegExp(`\\bdevs?\\b[\\s\\S]{0,500}${firstName}`, "i").test(content))
     return true;
-  if (new RegExp(`\\bassignee:\\s*[^\\n]*${firstName}`, "i").test(content)) return true;
-  if (new RegExp(`\\bcaptain:\\s*[^\\n]*${firstName}`, "i").test(content)) return true;
+  if (new RegExp(`\\bteam\\b[\\s\\S]{0,400}${firstName}`, "i").test(content))
+    return true;
+  if (
+    new RegExp(
+      `${firstName}[\\s\\S]{0,60}(?:per month|billable|rs\\s|\\d+,?\\d{3})`,
+      "i",
+    ).test(content)
+  )
+    return true;
+  if (new RegExp(`\\bassignee:\\s*[^\\n]*${firstName}`, "i").test(content))
+    return true;
+  if (new RegExp(`\\bcaptain:\\s*[^\\n]*${firstName}`, "i").test(content))
+    return true;
   return false;
 }
 
-function inferProjectThemeForPage(row: { title?: string | null; content?: string | null }) {
+function inferProjectThemeForPage(row: {
+  title?: string | null;
+  content?: string | null;
+}) {
   const title = (row.title ?? "").toLowerCase();
   const contentHead = (row.content ?? "").slice(0, 1200).toLowerCase();
 
-  if (/datapivot|nagaada|data pivot|pivotsai/.test(title)) return "DataPivots AI";
-  if (/product roadmap|roadmap.*execution/.test(title) && /datapivot|nagaada/.test(contentHead)) {
+  if (/datapivot|nagaada|data pivot|pivotsai/.test(title))
+    return "DataPivots AI";
+  if (
+    /product roadmap|roadmap.*execution/.test(title) &&
+    /datapivot|nagaada/.test(contentHead)
+  ) {
     return "DataPivots AI";
   }
-  if (/reports and dashboard|release 2\.1/.test(title)) return "Reports and Dashboards";
+  if (/reports and dashboard|release 2\.1/.test(title))
+    return "Reports and Dashboards";
   if (/meraki/.test(title)) return "Meraki";
   if (/oscar/.test(title)) return "Oscar";
-  if (/reflection platform|^reflection$/i.test(title)) return "Reflection Platform";
+  if (/reflection platform|^reflection$/i.test(title))
+    return "Reflection Platform";
 
   return inferProjectTheme([row]);
 }
 
 function ownedProjectHubForTheme(theme: string, rows: NotionPageRow[]) {
   const norm = theme.toLowerCase();
-  const exact = rows.find((row) => (row.title ?? "").trim().toLowerCase() === norm);
+  const exact = rows.find(
+    (row) => (row.title ?? "").trim().toLowerCase() === norm,
+  );
   if (exact) return { title: exact.title, url: exact.url ?? null };
   const partial = rows.find(
     (row) =>
@@ -331,10 +397,18 @@ function ownedProjectHubForTheme(theme: string, rows: NotionPageRow[]) {
 }
 
 function attachOrphanTasksToOwnedProject(
-  byTheme: Map<string, { tasks: NotionPageRow[]; rosterHub?: { title: string | null; url: string | null } }>,
+  byTheme: Map<
+    string,
+    {
+      tasks: NotionPageRow[];
+      rosterHub?: { title: string | null; url: string | null };
+    }
+  >,
   rows: NotionPageRow[],
 ) {
-  const primary = [...byTheme.entries()].find(([theme]) => ownedProjectHubForTheme(theme, rows));
+  const primary = [...byTheme.entries()].find(([theme]) =>
+    ownedProjectHubForTheme(theme, rows),
+  );
   if (!primary) return;
   const [, entry] = primary;
   const seen = new Set(entry.tasks.map((r) => r.id));
@@ -348,7 +422,11 @@ function attachOrphanTasksToOwnedProject(
 async function findProjectRosterThemes(person: string) {
   const personTerm = `%${escapeLike(person)}%`;
   const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
-  const rows = await query<{ title: string | null; url: string | null; content: string | null }>(
+  const rows = await query<{
+    title: string | null;
+    url: string | null;
+    content: string | null;
+  }>(
     `
     SELECT title, url, content
     FROM notion_pages
@@ -374,7 +452,8 @@ async function findProjectRosterThemes(person: string) {
   );
 
   const seen = new Set<string>();
-  const out: Array<{ theme: string; hubTitle: string; hubUrl: string | null }> = [];
+  const out: Array<{ theme: string; hubTitle: string; hubUrl: string | null }> =
+    [];
   for (const row of rows) {
     if (!personOnProjectTeam(row.content, person)) continue;
     const theme = inferProjectThemeForPage(row);
@@ -421,7 +500,9 @@ async function formatAssignedProjectsAnswer(
   const themes = [...byTheme.entries()]
     .sort((a, b) => {
       const score = (e: ThemeEntry) =>
-        e.tasks.length + (e.rosterHub ? 3 : 0) + e.tasks.filter((r) => isActiveStatus(r.status)).length;
+        e.tasks.length +
+        (e.rosterHub ? 3 : 0) +
+        e.tasks.filter((r) => isActiveStatus(r.status)).length;
       return score(b[1]) - score(a[1]);
     })
     .map(([name]) => name);
@@ -448,7 +529,9 @@ async function formatAssignedProjectsAnswer(
       ownedProjectHubForTheme(theme, rows) ??
       (await lookupProjectHubPage(theme)) ??
       entry.rosterHub;
-    const activeCount = entry.tasks.filter((row) => isActiveStatus(row.status)).length;
+    const activeCount = entry.tasks.filter((row) =>
+      isActiveStatus(row.status),
+    ).length;
     const hubLink = hub?.url
       ? formatLink(hub.title || theme, hub.url)
       : `**${theme}**`;
@@ -505,10 +588,7 @@ function isBlockerStatus(status: string | null | undefined) {
   return /block/.test(s) || ["on hold", "waiting", "stuck"].includes(s);
 }
 
-function formatBlockerListAnswer(
-  rows: NotionPageRow[],
-  scopeLabel?: string,
-) {
+function formatBlockerListAnswer(rows: NotionPageRow[], scopeLabel?: string) {
   const blocked = rows.filter((row) => /block/i.test(row.status ?? ""));
   const onHold = rows.filter(
     (row) =>
@@ -545,7 +625,9 @@ function formatBlockerListAnswer(
   renderSection("Blocked", blocked);
   renderSection("On hold / waiting", onHold);
 
-  const other = rows.filter((row) => !blocked.includes(row) && !onHold.includes(row));
+  const other = rows.filter(
+    (row) => !blocked.includes(row) && !onHold.includes(row),
+  );
   if (other.length) {
     renderSection("Other flagged items", other);
   }
@@ -557,8 +639,13 @@ function formatBlockerListAnswer(
   return lines.join("\n");
 }
 
-function inferProjectTheme(rows: Array<{ title?: string | null; content?: string | null }>) {
-  const titleText = rows.map((row) => row.title ?? "").join(" ").toLowerCase();
+function inferProjectTheme(
+  rows: Array<{ title?: string | null; content?: string | null }>,
+) {
+  const titleText = rows
+    .map((row) => row.title ?? "")
+    .join(" ")
+    .toLowerCase();
   const combined = rows
     .map((row) => `${row.title ?? ""} ${(row.content ?? "").slice(0, 400)}`)
     .join(" ")
@@ -566,13 +653,22 @@ function inferProjectTheme(rows: Array<{ title?: string | null; content?: string
 
   let best: { name: string; score: number } | null = null;
   for (const theme of PROJECT_THEMES) {
-    let score = theme.signals.reduce((n, pattern) => n + (pattern.test(combined) ? 1 : 0), 0);
-    const titleHits = theme.signals.reduce((n, pattern) => n + (pattern.test(titleText) ? 1 : 0), 0);
+    let score = theme.signals.reduce(
+      (n, pattern) => n + (pattern.test(combined) ? 1 : 0),
+      0,
+    );
+    const titleHits = theme.signals.reduce(
+      (n, pattern) => n + (pattern.test(titleText) ? 1 : 0),
+      0,
+    );
     if (titleHits) score += titleHits;
-    const minScore = theme.name === "DataPivots AI" && /datapivot|nagaada|data pivot|pivotsai/.test(titleText)
-      ? 1
-      : 2;
-    if (score >= minScore && (!best || score > best.score)) best = { name: theme.name, score };
+    const minScore =
+      theme.name === "DataPivots AI" &&
+      /datapivot|nagaada|data pivot|pivotsai/.test(titleText)
+        ? 1
+        : 2;
+    if (score >= minScore && (!best || score > best.score))
+      best = { name: theme.name, score };
   }
   return best?.name ?? null;
 }
@@ -585,7 +681,12 @@ async function buildComparePages(titleA: string, titleB: string) {
     return pageNotSyncedMessage(`${titleA} / ${titleB}`);
   }
 
-  return formatCompareAnswer(titleA, titleB, rowsA[0] ?? null, rowsB[0] ?? null);
+  return formatCompareAnswer(
+    titleA,
+    titleB,
+    rowsA[0] ?? null,
+    rowsB[0] ?? null,
+  );
 }
 
 async function buildRisksAnswer(topic: string) {
@@ -593,7 +694,9 @@ async function buildRisksAnswer(topic: string) {
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, " ")
     .split(/\s+/)
-    .filter((t) => t.length >= 3 && !["mobile", "app", "main", "the"].includes(t));
+    .filter(
+      (t) => t.length >= 3 && !["mobile", "app", "main", "the"].includes(t),
+    );
   const primary = tokens[0] || topic;
   const term = `%${escapeLike(primary)}%`;
 
@@ -625,7 +728,9 @@ async function buildRisksAnswer(topic: string) {
       const body = extractPageBody(hub.content, 1500);
       const riskLines = (body || "")
         .split(/\n/)
-        .filter((line) => /risk|concern|challenge|limitation|mitigation|blocker/i.test(line))
+        .filter((line) =>
+          /risk|concern|challenge|limitation|mitigation|blocker/i.test(line),
+        )
         .slice(0, 12);
       if (riskLines.length) {
         return [
@@ -650,7 +755,9 @@ async function buildRisksAnswer(topic: string) {
     const snippet = contentSnippet(row.content, 500);
     const riskSnippet = snippet
       .split(/(?<=[.!?])\s+/)
-      .filter((s) => /risk|concern|challenge|limitation|mitigation|blocker/i.test(s))
+      .filter((s) =>
+        /risk|concern|challenge|limitation|mitigation|blocker/i.test(s),
+      )
       .slice(0, 2)
       .join(" ");
     lines.push(
@@ -689,7 +796,11 @@ async function buildOnboardingTasksAnswer() {
   const checklistFromHub = hub
     ? (extractPageBody(hub.content, 2000) || "")
         .split(/\n/)
-        .filter((line) => /^[-*•\d]/.test(line.trim()) || /task|training|document|intro|submit/i.test(line))
+        .filter(
+          (line) =>
+            /^[-*•\d]/.test(line.trim()) ||
+            /task|training|document|intro|submit/i.test(line),
+        )
         .slice(0, 20)
     : [];
 
@@ -722,20 +833,30 @@ async function buildOnboardingTasksAnswer() {
       );
     }
   } else if (hub) {
-    lines.push(`**Hub:** ${formatLink(hub.title || "Employee Onboarding Hub", hub.url)}`);
-    lines.push("", "_Open the hub for **Onboarding Tasks** and **Onboarding Tracker** databases._");
+    lines.push(
+      `**Hub:** ${formatLink(hub.title || "Employee Onboarding Hub", hub.url)}`,
+    );
+    lines.push(
+      "",
+      "_Open the hub for **Onboarding Tasks** and **Onboarding Tracker** databases._",
+    );
   } else {
     return null;
   }
 
   if (hub?.url) {
-    lines.push("", formatLink("Open Employee Onboarding Hub in Notion", hub.url));
+    lines.push(
+      "",
+      formatLink("Open Employee Onboarding Hub in Notion", hub.url),
+    );
   }
 
   return lines.join("\n");
 }
 
-function collectProjectThemes(rows: Array<{ title?: string | null; content?: string | null }>) {
+function collectProjectThemes(
+  rows: Array<{ title?: string | null; content?: string | null }>,
+) {
   const scores = new Map<string, number>();
   for (const row of rows) {
     const theme = inferProjectThemeForPage(row) ?? inferProjectTheme([row]);
@@ -779,7 +900,12 @@ async function lookupProjectHubPage(themeName: string) {
   return rows[0] ?? null;
 }
 
-function formatActivityRowLine(row: NotionPageRow & { notion_edited_at?: string | null; activity_role?: string | null }) {
+function formatActivityRowLine(
+  row: NotionPageRow & {
+    notion_edited_at?: string | null;
+    activity_role?: string | null;
+  },
+) {
   const meta = [
     row.activity_role ? `role: ${row.activity_role}` : "",
     row.owner ? `owner: ${row.owner}` : "",
@@ -848,7 +974,10 @@ function titleMatchScore(rowTitle: string, queryTitle: string) {
     if (row.includes(token)) matched += 1;
   }
 
-  const required = tokens.length <= 2 ? tokens.length : Math.max(2, Math.ceil(tokens.length * 0.5));
+  const required =
+    tokens.length <= 2
+      ? tokens.length
+      : Math.max(2, Math.ceil(tokens.length * 0.5));
   if (matched < required) return matched * 10;
   return 200 + matched * 80 + Math.min(row.length, query.length);
 }
@@ -866,12 +995,16 @@ function projectTopicTokens(topic: string) {
     .replace(/[^a-z0-9\s-]/g, " ")
     .split(/\s+/)
     .map((t) => t.trim())
-    .filter((t) => t.length >= 4 && !["project", "completion", "the"].includes(t));
+    .filter(
+      (t) => t.length >= 4 && !["project", "completion", "the"].includes(t),
+    );
 }
 
 function extractCharterSection(content: string, tokens: string[]) {
   if (!tokens.length) return null;
-  const pattern = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const pattern = tokens
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
   const re = new RegExp(
     `##\\s*\\d*\\.?\\s*[^\\n]*(?:${pattern})[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s+\\d|$)`,
     "i",
@@ -960,7 +1093,9 @@ async function findRelatedProjectPages(topic: string) {
 export function isWeakProjectEtaAnswer(answer: string) {
   return (
     /No explicit completion date/i.test(answer) &&
-    !/Product Charter|roadmap|Play Store|Stabilise|May|June|20\d{2}/i.test(answer)
+    !/Product Charter|roadmap|Play Store|Stabilise|May|June|20\d{2}/i.test(
+      answer,
+    )
   );
 }
 
@@ -979,26 +1114,37 @@ async function buildProjectEtaAnswer(topic: string): Promise<string | null> {
 
   if (!pages.length) return null;
 
-  const hub = pages.find(
-    (row) => (row.title ?? "").trim().toLowerCase() === topic.trim().toLowerCase(),
-  ) ?? pages[0];
+  const hub =
+    pages.find(
+      (row) =>
+        (row.title ?? "").trim().toLowerCase() === topic.trim().toLowerCase(),
+    ) ?? pages[0];
 
   const charterPage =
-    pages.find((row) => /product charter|roadmap/i.test(row.title ?? "")) ?? null;
+    pages.find((row) => /product charter|roadmap/i.test(row.title ?? "")) ??
+    null;
   const charterSection =
-    (charterPage?.content ? extractCharterSection(charterPage.content, tokens) : null) ??
-    pages.map((row) => extractCharterSection(row.content ?? "", tokens)).find(Boolean);
+    (charterPage?.content
+      ? extractCharterSection(charterPage.content, tokens)
+      : null) ??
+    pages
+      .map((row) => extractCharterSection(row.content ?? "", tokens))
+      .find(Boolean);
 
   const roadmapBullets = charterSection
     ? extractTimelineBullets(charterSection)
     : pages
-        .flatMap((row) => extractTimelineBullets(extractPageBody(row.content, 600), 4))
+        .flatMap((row) =>
+          extractTimelineBullets(extractPageBody(row.content, 600), 4),
+        )
         .slice(0, 6);
 
   const dateMentions = [
     ...new Set(
       pages.flatMap((row) =>
-        extractDateMentions(`${row.title ?? ""}\n${extractPageBody(row.content, 2000)}`),
+        extractDateMentions(
+          `${row.title ?? ""}\n${extractPageBody(row.content, 2000)}`,
+        ),
       ),
     ),
   ];
@@ -1026,7 +1172,11 @@ async function buildProjectEtaAnswer(topic: string): Promise<string | null> {
   if (dateMentions.length) {
     const { current, older } = partitionDateMentions(dateMentions);
     if (current.length) {
-      lines.push("", "**Dates / targets (current / near-term):**", ...current.map((d) => `- ${d}`));
+      lines.push(
+        "",
+        "**Dates / targets (current / near-term):**",
+        ...current.map((d) => `- ${d}`),
+      );
     }
     if (older.length) {
       lines.push(
@@ -1052,7 +1202,8 @@ async function buildProjectEtaAnswer(topic: string): Promise<string | null> {
     }
   }
 
-  const hasSubstance = charterSection || dateMentions.length > 0 || roadmapBullets.length > 0;
+  const hasSubstance =
+    charterSection || dateMentions.length > 0 || roadmapBullets.length > 0;
   if (!hasSubstance) {
     const body = extractPageBody(hub?.content, 500);
     if (body) {
@@ -1093,7 +1244,9 @@ function stripTitleEmoji(title: string) {
 
 async function lookupByTitle(title: string, includeContent = false) {
   const strippedTitle = stripTitleEmoji(title);
-  const lookupTitles = [...new Set([title, strippedTitle].filter((t) => t.length > 0))];
+  const lookupTitles = [
+    ...new Set([title, strippedTitle].filter((t) => t.length > 0)),
+  ];
   const term = `%${escapeLike(strippedTitle || title)}%`;
   const columns = includeContent
     ? "id, title, url, owner, created_by, last_edited_by, doc_type, status, content"
@@ -1136,7 +1289,9 @@ async function lookupByTitle(title: string, includeContent = false) {
   return ranked.map((item) => item.row);
 }
 
-export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string | null> {
+export async function handleMetadataQuery(
+  parsed: ParsedQuery,
+): Promise<string | null> {
   const personRaw = parsed.personName?.trim();
   const person = personRaw ? normalizePersonNameForMatch(personRaw) : undefined;
   const docTitle = parsed.docTitle?.trim();
@@ -1144,7 +1299,8 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
   if (parsed.kind === "owner_list" && person) {
     const personTerm = `%${escapeLike(person)}%`;
     const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
-    const projectsOwnedQuery = /\b(?:which|what)\s+projects?\s+.+\s+the\s+owner\s+of/i.test(parsed.raw);
+    const projectsOwnedQuery =
+      /\b(?:which|what)\s+projects?\s+.+\s+the\s+owner\s+of/i.test(parsed.raw);
     const singularProject = /\bwhich\s+project\s+/i.test(parsed.raw);
 
     const rows = await query<NotionPageRow>(
@@ -1242,7 +1398,13 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     const personTerm = `%${escapeLike(person)}%`;
     const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
     const normalizedTopic = docTitle ? normalizeTopic(docTitle) : "";
-    const topicTerm = normalizedTopic ? `%${escapeLike(normalizedTopic)}%` : null;
+    // Keep original docTitle as fallback in case normalization strips too much
+    const topicTerm =
+      normalizedTopic.length >= 3
+        ? `%${escapeLike(normalizedTopic)}%`
+        : docTitle
+          ? `%${escapeLike(docTitle)}%`
+          : null;
     const year = parsed.year;
     const yearStart = year ? `${year}-01-01` : null;
     const yearEnd = year ? `${year + 1}-01-01` : null;
@@ -1260,7 +1422,9 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         )
       )
     `;
-    const rows = await query<NotionPageRow & { notion_edited_at?: string | null }>(
+    const rows = await query<
+      NotionPageRow & { notion_edited_at?: string | null }
+    >(
       `
       SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content, notion_edited_at::text
       FROM notion_pages
@@ -1296,6 +1460,14 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     );
     const yearNote = year ? ` in **${year}**` : "";
     if (!rows.length) {
+      console.log("[assigned_list] debug", {
+        person,
+        personTerm,
+        docTitle,
+        normalizedTopic,
+        topicTerm,
+        rowsFound: rows.length,
+      });
       return (
         `No tasks or pages with **${person}** as owner or assignee${yearNote} in synced Notion.\n\n` +
         `_Check the exact name spelling in Notion (e.g. **Tamanna a**), or use **Sync changes** if assignments were updated recently._`
@@ -1317,10 +1489,13 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
           "notion_edited_at" in row && row.notion_edited_at
             ? String(row.notion_edited_at).slice(0, 10)
             : "";
-        return formatCompactListItem(row, [
-          row.owner ? `assignee: ${row.owner}` : "assignee: Unknown",
-          edited ? `edited: ${edited}` : "",
-        ].filter(Boolean));
+        return formatCompactListItem(
+          row,
+          [
+            row.owner ? `assignee: ${row.owner}` : "assignee: Unknown",
+            edited ? `edited: ${edited}` : "",
+          ].filter(Boolean),
+        );
       },
     )}`;
   }
@@ -1328,9 +1503,14 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
   if (parsed.kind === "worked_on_list" && person) {
     const personTerm = `%${escapeLike(person)}%`;
     const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
-    const effectiveTopic = docTitle && !isNoiseTopic(docTitle) ? docTitle : undefined;
-    const normalizedTopic = effectiveTopic ? normalizeTopic(effectiveTopic) : "";
-    const topicTerm = normalizedTopic ? `%${escapeLike(normalizedTopic)}%` : null;
+    const effectiveTopic =
+      docTitle && !isNoiseTopic(docTitle) ? docTitle : undefined;
+    const normalizedTopic = effectiveTopic
+      ? normalizeTopic(effectiveTopic)
+      : "";
+    const topicTerm = normalizedTopic
+      ? `%${escapeLike(normalizedTopic)}%`
+      : null;
     const taskListQuery = /\b(?:which|what)\s+tasks?\b/i.test(parsed.raw);
 
     const personPropertyInContentSql = `
@@ -1419,28 +1599,31 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       ? `${person} worked on`
       : `associated with ${person}${effectiveTopic ? ` and matching "${effectiveTopic}"` : ""}`;
 
-    return `${formatListHeader(rows.length, label)}\n\n${formatRows(rows, (row) => {
-      const who =
-        row.match_source === "owner"
-          ? `owner: ${row.owner || "Unknown"}`
-          : row.match_source === "assignee"
-            ? "assignee/captain"
-            : row.match_source === "creator"
-              ? `created by: ${row.created_by || "Unknown"}`
-              : row.match_source === "last editor"
-                ? `last edited by: ${row.last_edited_by || "Unknown"}`
-                : "mentioned";
-      const metadata = [
-        who,
-        row.status ? `status: ${row.status}` : "",
-        row.notion_edited_at
-          ? `last edited: ${new Date(row.notion_edited_at).toLocaleDateString()}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      return `**${formatLink(row.title || "Untitled", row.url)}** — ${metadata}`;
-    })}`;
+    return `${formatListHeader(rows.length, label)}\n\n${formatRows(
+      rows,
+      (row) => {
+        const who =
+          row.match_source === "owner"
+            ? `owner: ${row.owner || "Unknown"}`
+            : row.match_source === "assignee"
+              ? "assignee/captain"
+              : row.match_source === "creator"
+                ? `created by: ${row.created_by || "Unknown"}`
+                : row.match_source === "last editor"
+                  ? `last edited by: ${row.last_edited_by || "Unknown"}`
+                  : "mentioned";
+        const metadata = [
+          who,
+          row.status ? `status: ${row.status}` : "",
+          row.notion_edited_at
+            ? `last edited: ${new Date(row.notion_edited_at).toLocaleDateString()}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        return `**${formatLink(row.title || "Untitled", row.url)}** — ${metadata}`;
+      },
+    )}`;
   }
 
   if (parsed.kind === "project_manager_of" && docTitle) {
@@ -1499,7 +1682,9 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
           row.owner ? `owner/assignee: ${row.owner}` : "",
           row.status ? `status: ${row.status}` : "",
           row.doc_type ? `type: ${row.doc_type}` : "",
-        ].filter(Boolean).join(" · ");
+        ]
+          .filter(Boolean)
+          .join(" · ");
         const snippet = contentSnippet(row.content, 700);
         return `**${formatLink(row.title || "Untitled", row.url)}**${metadata ? ` — ${metadata}` : ""}${snippet ? `\n  ${snippet}` : ""}`;
       },
@@ -1528,7 +1713,9 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       "",
       members
         .map((member, i) => {
-          const roles = member.roles.length ? member.roles.join(", ") : "mentioned";
+          const roles = member.roles.length
+            ? member.roles.join(", ")
+            : "mentioned";
           return `${i + 1}. **${member.name}** — ${member.pageCount} page(s) — _${roles}_`;
         })
         .join("\n"),
@@ -1539,7 +1726,9 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
 
   if (parsed.kind === "team_activity" && docTitle) {
     const scopeTopic = extractProjectScopeTopic(parsed.raw, docTitle);
-    const isLeastActive = /\b(least|lowest|bottom)\s+active\b/i.test(parsed.raw);
+    const isLeastActive = /\b(least|lowest|bottom)\s+active\b/i.test(
+      parsed.raw,
+    );
     const pages = await fetchProjectPages(scopeTopic);
     const members = aggregatePeopleOnProject(pages);
     const ranked = isLeastActive ? [...members].reverse() : members;
@@ -1574,7 +1763,9 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
 
   if (parsed.kind === "blocker_list") {
     const applyScope = docTitle && !isWorkspaceScope(docTitle);
-    const scopeTerm = applyScope ? `%${escapeLike(normalizeTopic(docTitle))}%` : null;
+    const scopeTerm = applyScope
+      ? `%${escapeLike(normalizeTopic(docTitle))}%`
+      : null;
     const rows = await query<NotionPageRow>(
       `
       SELECT id, title, url, owner, status, doc_type, content
@@ -1621,9 +1812,10 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
   }
 
   if (parsed.kind === "page_about" && docTitle) {
-    const isCostQuestion = /\b(cost\s+estimation|cost\s+estimate|budget|pricing)\b/i.test(
-      parsed.raw,
-    );
+    const isCostQuestion =
+      /\b(cost\s+estimation|cost\s+estimate|budget|pricing)\b/i.test(
+        parsed.raw,
+      );
 
     if (isCostQuestion) {
       const topicTerm = `%${escapeLike(docTitle)}%`;
@@ -1666,10 +1858,13 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       return formatPageCard(row);
     }
 
-    return `### ${rows.length} pages matching "${docTitle}"\n\n${formatRows(rows, (row) => {
-      const snippet = contentSnippet(row.content, 220);
-      return `**${formatLink(row.title || "Untitled", row.url)}**${snippet ? ` — ${snippet}` : ""}`;
-    })}\n\n_Ask about one page by full title for a detailed summary._`;
+    return `### ${rows.length} pages matching "${docTitle}"\n\n${formatRows(
+      rows,
+      (row) => {
+        const snippet = contentSnippet(row.content, 220);
+        return `**${formatLink(row.title || "Untitled", row.url)}**${snippet ? ` — ${snippet}` : ""}`;
+      },
+    )}\n\n_Ask about one page by full title for a detailed summary._`;
   }
 
   if (parsed.kind === "topic_list" && docTitle) {
@@ -1817,11 +2012,15 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     const personTerm = `%${escapeLike(person)}%`;
     const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
     const normalizedTopic = docTitle ? normalizeTopic(docTitle) : "";
-    const topicTerm = normalizedTopic ? `%${escapeLike(normalizedTopic)}%` : null;
+    const topicTerm = normalizedTopic
+      ? `%${escapeLike(normalizedTopic)}%`
+      : null;
     const year = parsed.year;
     const yearStart = year ? `${year}-01-01` : null;
     const yearEnd = year ? `${year + 1}-01-01` : null;
-    const workingOnQuery = /\bworking\s+on\b|\bworking\s+currently\b/i.test(parsed.raw);
+    const workingOnQuery = /\bworking\s+on\b|\bworking\s+currently\b/i.test(
+      parsed.raw,
+    );
     const projectNameQuery = wantsProjectNameAnswer(parsed.raw);
 
     const personPropertyInContentSql = `
@@ -1882,7 +2081,9 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     const historicalWork = isHistoricalWorkQuery(parsed.raw);
     const listAllProjects = wantsAllProjectsList(parsed.raw);
     const rowLimit =
-      year && (historicalWork || listAllProjects) ? HISTORICAL_PROJECT_LIMIT : SQL_RESULT_LIMIT;
+      year && (historicalWork || listAllProjects)
+        ? HISTORICAL_PROJECT_LIMIT
+        : SQL_RESULT_LIMIT;
 
     const orderSql =
       historicalWork && year
@@ -2016,7 +2217,9 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
     const themeSource = ownerRows.length ? ownerRows : rows.slice(0, 10);
     const projectTheme = inferProjectTheme(themeSource);
     const hubPage =
-      projectTheme && collectProjectThemes(themeSource).filter((t) => t === projectTheme).length >= 2
+      projectTheme &&
+      collectProjectThemes(themeSource).filter((t) => t === projectTheme)
+        .length >= 2
         ? await lookupProjectHubPage(projectTheme)
         : null;
 
@@ -2036,7 +2239,9 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
           );
 
           if (!historicalWork && yearRows.length) {
-            const doneOnly = yearRows.filter((row) => !isActiveStatus(row.status));
+            const doneOnly = yearRows.filter(
+              (row) => !isActiveStatus(row.status),
+            );
             if (doneOnly.length) {
               lines.push(
                 "",
@@ -2048,7 +2253,10 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
             }
           }
 
-          lines.push("", `_Use **Sync changes** if Notion was updated recently._`);
+          lines.push(
+            "",
+            `_Use **Sync changes** if Notion was updated recently._`,
+          );
           return lines.join("\n");
         }
 
@@ -2081,7 +2289,9 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
         }
 
         const yearTheme = themes[0] ?? inferProjectTheme(yearWorked);
-        const yearHub = yearTheme ? await lookupProjectHubPage(yearTheme) : null;
+        const yearHub = yearTheme
+          ? await lookupProjectHubPage(yearTheme)
+          : null;
         const hubLine = yearHub
           ? formatLink(yearHub.title || yearTheme || "Project", yearHub.url)
           : yearTheme;
@@ -2100,7 +2310,12 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
           );
         }
 
-        lines.push("", historicalWork ? "**Pages in that year:**" : "**Assigned in that year:**");
+        lines.push(
+          "",
+          historicalWork
+            ? "**Pages in that year:**"
+            : "**Assigned in that year:**",
+        );
         for (const row of yearWorked.slice(0, 6)) {
           lines.push(`- ${formatActivityRowLine(row)}`);
         }
@@ -2108,13 +2323,12 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
       }
 
       // No year — use owner pages; do not invent a hub from mention-only rows
-      const ownerActive = (workingOnQuery && activeRows.length ? activeRows : rows).filter(
-        (row) => row.activity_role === "owner",
-      );
-      const displayRows = (ownerActive.length ? ownerActive : ownerRows.length ? ownerRows : rows).slice(
-        0,
-        4,
-      );
+      const ownerActive = (
+        workingOnQuery && activeRows.length ? activeRows : rows
+      ).filter((row) => row.activity_role === "owner");
+      const displayRows = (
+        ownerActive.length ? ownerActive : ownerRows.length ? ownerRows : rows
+      ).slice(0, 4);
       const focusRow = displayRows[0];
       const themes = collectProjectThemes(themeSource);
 
@@ -2131,17 +2345,23 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
           `**${person}** — strongest focus in synced Notion: **${formatLink(focusRow.title || "Untitled", focusRow.url)}**${focusMeta ? ` (${focusMeta})` : ""}.`,
         );
         if (themes.length > 1) {
-          lines.push(`_Also associated with: ${themes.slice(0, 4).join(", ")}._`);
+          lines.push(
+            `_Also associated with: ${themes.slice(0, 4).join(", ")}._`,
+          );
         } else if (hubPage && projectTheme) {
           lines.push(
             `_Broader area: **${projectTheme}** — ${formatLink(hubPage.title || projectTheme, hubPage.url)}._`,
           );
         }
       } else if (!activeRows.length && !ownerRows.length) {
-        lines.push(`**${person}** has **no active project assigned** in synced Notion data.`);
+        lines.push(
+          `**${person}** has **no active project assigned** in synced Notion data.`,
+        );
         return lines.join("\n");
       } else {
-        lines.push(`**${person}** — see owned/assigned pages below (no single hub page inferred).`);
+        lines.push(
+          `**${person}** — see owned/assigned pages below (no single hub page inferred).`,
+        );
       }
 
       if (displayRows.length) {
@@ -2192,21 +2412,24 @@ export async function handleMetadataQuery(parsed: ParsedQuery): Promise<string |
 
     const listCap = workingOnQuery ? 8 : SQL_RESULT_LIMIT;
 
-    return `${summary}\n\n### ${rows.length} ${listLabel}\n\n${formatRows(rows.slice(0, listCap), (row) => {
-      const meta = [
-        row.activity_role ? `role: ${row.activity_role}` : "",
-        row.owner ? `owner: ${row.owner}` : "",
-        row.last_edited_by ? `last edited by: ${row.last_edited_by}` : "",
-        row.created_by ? `created by: ${row.created_by}` : "",
-        row.status ? `status: ${row.status}` : "",
-        row.notion_edited_at
-          ? `last edited in Notion: ${new Date(row.notion_edited_at).toLocaleDateString()}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      return `**${formatLink(row.title || "Untitled", row.url)}** — ${meta}`;
-    })}`;
+    return `${summary}\n\n### ${rows.length} ${listLabel}\n\n${formatRows(
+      rows.slice(0, listCap),
+      (row) => {
+        const meta = [
+          row.activity_role ? `role: ${row.activity_role}` : "",
+          row.owner ? `owner: ${row.owner}` : "",
+          row.last_edited_by ? `last edited by: ${row.last_edited_by}` : "",
+          row.created_by ? `created by: ${row.created_by}` : "",
+          row.status ? `status: ${row.status}` : "",
+          row.notion_edited_at
+            ? `last edited in Notion: ${new Date(row.notion_edited_at).toLocaleDateString()}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        return `**${formatLink(row.title || "Untitled", row.url)}** — ${meta}`;
+      },
+    )}`;
   }
 
   return null;

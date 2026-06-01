@@ -30,6 +30,11 @@ const BODY_SNIPPET_CHARS = 1200;
 const PROPERTIES_MARKER = "=== PROPERTIES ===";
 const CONTENT_MARKER = "=== CONTENT ===";
 
+// Suffixes to strip when doing fuzzy core-term fallback.
+// e.g. "DataPivot AI" → "DataPivot", "Zuvy App" → "Zuvy"
+const FUZZY_STRIP_SUFFIX =
+  /\s+(ai|app|platform|project|tool|system|service|v\d+(\.\d+)*|mvp|beta|poc)$/i;
+
 function stripNotionBodyMarkers(raw: string) {
   let body = raw;
 
@@ -58,6 +63,23 @@ function formatPageSection(row: PageRow) {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/**
+ * Derive a shorter "core term" from a query by stripping common product/project
+ * suffixes. Returns null if nothing was stripped (no point retrying).
+ *
+ * Examples:
+ *   "DataPivot AI"   → "datapivot"
+ *   "Zuvy App"       → "zuvy"
+ *   "Oscar MVP"      → "oscar"
+ *   "ReportList"     → null  (nothing to strip)
+ */
+function deriveCoreTerm(term: string): string | null {
+  const stripped = term.trim().replace(FUZZY_STRIP_SUFFIX, "").trim().toLowerCase();
+  if (stripped === term.trim().toLowerCase()) return null; // nothing changed
+  if (stripped.length < 3) return null; // too short to be useful
+  return stripped;
 }
 
 /** Always fetch real rows from notion_pages — works without chunk embeddings. */
@@ -104,6 +126,42 @@ export async function prefetchPagesFromQuestion(question: string): Promise<strin
     );
     pushRows(likeRows);
   }
+
+  // ── Fuzzy core-term fallback ──────────────────────────────────────────────
+  // If the primary term matched nothing (e.g. "DataPivot AI" isn't an exact
+  // page title), strip known product suffixes and retry with just the core
+  // name (e.g. "datapivot"). This surfaces pages like "DataPivot Sprint 3"
+  // or "DataPivot — Q4 Review" that contain the project name but not the
+  // full compound title the user typed.
+  if (!merged.length && terms.length > 0) {
+    const coreTerm = deriveCoreTerm(terms[0]);
+    if (coreTerm) {
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[prefetch] fuzzy_core_term_fallback", {
+          original: terms[0],
+          coreTerm,
+        });
+      }
+      const fuzzyRows = await query<PageRow>(
+        `
+        SELECT id, title, url, owner, created_by, status, doc_type, content,
+          (
+            CASE WHEN lower(coalesce(title, '')) LIKE $1 ESCAPE '\\' THEN 60 ELSE 0 END +
+            CASE WHEN lower(coalesce(content, '')) LIKE $1 ESCAPE '\\' THEN 20 ELSE 0 END
+          ) AS rank
+        FROM notion_pages
+        WHERE
+          lower(coalesce(title, '')) LIKE $1 ESCAPE '\\'
+          OR lower(coalesce(content, '')) LIKE $1 ESCAPE '\\'
+        ORDER BY rank DESC, length(coalesce(title, '')) ASC, title ASC
+        LIMIT $2
+        `,
+        [`%${escapeLike(coreTerm)}%`, PREFETCH_LIMIT],
+      );
+      pushRows(fuzzyRows);
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   if (merged.length < PREFETCH_LIMIT && cleaned.length >= 2) {
     try {
