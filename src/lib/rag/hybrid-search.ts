@@ -36,7 +36,9 @@ function getHybridTopK() {
 }
 
 function getHybridCandidateLimit() {
-  return Math.floor(readPositiveNumber(process.env.HYBRID_CHUNK_CANDIDATES, 60));
+  return Math.floor(
+    readPositiveNumber(process.env.HYBRID_CHUNK_CANDIDATES, 60),
+  );
 }
 
 function refineChunkResults(rows: ChunkHybridRow[], topK: number) {
@@ -89,7 +91,9 @@ function formatChunkContext(rows: ChunkHybridRow[]) {
 
   for (const row of rows) {
     const title = row.title || "Untitled";
-    const label = row.section_heading ? `${title} > ${row.section_heading}` : title;
+    const label = row.section_heading
+      ? `${title} > ${row.section_heading}`
+      : title;
     const url = row.url || "";
     const owner = row.owner || "Unknown";
     const createdBy = row.created_by || "Unknown";
@@ -121,7 +125,9 @@ function formatChunkContext(rows: ChunkHybridRow[]) {
 }
 
 /** Merge chunk rows from multiple queries; keep the best score per chunk. */
-export function mergeHybridChunkRows(rowSets: ChunkHybridRow[][]): ChunkHybridRow[] {
+export function mergeHybridChunkRows(
+  rowSets: ChunkHybridRow[][],
+): ChunkHybridRow[] {
   const byId = new Map<string, ChunkHybridRow>();
 
   for (const rows of rowSets) {
@@ -148,7 +154,9 @@ export async function fetchHybridChunkRows(
   if (!raw) return [];
 
   const boostTitle = titleBoost?.trim() || "";
-  const boostPattern = boostTitle ? `%${boostTitle.replace(/[%_\\]/g, "")}%` : "";
+  const boostPattern = boostTitle
+    ? `%${boostTitle.replace(/[%_\\]/g, "")}%`
+    : "";
   const ftsInput = simplifySearchQuery(boostTitle || raw).trim() || raw.trim();
   const cand = getHybridCandidateLimit();
   const wSem = getSemWeight();
@@ -200,9 +208,12 @@ export async function fetchHybridChunkRows(
         (
           ($4 * COALESCE(sem.sem_score, 0) + $5 * COALESCE(kw.kw_score, 0)) / $6
           + CASE
-              WHEN $7 <> '' AND lower(coalesce(p.title, '')) LIKE lower($7) THEN 0.2
-              ELSE 0
-            END
+  WHEN $7 <> '' AND lower(coalesce(p.title, '')) = lower(replace($7, '%', ''))
+    THEN 0.40
+  WHEN $7 <> '' AND lower(coalesce(p.title, '')) LIKE lower($7)
+    THEN 0.20
+  ELSE 0
+END
         )::float8 AS final_score,
         c.embedding::text AS embedding_literal
       FROM ids
@@ -218,7 +229,7 @@ export async function fetchHybridChunkRows(
   }
 
   return query<ChunkHybridRow>(
-      `
+    `
       SELECT
         c.id AS chunk_id,
         c.page_id,
@@ -239,8 +250,8 @@ export async function fetchHybridChunkRows(
       ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
       LIMIT $2
       `,
-      [ftsInput, cand],
-    );
+    [ftsInput, cand],
+  );
 }
 
 export type HybridChunkRetrieval = {
@@ -254,7 +265,9 @@ export async function runHybridChunkRetrieval(
   searchQueries: string[],
   titleBoost?: string,
 ): Promise<HybridChunkRetrieval> {
-  const unique = [...new Set(searchQueries.map((q) => q.trim()).filter(Boolean))];
+  const unique = [
+    ...new Set(searchQueries.map((q) => q.trim()).filter(Boolean)),
+  ];
   if (!unique.length) {
     return { rows: [], context: null, queries: [] };
   }
@@ -283,7 +296,8 @@ export async function runHybridChunkRetrieval(
 export async function hybridChunkContextFromQueries(
   searchQueries: string[],
 ): Promise<string | null> {
-  const { context, rows, queries } = await runHybridChunkRetrieval(searchQueries);
+  const { context, rows, queries } =
+    await runHybridChunkRetrieval(searchQueries);
 
   if (process.env.NODE_ENV !== "production" && rows.length) {
     console.log("[retrieval] multi_query_chunks", {
@@ -302,6 +316,8 @@ export async function hybridChunkContextFromQueries(
  * Hybrid retrieval over `notion_chunks`: vector similarity + FTS, merged with weighted score.
  * Falls back to FTS-only when the query embedding is unavailable.
  */
-export async function hybridChunkContext(searchQuery: string): Promise<string | null> {
+export async function hybridChunkContext(
+  searchQuery: string,
+): Promise<string | null> {
   return hybridChunkContextFromQueries([searchQuery]);
 }
