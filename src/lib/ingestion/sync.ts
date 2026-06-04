@@ -1,5 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+/**
+ * Schema migration required before deploying this version:
+ *
+ *   ALTER TABLE notion_chunks
+ *     ADD COLUMN IF NOT EXISTS heading_path  text,
+ *     ADD COLUMN IF NOT EXISTS char_count    integer NOT NULL DEFAULT 0,
+ *     ADD COLUMN IF NOT EXISTS token_count   integer NOT NULL DEFAULT 0;
+ *
+ * After migrating, run a full rebuild to populate the new columns:
+ *   syncNotionToPostgres({ force: true, embed: true })
+ */
+
 import { Client } from "@notionhq/client";
 
 import { ensureSchema, query, setNotionLastSyncRun } from "@/lib/db";
@@ -178,41 +190,85 @@ function findPropertyValueByName(
   return null;
 }
 
-function formatNotionBlockLine(block: any): string | null {
+/**
+ * Convert a Notion block to a text line.
+ *
+ * Depth is passed from the recursive fetcher so nested bullets are indented.
+ * Headings are never indented — they anchor section boundaries.
+ *
+ * Priority 3: callouts, to-dos, and tables carry semantic markers so the
+ * chunker (and the embedding) know these are not plain prose.
+ */
+function formatNotionBlockLine(block: any, depth = 0): string | null {
   const type = block?.type;
   if (!type) return null;
 
   const payload = block[type];
+
+  // --- Headings (no indent — they drive section splitting in chunk.ts) ---
+  if (type === "heading_1" || type === "heading_2" || type === "heading_3") {
+    const text = getTextFromRichText(payload?.rich_text).trim();
+    if (!text) return null;
+    const hashes = "#".repeat(type === "heading_1" ? 1 : type === "heading_2" ? 2 : 3);
+    return `${hashes} ${text}`;
+  }
+
+  const indent = "  ".repeat(depth);
+
+  // --- Table row: join cells with pipe separators ---
+  if (type === "table_row") {
+    const cells: string[] = (payload?.cells ?? []).map(
+      (cell: Array<{ plain_text?: string }>) =>
+        cell.map((rt) => rt?.plain_text ?? "").join(""),
+    );
+    return `${indent}| ${cells.join(" | ")} |`;
+  }
+
+  // For all remaining types we need the rich-text content
   const text = getTextFromRichText(payload?.rich_text ?? payload?.title).trim();
   if (!text) return null;
 
   switch (type) {
-    case "heading_1":
-      return `# ${text}`;
-    case "heading_2":
-      return `## ${text}`;
-    case "heading_3":
-      return `### ${text}`;
     case "bulleted_list_item":
-      return `- ${text}`;
+      return `${indent}- ${text}`;
+
     case "numbered_list_item":
-      return `1. ${text}`;
+      return `${indent}1. ${text}`;
+
     case "to_do": {
+      // Priority 3: preserve checked state as a semantic marker
       const mark = payload?.checked ? "[x]" : "[ ]";
-      return `- ${mark} ${text}`;
+      return `${indent}[TO_DO] ${mark} ${text}`;
     }
+
     case "quote":
-      return `> ${text}`;
+      return `${indent}> ${text}`;
+
     case "callout":
-      return text;
+      // Priority 3: callout marker so the embedding captures advisory tone
+      return `${indent}[CALLOUT] ${text}`;
+
+    case "code": {
+      const lang = payload?.language ?? "";
+      return `${indent}\`\`\`${lang}\n${indent}${text}\n${indent}\`\`\``;
+    }
+
+    case "divider":
+      return `${indent}---`;
+
     default:
-      return text;
+      return `${indent}${text}`;
   }
 }
 
+/**
+ * Fetch all blocks for a page/block, recursively following has_children.
+ * Depth is incremented on each recursive call so child blocks are indented.
+ */
 async function fetchBlocksRecursively(
   notion: Client,
   blockId: string,
+  depth = 0,
 ): Promise<string[]> {
   const lines: string[] = [];
 
@@ -228,7 +284,7 @@ async function fetchBlocksRecursively(
     );
 
     for (const block of response.results as any[]) {
-      const formatted = formatNotionBlockLine(block);
+      const formatted = formatNotionBlockLine(block, depth);
       if (formatted) {
         lines.push(formatted);
       }
@@ -238,6 +294,7 @@ async function fetchBlocksRecursively(
           const children = await fetchBlocksRecursively(
             notion,
             block.id,
+            depth + 1,  // FIX 3: increment depth for children
           );
 
           lines.push(...children);
@@ -342,15 +399,14 @@ function toVectorLiteral(values: number[] | null) {
   return `[${values.join(",")}]`;
 }
 
+/**
+ * FIX 4: Wrap the DELETE + INSERT sequence in a transaction so a crash or
+ * embedding failure mid-way never leaves a page with zero chunks in the DB.
+ */
 async function replacePageChunks(
   record: PageRecord,
   embed: boolean,
 ): Promise<{ chunkEmbedFailures: number }> {
-  await query(
-    `DELETE FROM notion_chunks WHERE page_id = $1`,
-    [record.id],
-  );
-
   const chunks = chunkPageContent({
     id: record.id,
     title: record.title,
@@ -364,44 +420,72 @@ async function replacePageChunks(
     last_edited_by: record.last_edited_by,
   });
 
+  // FIX 2 side effect: chunkPageContent now returns [] for empty pages.
+  // Nothing to insert — delete stale chunks and exit cleanly.
+  if (chunks.length === 0) {
+    await query(`DELETE FROM notion_chunks WHERE page_id = $1`, [record.id]);
+    return { chunkEmbedFailures: 0 };
+  }
+
   const embeddings = embed
     ? await embedBatch(chunks.map((chunk) => chunk.content))
     : chunks.map(() => null);
 
   let chunkEmbedFailures = 0;
 
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    const embedding = embeddings[i];
-    if (embed && !embedding) {
-      chunkEmbedFailures += 1;
+  // FIX 4: BEGIN transaction — DELETE + all INSERTs are atomic.
+  await query("BEGIN");
+
+  try {
+    await query(`DELETE FROM notion_chunks WHERE page_id = $1`, [record.id]);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const embedding = embeddings[i];
+      if (embed && !embedding) {
+        chunkEmbedFailures += 1;
+      }
+
+      await query(
+        `
+        INSERT INTO notion_chunks (
+          page_id,
+          chunk_index,
+          section_heading,
+          heading_path,
+          content,
+          char_count,
+          token_count,
+          embedding
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8::vector
+        )
+        `,
+        [
+          chunk.page_id,
+          chunk.chunk_index,
+          chunk.section_heading,
+          chunk.heading_path,
+          chunk.content,
+          chunk.char_count,
+          chunk.token_count,
+          toVectorLiteral(embedding),
+        ],
+      );
     }
 
-    await query(
-      `
-      INSERT INTO notion_chunks (
-        page_id,
-        chunk_index,
-        section_heading,
-        content,
-        embedding
-      )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        $5::vector
-      )
-      `,
-      [
-        chunk.page_id,
-        chunk.chunk_index,
-        chunk.section_heading,
-        chunk.content,
-        toVectorLiteral(embedding),
-      ],
-    );
+    await query("COMMIT");
+  } catch (err) {
+    await query("ROLLBACK");
+    throw err;
   }
 
   return { chunkEmbedFailures };
@@ -482,10 +566,8 @@ async function buildPageRecord(
 
   const title = getPageTitle(page);
 
-  const blockLines = await fetchBlocksRecursively(
-    notion,
-    page.id,
-  );
+  // FIX 3: start at depth=0; recursive calls will increment for nested blocks
+  const blockLines = await fetchBlocksRecursively(notion, page.id, 0);
 
   const content = blockLines.join("\n\n");
 
