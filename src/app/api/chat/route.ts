@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
 
-    return handleChatPost(session, body);
+    return handleChatPost(session, body, req.signal);
   } catch (error) {
     console.error("Chat API Error:", error);
 

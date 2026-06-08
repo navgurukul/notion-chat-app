@@ -100,7 +100,7 @@ function resolveFirstPerson(message: string, session: Session): string {
   return message.replace(/\b(me|my|myself|I)\b/g, firstName);
 }
 
-export async function runChatPipeline(session: Session, body: ChatRequestBody) {
+export async function runChatPipeline(session: Session, body: ChatRequestBody, signal?: AbortSignal) {
   const rawMessage = validateMessage(body.message);
   
   // Save raw message to DB, then build the processed version for the pipeline
@@ -125,7 +125,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody) {
     return jsonAnswer(sessionId, "Ask for a Notion link using the page title, e.g. **link for Employee Onboarding Hub**.");
   }
 
-  return tryRagAnswer(parsed, ctx, session);
+  return tryRagAnswer(parsed, ctx, session, signal);
 }
 
 function validateMessage(raw: unknown) {
@@ -248,7 +248,7 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
 
 
 
-async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext, session: Session) {
+async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext, session: Session, signal?: AbortSignal) {
   if (isMetadataOnlyKind(parsed.kind) && parsed.kind !== "team_activity") {
     logChatRoute("sql_miss_metadata", parsed, { blocked_rag: true });
     return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed));
@@ -310,5 +310,5 @@ async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext, session: 
     return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE);
   }
 
-  return streamGeminiAnswer(ctx.message, notionContext, ctx.history, ctx.sessionId, parsed.kind);
+  return streamGeminiAnswer(ctx.message, notionContext, ctx.history, ctx.sessionId, parsed.kind, signal);
 }

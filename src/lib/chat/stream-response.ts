@@ -42,6 +42,7 @@ export async function streamGeminiAnswer(
   chatHistory: ChatHistoryItem[],
   sessionId: string | null,
   queryKind: QueryKind | null = null,
+  signal?: AbortSignal,
 ) {
   const enrichedContext = buildEnrichedContext(notionContext, queryKind);
 
@@ -66,6 +67,9 @@ export async function streamGeminiAnswer(
       let rawAnswer = "";
       try {
         for await (const chunk of stream) {
+          if (signal?.aborted) {
+            break;
+          }
           const text = chunk.text();
           rawAnswer += text;
           controller.enqueue(encoder.encode(text));

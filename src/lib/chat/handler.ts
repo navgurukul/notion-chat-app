@@ -9,9 +9,9 @@ import {
 } from "@/lib/chat/pipeline";
 
 /** HTTP entry for POST /api/chat — delegates to {@link runChatPipeline}. */
-export async function handleChatPost(session: Session, body: ChatRequestBody) {
+export async function handleChatPost(session: Session, body: ChatRequestBody, signal?: AbortSignal) {
   try {
-    return await runChatPipeline(session, body);
+    return await runChatPipeline(session, body, signal);
   } catch (error) {
     if (error instanceof ChatValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });

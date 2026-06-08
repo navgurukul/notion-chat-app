@@ -4,6 +4,7 @@ import {
   addChatMessage,
   CHAT_HISTORY_LIMIT,
   clearChatMessages,
+  deleteMessagesFrom,
   ensureSessionBelongsToUser,
   getOrCreateUser,
   listChatMessages,
@@ -62,17 +63,25 @@ export async function POST(req: NextRequest, context: RouteContext) {
   }
 }
 
-export async function DELETE(_req: NextRequest, context: RouteContext) {
+export async function DELETE(req: NextRequest, context: RouteContext) {
   try {
     const owned = await requireOwnedSession(context);
     if ("error" in owned) return owned.error;
 
+    const { searchParams } = new URL(req.url);
+    const messageId = searchParams.get("messageId");
+
+    if (messageId) {
+      await deleteMessagesFrom(owned.sessionId, messageId);
+      return NextResponse.json({ ok: true });
+    }
+
     await clearChatMessages(owned.sessionId);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    console.error("Clear chat messages API Error:", error);
+    console.error("Clear/Delete chat messages API Error:", error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to clear chat messages" },
+      { error: error instanceof Error ? error.message : "Failed to clear/delete chat messages" },
       { status: 500 },
     );
   }

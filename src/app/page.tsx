@@ -3,7 +3,7 @@
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
-import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square } from "lucide-react";
+import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { hasKnowledgeBaseAccess } from "@/lib/shared/access";
@@ -14,6 +14,7 @@ import {
 } from "@/lib/chat/stream-tags";
 
 interface Message {
+  id?: string;
   role: "user" | "bot";
   content: string;
 }
@@ -68,6 +69,9 @@ export default function ChatPage() {
   const chatAbortControllerRef = useRef<AbortController | null>(null);
   const chatRequestIdRef = useRef(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [stopConfirmState, setStopConfirmState] = useState<"idle" | "confirm">("idle");
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState("");
   const canManageKnowledgeBase = hasKnowledgeBaseAccess(session);
 
   useEffect(() => {
@@ -141,6 +145,7 @@ export default function ChatPage() {
     const data = await response.json();
     const loadedMessages = Array.isArray(data?.messages) ? data.messages : [];
     const mapped: Message[] = loadedMessages.map((message: Message) => ({
+      id: message.id,
       role: message.role,
       content: message.content,
     }));
@@ -190,6 +195,7 @@ export default function ChatPage() {
         const loadedMessages = Array.isArray(data?.messages) ? data.messages : [];
         setMessages(
           loadedMessages.map((message: Message) => ({
+            id: message.id,
             role: message.role,
             content: message.content,
           })),
@@ -341,18 +347,20 @@ const createNewChat = async () => {
     chatInFlightRef.current = false;
   };
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || isLoading || !activeSessionId) return;
+  const executeChatFlow = async (userMessage: string, customHistory?: Message[]) => {
+    if (isLoading || !activeSessionId) return;
 
-    const userMessage = input.trim();
     const sessionId = activeSessionId;
-    setInput("");
-
+    const baseMessages = customHistory || messages;
     const newUserMsg: Message = { role: "user", content: userMessage };
-    const botIndex = messages.length + 1;
+    const botIndex = baseMessages.length + 1;
     pendingBotMessageIndexRef.current = botIndex;
-    setMessages((prev) => [...prev, newUserMsg, { role: "bot", content: "" }]);
+
+    if (customHistory) {
+      setMessages([...customHistory, newUserMsg, { role: "bot", content: "" }]);
+    } else {
+      setMessages((prev) => [...prev, newUserMsg, { role: "bot", content: "" }]);
+    }
 
     chatInFlightRef.current = true;
     messagesLoadGenerationRef.current += 1;
@@ -371,7 +379,7 @@ const createNewChat = async () => {
     }));
 
     try {
-      const history = [...messages, newUserMsg]
+      const history = [...baseMessages, newUserMsg]
         .slice(-8)
         .map((message) => ({
           role: message.role,
@@ -406,6 +414,7 @@ const createNewChat = async () => {
         if (answer !== null) {
           setBotMessageAt(botIndex, answer);
           clearThinkingAt(botIndex);
+          await syncMessagesFromSession(sessionId);
           refreshChatSessions().catch((error) => console.error("Failed to refresh chats:", error));
           return;
         }
@@ -463,14 +472,7 @@ const createNewChat = async () => {
       setBotMessageAt(botIndex, answerText);
       clearThinkingAt(botIndex);
 
-      if (!answerText.trim()) {
-        for (let attempt = 0; attempt < 4; attempt += 1) {
-          await sleep(400 * (attempt + 1));
-          const synced = await syncMessagesFromSession(sessionId);
-          if (synced) break;
-        }
-      }
-
+      await syncMessagesFromSession(sessionId);
       refreshChatSessions().catch((error) => console.error("Failed to refresh chats:", error));
 
     } catch (error) {
@@ -487,6 +489,69 @@ const createNewChat = async () => {
         pendingBotMessageIndexRef.current = null;
       }
       clearThinkingAt(botIndex);
+    }
+  };
+
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isLoading || !activeSessionId) return;
+
+    const userMessage = input.trim();
+    setInput("");
+    await executeChatFlow(userMessage);
+  };
+
+  const handleStopClick = () => {
+    if (stopConfirmState === "idle") {
+      setStopConfirmState("confirm");
+      setTimeout(() => {
+        setStopConfirmState("idle");
+      }, 3000);
+    } else {
+      stopActiveChat();
+      setStopConfirmState("idle");
+    }
+  };
+
+  const handleEditMessage = async (messageId: string, newContent: string) => {
+    if (isLoading || !activeSessionId || !newContent.trim()) return;
+    setEditingMessageId(null);
+
+    const targetIdx = messages.findIndex((m) => m.id === messageId);
+    if (targetIdx === -1) return;
+
+    try {
+      const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${messageId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error("Failed to delete message history");
+
+      const historyUpToEdited = messages.slice(0, targetIdx);
+      await executeChatFlow(newContent, historyUpToEdited);
+    } catch (error) {
+      console.error("Failed to edit message:", error);
+    }
+  };
+
+  const handleRegenerate = async () => {
+    if (isLoading || !activeSessionId || messages.length < 2) return;
+
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg.role !== "bot") return;
+
+    const secondLastMsg = messages[messages.length - 2];
+    if (secondLastMsg.role !== "user") return;
+
+    try {
+      const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${lastMsg.id}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error("Failed to delete message for regeneration");
+
+      const historyUpToLastUser = messages.slice(0, messages.length - 2);
+      await executeChatFlow(secondLastMsg.content, historyUpToLastUser);
+    } catch (error) {
+      console.error("Failed to regenerate response:", error);
     }
   };
 
@@ -942,43 +1007,102 @@ const createNewChat = async () => {
                   : "Generating answer...";
 
               return (
-                <div
-                  key={idx}
-                  className={`flex gap-4 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}
-                >
-                  <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${msg.role === "user" ? "bg-white text-black" : "bg-blue-600 text-white"
-                    }`}>
-                    {msg.role === "user" ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
-                  </div>
-                  <div className={`max-w-[80%] p-4 rounded-2xl ${msg.role === "user"
-                    ? "bg-white/10 border border-white/10 rounded-tr-none"
-                    : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
-                    }`}>
-                    {showThinking && thinkingEntry && (
-                      <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-500/25 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-100/80">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        <span>{thinkingLabel}</span>
-                      </div>
-                    )}
-                    {(msg.content.trim() || showThinking) && (
-                      <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed prose-headings:mt-4 prose-headings:mb-2 prose-h2:text-base prose-h3:text-sm prose-h4:text-sm prose-ul:my-2 prose-li:my-0.5 prose-table:text-sm prose-th:border prose-th:border-white/15 prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-white/15 prose-td:px-2 prose-td:py-1 prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
-                        {msg.content.trim() ? (
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              a: ({ href, children }) => (
-                                <a href={href} target="_blank" rel="noopener noreferrer">
-                                  {children}
-                                </a>
-                              ),
-                            }}
+                <div key={idx} className="space-y-2 group/msg">
+                  <div
+                    className={`flex gap-4 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}
+                  >
+                    <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${msg.role === "user" ? "bg-white text-black" : "bg-blue-600 text-white"
+                      }`}>
+                      {msg.role === "user" ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
+                    </div>
+
+                    {msg.role === "user" && editingMessageId === msg.id ? (
+                      <div className="flex-1 max-w-[80%] p-4 rounded-2xl bg-white/10 border border-white/10 rounded-tr-none space-y-3">
+                        <textarea
+                          value={editingText}
+                          onChange={(e) => setEditingText(e.target.value)}
+                          className="w-full p-3 rounded-xl bg-white/5 border border-white/20 focus:outline-none focus:border-blue-500 text-sm text-white resize-none"
+                          rows={3}
+                        />
+                        <div className="flex gap-2 justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setEditingMessageId(null)}
+                            className="px-3 py-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-xs font-semibold text-white/70 transition-colors"
                           >
-                            {msg.content}
-                          </ReactMarkdown>
-                        ) : null}
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleEditMessage(msg.id!, editingText)}
+                            className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-semibold text-white transition-colors"
+                          >
+                            Save & Submit
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="relative max-w-[80%]">
+                        <div className={`p-4 rounded-2xl ${msg.role === "user"
+                          ? "bg-white/10 border border-white/10 rounded-tr-none"
+                          : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
+                          }`}>
+                          {showThinking && thinkingEntry && (
+                            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-500/25 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-100/80">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              <span>{thinkingLabel}</span>
+                            </div>
+                          )}
+                          {(msg.content.trim() || showThinking) && (
+                            <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed prose-headings:mt-4 prose-headings:mb-2 prose-h2:text-base prose-h3:text-sm prose-h4:text-sm prose-ul:my-2 prose-li:my-0.5 prose-table:text-sm prose-th:border prose-th:border-white/15 prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-white/15 prose-td:px-2 prose-td:py-1 prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
+                              {msg.content.trim() ? (
+                                <ReactMarkdown
+                                  remarkPlugins={[remarkGfm]}
+                                  components={{
+                                    a: ({ href, children }) => (
+                                      <a href={href} target="_blank" rel="noopener noreferrer">
+                                        {children}
+                                      </a>
+                                    ),
+                                  }}
+                                >
+                                  {msg.content}
+                                </ReactMarkdown>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+
+                         {msg.role === "user" && msg.id && !isLoading && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingMessageId(msg.id!);
+                              setEditingText(msg.content);
+                            }}
+                            className="absolute -left-10 top-2 p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors"
+                            title="Edit message"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
+
+                  {idx === messages.length - 1 && msg.role === "bot" && msg.id && !isLoading && (
+                    <div className="flex justify-start pl-12 mt-1">
+                      <button
+                        type="button"
+                        onClick={handleRegenerate}
+                        className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border border-white/10 bg-white/5 text-white/60 hover:text-white hover:bg-white/10 transition-colors font-medium"
+                        title="Regenerate response"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Regenerate</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })
@@ -1017,11 +1141,19 @@ const createNewChat = async () => {
             {isLoading ? (
               <button
                 type="button"
-                onClick={stopActiveChat}
-                className="absolute right-2 top-2 p-2 rounded-xl bg-red-500 hover:bg-red-600 text-white transition-colors duration-200"
-                title="Stop generating"
+                onClick={handleStopClick}
+                className={`absolute right-2 top-2 p-2 rounded-xl text-white transition-all duration-200 flex items-center justify-center min-h-[36px] ${
+                  stopConfirmState === "confirm"
+                    ? "bg-red-700 hover:bg-red-800 px-3 animate-pulse"
+                    : "bg-red-500 hover:bg-red-600"
+                }`}
+                title={stopConfirmState === "confirm" ? "Click again to confirm" : "Stop generating"}
               >
-                <Square className="w-5 h-5 fill-current" />
+                {stopConfirmState === "confirm" ? (
+                  <span className="text-[10px] font-bold tracking-wider uppercase">Click again</span>
+                ) : (
+                  <Square className="w-5 h-5 fill-current" />
+                )}
               </button>
             ) : (
               <button

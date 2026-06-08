@@ -155,6 +155,28 @@ export async function deleteChatSession(sessionId: string, userId: string) {
   return rows.length > 0;
 }
 
+export async function deleteMessagesFrom(sessionId: string, messageId: string) {
+  await query(
+    `
+    DELETE FROM chat_messages
+    WHERE session_id = $1
+      AND created_at >= (
+        SELECT created_at
+        FROM chat_messages
+        WHERE id = $2 AND session_id = $1
+      )
+    `,
+    [sessionId, messageId],
+  );
+  await query(
+    `
+    UPDATE chat_sessions
+    SET updated_at = now()
+    WHERE id = $1
+    `,
+    [sessionId],
+  );
+}
 
 export async function getEmptyChatSession(userId: string) {
   const rows = await query<ChatSessionRow>(
