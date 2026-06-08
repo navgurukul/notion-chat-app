@@ -931,7 +931,12 @@ const createNewChat = async () => {
               >
                 <button
                   type="button"
-                  onClick={() => setActiveSessionId(chat.id)}
+                  onClick={() => {
+                    stopActiveChat();
+                    setMessages([]);
+                    setThinkingByMessage({});
+                    setActiveSessionId(chat.id);
+                  }}
                   className={`flex-1 min-w-0 text-left px-3 py-2 text-sm truncate transition-colors ${
                     activeSessionId === chat.id ? "text-blue-200" : "text-white/55 group-hover:text-white"
                   }`}
