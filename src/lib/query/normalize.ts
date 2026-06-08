@@ -7,7 +7,17 @@ import {
 } from "@/lib/shared/text-utils";
 
 export function extractYearFromQuestion(question: string): number | undefined {
-  return extractYear(question);
+  const explicitYear = extractYear(question);
+  if (explicitYear) return explicitYear;
+
+  const currentYear = new Date().getFullYear();
+  const lower = question.toLowerCase();
+
+  if (/\b(this|current|present) year\b/.test(lower)) return currentYear;
+  if (/\blast year\b/.test(lower)) return currentYear - 1;
+  if (/\bnext year\b/.test(lower)) return currentYear + 1;
+
+  return undefined;
 }
 
 const YEAR_SUFFIX_TRIGGERS = [" in ", " for ", " during "];

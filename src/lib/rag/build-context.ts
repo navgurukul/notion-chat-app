@@ -46,6 +46,14 @@ function stripNotionBodyMarkers(raw: string) {
   return body.split(PROPERTIES_MARKER).join("").split(CONTENT_MARKER).join("").trim();
 }
 
+function yearWindow(year?: number) {
+  if (!year) return null;
+  return {
+    start: `${year}-01-01`,
+    end: `${year + 1}-01-01`,
+  };
+}
+
 function formatPageSection(row: PageRow) {
   const title = row.title || "Untitled";
   const body = stripNotionBodyMarkers(row.content || "");
@@ -83,10 +91,14 @@ function deriveCoreTerm(term: string): string | null {
 }
 
 /** Always fetch real rows from notion_pages — works without chunk embeddings. */
-export async function prefetchPagesFromQuestion(question: string): Promise<string> {
+export async function prefetchPagesFromQuestion(
+  question: string,
+  year?: number,
+): Promise<string> {
   const cleaned = simplifySearchQuery(question);
   const terms = extractQuestionTerms(question);
   if (!cleaned && !terms.length) return "";
+  const bounds = yearWindow(year);
 
   const seen = new Set<string>();
   const merged: PageRow[] = [];
@@ -103,27 +115,51 @@ export async function prefetchPagesFromQuestion(question: string): Promise<strin
   if (terms.length > 0) {
     const likePatterns = terms.map((t) => `%${escapeLike(t.toLowerCase())}%`);
     const primaryTerm = terms[0].toLowerCase();
-    const likeRows = await query<PageRow>(
-      `
-      SELECT id, title, url, owner, created_by, status, doc_type, content,
-        (
-          CASE WHEN lower(coalesce(title, '')) = $2 THEN 100 ELSE 0 END +
-          CASE WHEN lower(coalesce(title, '')) LIKE $3 ESCAPE '\\' THEN 50 ELSE 0 END +
-          (
-            SELECT count(*)::int FROM unnest($1::text[]) AS pat(p)
-            WHERE lower(coalesce(title, '')) LIKE pat.p
-               OR lower(coalesce(content, '')) LIKE pat.p
-          ) * 8
-        ) AS rank
-      FROM notion_pages
-      WHERE
-        lower(coalesce(title, '')) LIKE ANY($1::text[])
-        OR lower(coalesce(content, '')) LIKE ANY($1::text[])
-      ORDER BY rank DESC, length(coalesce(title, '')) ASC, title ASC
-      LIMIT $4
-      `,
-      [likePatterns, primaryTerm, `%${escapeLike(primaryTerm)}%`, PREFETCH_LIMIT],
-    );
+    const likeRows = bounds
+      ? await query<PageRow>(
+          `
+          SELECT id, title, url, owner, created_by, status, doc_type, content,
+            (
+              CASE WHEN lower(coalesce(title, '')) = $2 THEN 100 ELSE 0 END +
+              CASE WHEN lower(coalesce(title, '')) LIKE $3 ESCAPE '\\' THEN 50 ELSE 0 END +
+              (
+                SELECT count(*)::int FROM unnest($1::text[]) AS pat(p)
+                WHERE lower(coalesce(title, '')) LIKE pat.p
+                   OR lower(coalesce(content, '')) LIKE pat.p
+              ) * 8
+            ) AS rank
+          FROM notion_pages
+          WHERE
+            (lower(coalesce(title, '')) LIKE ANY($1::text[])
+             OR lower(coalesce(content, '')) LIKE ANY($1::text[]))
+            AND notion_edited_at >= $5::timestamptz
+            AND notion_edited_at < $6::timestamptz
+          ORDER BY rank DESC, length(coalesce(title, '')) ASC, title ASC
+          LIMIT $4
+          `,
+          [likePatterns, primaryTerm, `%${escapeLike(primaryTerm)}%`, PREFETCH_LIMIT, bounds.start, bounds.end],
+        )
+      : await query<PageRow>(
+          `
+          SELECT id, title, url, owner, created_by, status, doc_type, content,
+            (
+              CASE WHEN lower(coalesce(title, '')) = $2 THEN 100 ELSE 0 END +
+              CASE WHEN lower(coalesce(title, '')) LIKE $3 ESCAPE '\\' THEN 50 ELSE 0 END +
+              (
+                SELECT count(*)::int FROM unnest($1::text[]) AS pat(p)
+                WHERE lower(coalesce(title, '')) LIKE pat.p
+                   OR lower(coalesce(content, '')) LIKE pat.p
+              ) * 8
+            ) AS rank
+          FROM notion_pages
+          WHERE
+            lower(coalesce(title, '')) LIKE ANY($1::text[])
+            OR lower(coalesce(content, '')) LIKE ANY($1::text[])
+          ORDER BY rank DESC, length(coalesce(title, '')) ASC, title ASC
+          LIMIT $4
+          `,
+          [likePatterns, primaryTerm, `%${escapeLike(primaryTerm)}%`, PREFETCH_LIMIT],
+        );
     pushRows(likeRows);
   }
 
@@ -143,20 +179,36 @@ export async function prefetchPagesFromQuestion(question: string): Promise<strin
         });
       }
       const fuzzyRows = await query<PageRow>(
-        `
-        SELECT id, title, url, owner, created_by, status, doc_type, content,
-          (
-            CASE WHEN lower(coalesce(title, '')) LIKE $1 ESCAPE '\\' THEN 60 ELSE 0 END +
-            CASE WHEN lower(coalesce(content, '')) LIKE $1 ESCAPE '\\' THEN 20 ELSE 0 END
-          ) AS rank
-        FROM notion_pages
-        WHERE
-          lower(coalesce(title, '')) LIKE $1 ESCAPE '\\'
-          OR lower(coalesce(content, '')) LIKE $1 ESCAPE '\\'
-        ORDER BY rank DESC, length(coalesce(title, '')) ASC, title ASC
-        LIMIT $2
-        `,
-        [`%${escapeLike(coreTerm)}%`, PREFETCH_LIMIT],
+        bounds
+          ? `
+            SELECT id, title, url, owner, created_by, status, doc_type, content,
+              (
+                CASE WHEN lower(coalesce(title, '')) LIKE $1 ESCAPE '\\' THEN 60 ELSE 0 END +
+                CASE WHEN lower(coalesce(content, '')) LIKE $1 ESCAPE '\\' THEN 20 ELSE 0 END
+              ) AS rank
+            FROM notion_pages
+            WHERE
+              (lower(coalesce(title, '')) LIKE $1 ESCAPE '\\'
+              OR lower(coalesce(content, '')) LIKE $1 ESCAPE '\\')
+              AND notion_edited_at >= $2::timestamptz
+              AND notion_edited_at < $3::timestamptz
+            ORDER BY rank DESC, length(coalesce(title, '')) ASC, title ASC
+            LIMIT $4
+            `
+          : `
+            SELECT id, title, url, owner, created_by, status, doc_type, content,
+              (
+                CASE WHEN lower(coalesce(title, '')) LIKE $1 ESCAPE '\\' THEN 60 ELSE 0 END +
+                CASE WHEN lower(coalesce(content, '')) LIKE $1 ESCAPE '\\' THEN 20 ELSE 0 END
+              ) AS rank
+            FROM notion_pages
+            WHERE
+              lower(coalesce(title, '')) LIKE $1 ESCAPE '\\'
+              OR lower(coalesce(content, '')) LIKE $1 ESCAPE '\\'
+            ORDER BY rank DESC, length(coalesce(title, '')) ASC, title ASC
+            LIMIT $2
+            `,
+        bounds ? [`%${escapeLike(coreTerm)}%`, bounds.start, bounds.end, PREFETCH_LIMIT] : [`%${escapeLike(coreTerm)}%`, PREFETCH_LIMIT],
       );
       pushRows(fuzzyRows);
     }
@@ -165,35 +217,67 @@ export async function prefetchPagesFromQuestion(question: string): Promise<strin
 
   if (merged.length < PREFETCH_LIMIT && cleaned.length >= 2) {
     try {
-      const ftsRows = await query<PageRow>(
-        `
-        SELECT
-          id,
-          title,
-          url,
-          owner,
-          created_by,
-          status,
-          doc_type,
-          content,
-          (
-            ts_rank(
-              to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, '')),
-              plainto_tsquery('english', $1)
-            ) +
-            2 * ts_rank(
-              to_tsvector('english', coalesce(title, '')),
-              plainto_tsquery('english', $1)
-            )
-          ) AS rank
-        FROM notion_pages
-        WHERE to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, ''))
-          @@ plainto_tsquery('english', $1)
-        ORDER BY rank DESC
-        LIMIT $2
-        `,
-        [cleaned, PREFETCH_LIMIT],
-      );
+      const ftsRows = bounds
+        ? await query<PageRow>(
+            `
+            SELECT
+              id,
+              title,
+              url,
+              owner,
+              created_by,
+              status,
+              doc_type,
+              content,
+              (
+                ts_rank(
+                  to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, '')),
+                  plainto_tsquery('english', $1)
+                ) +
+                2 * ts_rank(
+                  to_tsvector('english', coalesce(title, '')),
+                  plainto_tsquery('english', $1)
+                )
+              ) AS rank
+            FROM notion_pages
+            WHERE to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, ''))
+              @@ plainto_tsquery('english', $1)
+              AND notion_edited_at >= $2::timestamptz
+              AND notion_edited_at < $3::timestamptz
+            ORDER BY rank DESC
+            LIMIT $4
+            `,
+            [cleaned, bounds.start, bounds.end, PREFETCH_LIMIT],
+          )
+        : await query<PageRow>(
+            `
+            SELECT
+              id,
+              title,
+              url,
+              owner,
+              created_by,
+              status,
+              doc_type,
+              content,
+              (
+                ts_rank(
+                  to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, '')),
+                  plainto_tsquery('english', $1)
+                ) +
+                2 * ts_rank(
+                  to_tsvector('english', coalesce(title, '')),
+                  plainto_tsquery('english', $1)
+                )
+              ) AS rank
+            FROM notion_pages
+            WHERE to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, ''))
+              @@ plainto_tsquery('english', $1)
+            ORDER BY rank DESC
+            LIMIT $2
+            `,
+            [cleaned, PREFETCH_LIMIT],
+          );
       pushRows(ftsRows);
     } catch {
       // plainto_tsquery can fail on odd input; LIKE results above are enough
@@ -297,21 +381,23 @@ export async function buildNotionContextForChat(
 
 export async function buildNotionContextWithConfidence(
   searchQuery: string | string[],
-  options?: { titleBoost?: string },
+  options?: { titleBoost?: string; year?: number },
 ): Promise<ChatContextBuild> {
   const queries = Array.isArray(searchQuery) ? searchQuery : [searchQuery];
   const primary = queries.find((q) => q.trim())?.trim() ?? "";
   const titleBoost = options?.titleBoost?.trim();
+  const year = options?.year;
 
   const [prefetch, hybrid] = await Promise.all([
-    prefetchPagesFromQuestion(titleBoost || primary),
-    runHybridChunkRetrieval(queries, titleBoost),
+    prefetchPagesFromQuestion(titleBoost || primary, year),
+    runHybridChunkRetrieval(queries, titleBoost, { year }),
   ]);
 
   let semantic = hybrid.context ?? "";
   if (!semantic) {
     semantic = await semanticSearch(queries.length > 1 ? queries : primary, {
       skipHybrid: true,
+      year,
     });
   }
 

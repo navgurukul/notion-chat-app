@@ -35,6 +35,14 @@ const DEFAULT_TOP_K = 20;
 const DEFAULT_MIN_SIMILARITY = 0.3;
 const DEFAULT_MAX_CONTEXT_CHARS = 32000;
 
+function yearWindow(year?: number) {
+  if (!year) return null;
+  return {
+    start: `${year}-01-01`,
+    end: `${year + 1}-01-01`,
+  };
+}
+
 function readPositiveNumber(value: string | undefined, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -137,7 +145,7 @@ async function hasEmbeddings() {
   return rows[0]?.has_embeddings ?? false;
 }
 
-async function vectorSearch(searchQuery: string) {
+async function vectorSearch(searchQuery: string, year?: number) {
   const embedding = await embedText(searchQuery);
   if (!embedding) return [];
 
@@ -145,48 +153,90 @@ async function vectorSearch(searchQuery: string) {
   const topK = getTopK();
   const cand = getPageCandidateLimit();
   const minSimilarity = getMinSimilarity();
+  const bounds = yearWindow(year);
 
-  const rows = await query<SearchRow & { embedding_literal?: string }>(
-    `
-    SELECT
-      id,
-      title,
-      url,
-      owner,
-      created_by,
-      status,
-      content,
-      1 - (embedding <=> $1::vector) AS similarity,
-      embedding::text AS embedding_literal
-    FROM notion_pages
-    WHERE embedding IS NOT NULL
-      AND 1 - (embedding <=> $1::vector) >= $2
-    ORDER BY embedding <=> $1::vector ASC
-    LIMIT $3
-    `,
-    [vectorLiteral, minSimilarity, cand],
-  );
+  const rows = bounds
+    ? await query<SearchRow & { embedding_literal?: string }>(
+        `
+        SELECT
+          id,
+          title,
+          url,
+          owner,
+          created_by,
+          status,
+          content,
+          1 - (embedding <=> $1::vector) AS similarity,
+          embedding::text AS embedding_literal
+        FROM notion_pages
+        WHERE embedding IS NOT NULL
+          AND 1 - (embedding <=> $1::vector) >= $2
+          AND notion_edited_at >= $4::timestamptz
+          AND notion_edited_at < $5::timestamptz
+        ORDER BY embedding <=> $1::vector ASC
+        LIMIT $3
+        `,
+        [vectorLiteral, minSimilarity, cand, bounds.start, bounds.end],
+      )
+    : await query<SearchRow & { embedding_literal?: string }>(
+        `
+        SELECT
+          id,
+          title,
+          url,
+          owner,
+          created_by,
+          status,
+          content,
+          1 - (embedding <=> $1::vector) AS similarity,
+          embedding::text AS embedding_literal
+        FROM notion_pages
+        WHERE embedding IS NOT NULL
+          AND 1 - (embedding <=> $1::vector) >= $2
+        ORDER BY embedding <=> $1::vector ASC
+        LIMIT $3
+        `,
+        [vectorLiteral, minSimilarity, cand],
+      );
 
   return refinePageRows(rows, topK);
 }
 
-async function titleSearch(searchQuery: string) {
+async function titleSearch(searchQuery: string, year?: number) {
   const candidates = titleCandidates(searchQuery);
+  const bounds = yearWindow(year);
   for (const candidate of candidates) {
-    const rows = await query<SearchRow>(
-      `
-      SELECT id, title, url, owner, created_by, status, content, 100 AS rank
-      FROM notion_pages
-      WHERE lower(coalesce(title, '')) = lower($1)
-         OR lower(coalesce(title, '')) LIKE lower($2) ESCAPE '\\'
-      ORDER BY
-        CASE WHEN lower(coalesce(title, '')) = lower($1) THEN 0 ELSE 1 END,
-        length(coalesce(title, '')) ASC,
-        title ASC
-      LIMIT 5
-      `,
-      [candidate, `%${escapeLike(candidate)}%`],
-    );
+    const rows = bounds
+      ? await query<SearchRow>(
+          `
+          SELECT id, title, url, owner, created_by, status, content, 100 AS rank
+          FROM notion_pages
+          WHERE (lower(coalesce(title, '')) = lower($1)
+             OR lower(coalesce(title, '')) LIKE lower($2) ESCAPE '\\')
+            AND notion_edited_at >= $3::timestamptz
+            AND notion_edited_at < $4::timestamptz
+          ORDER BY
+            CASE WHEN lower(coalesce(title, '')) = lower($1) THEN 0 ELSE 1 END,
+            length(coalesce(title, '')) ASC,
+            title ASC
+          LIMIT 5
+          `,
+          [candidate, `%${escapeLike(candidate)}%`, bounds.start, bounds.end],
+        )
+      : await query<SearchRow>(
+          `
+          SELECT id, title, url, owner, created_by, status, content, 100 AS rank
+          FROM notion_pages
+          WHERE lower(coalesce(title, '')) = lower($1)
+             OR lower(coalesce(title, '')) LIKE lower($2) ESCAPE '\\'
+          ORDER BY
+            CASE WHEN lower(coalesce(title, '')) = lower($1) THEN 0 ELSE 1 END,
+            length(coalesce(title, '')) ASC,
+            title ASC
+          LIMIT 5
+          `,
+          [candidate, `%${escapeLike(candidate)}%`],
+        );
     if (rows.length) return rows;
   }
 
@@ -216,44 +266,81 @@ function mergeSearchRows(primary: SearchRow[], secondary: SearchRow[]) {
   return [...primary, ...secondary.filter((row) => !seen.has(row.id))];
 }
 
-async function fullTextSearch(searchQuery: string) {
+async function fullTextSearch(searchQuery: string, year?: number) {
   const topK = getTopK();
   const cand = getPageCandidateLimit();
   const cleanedQuery = simplifySearchQuery(searchQuery);
+  const bounds = yearWindow(year);
 
-  const rows = await query<SearchRow>(
-    `
-    WITH ranked AS (
-      SELECT
-        id,
-        title,
-        url,
-        owner,
-        created_by,
-        status,
-        content,
-        (
-          ts_rank(
-            to_tsvector('english', coalesce(content, '')),
-            plainto_tsquery('english', $1)
-          ) +
-          2 * ts_rank(
-            to_tsvector('english', coalesce(title, '')),
-            plainto_tsquery('english', $1)
-          )
-        ) AS rank
-      FROM notion_pages
-      WHERE
-        to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, ''))
-        @@ plainto_tsquery('english', $1)
-    )
-    SELECT id, title, url, owner, created_by, status, content, rank
-    FROM ranked
-    ORDER BY rank DESC
-    LIMIT $2
-    `,
-    [cleanedQuery, cand],
-  );
+  const rows = bounds
+    ? await query<SearchRow>(
+        `
+        WITH ranked AS (
+          SELECT
+            id,
+            title,
+            url,
+            owner,
+            created_by,
+            status,
+            content,
+            (
+              ts_rank(
+                to_tsvector('english', coalesce(content, '')),
+                plainto_tsquery('english', $1)
+              ) +
+              2 * ts_rank(
+                to_tsvector('english', coalesce(title, '')),
+                plainto_tsquery('english', $1)
+              )
+            ) AS rank
+          FROM notion_pages
+          WHERE
+            to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, ''))
+            @@ plainto_tsquery('english', $1)
+            AND notion_edited_at >= $2::timestamptz
+            AND notion_edited_at < $3::timestamptz
+        )
+        SELECT id, title, url, owner, created_by, status, content, rank
+        FROM ranked
+        ORDER BY rank DESC
+        LIMIT $4
+        `,
+        [cleanedQuery, bounds.start, bounds.end, cand],
+      )
+    : await query<SearchRow>(
+        `
+        WITH ranked AS (
+          SELECT
+            id,
+            title,
+            url,
+            owner,
+            created_by,
+            status,
+            content,
+            (
+              ts_rank(
+                to_tsvector('english', coalesce(content, '')),
+                plainto_tsquery('english', $1)
+              ) +
+              2 * ts_rank(
+                to_tsvector('english', coalesce(title, '')),
+                plainto_tsquery('english', $1)
+              )
+            ) AS rank
+          FROM notion_pages
+          WHERE
+            to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, ''))
+            @@ plainto_tsquery('english', $1)
+        )
+        SELECT id, title, url, owner, created_by, status, content, rank
+        FROM ranked
+        ORDER BY rank DESC
+        LIMIT $2
+        `,
+        [cleanedQuery, cand],
+      );
 
   if (rows.length) return refinePageRows(rows, topK);
 
@@ -313,21 +400,22 @@ function normalizeSearchQueries(
 
 export async function semanticSearch(
   searchQuery: string | string[],
-  options?: { skipHybrid?: boolean },
+  options?: { skipHybrid?: boolean; year?: number },
 ): Promise<string> {
   const { primary: cleaned, all: queries } = normalizeSearchQueries(searchQuery);
   if (!cleaned) return "";
+  const year = options?.year;
 
   const explicitTitle = explicitTitleFromQuery(cleaned);
   const titleRows = explicitTitle
-    ? mergeSearchRows(await titleSearch(explicitTitle), await titleSearch(cleaned))
-    : await titleSearch(cleaned);
+    ? mergeSearchRows(await titleSearch(explicitTitle, year), await titleSearch(cleaned, year))
+    : await titleSearch(cleaned, year);
 
   if (!options?.skipHybrid && (await hasNotionChunks())) {
     const chunkPart =
       queries.length > 1
-        ? await hybridChunkContextFromQueries(queries)
-        : await hybridChunkContext(cleaned);
+        ? await hybridChunkContextFromQueries(queries, { year })
+        : await hybridChunkContext(cleaned, { year });
     if (chunkPart) {
       const titlePart = titleRows.length ? `${formatContext(titleRows)}\n\n---\n\n` : "";
       return `${titlePart}${chunkPart}`;
@@ -338,7 +426,7 @@ export async function semanticSearch(
   const embeddingsAvailable = await hasEmbeddings();
 
   if (embeddingsAvailable) {
-    const vectorSets = await Promise.all(queries.map((q) => vectorSearch(q)));
+    const vectorSets = await Promise.all(queries.map((q) => vectorSearch(q, year)));
     const seen = new Set<string>();
     for (const set of vectorSets) {
       for (const row of set) {
@@ -353,7 +441,7 @@ export async function semanticSearch(
     if (process.env.NODE_ENV !== "production") {
       console.log("[search] using full-text fallback");
     }
-    const ftsSets = await Promise.all(queries.map((q) => fullTextSearch(q)));
+    const ftsSets = await Promise.all(queries.map((q) => fullTextSearch(q, year)));
     const seen = new Set<string>();
     for (const set of ftsSets) {
       for (const row of set) {

@@ -3,7 +3,7 @@
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
-import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { hasKnowledgeBaseAccess } from "@/lib/shared/access";
@@ -65,6 +65,8 @@ export default function ChatPage() {
   const chatInFlightRef = useRef(false);
   const messagesLoadGenerationRef = useRef(0);
   const activeSessionIdRef = useRef<string | null>(null);
+  const chatAbortControllerRef = useRef<AbortController | null>(null);
+  const chatRequestIdRef = useRef(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const canManageKnowledgeBase = hasKnowledgeBaseAccess(session);
 
@@ -332,6 +334,13 @@ const createNewChat = async () => {
     });
   };
 
+  const stopActiveChat = () => {
+    chatAbortControllerRef.current?.abort();
+    chatAbortControllerRef.current = null;
+    setIsLoading(false);
+    chatInFlightRef.current = false;
+  };
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading || !activeSessionId) return;
@@ -349,6 +358,9 @@ const createNewChat = async () => {
     messagesLoadGenerationRef.current += 1;
     setIsLoading(true);
     botMessageIndexRef.current = botIndex;
+    const requestId = ++chatRequestIdRef.current;
+    const abortController = new AbortController();
+    chatAbortControllerRef.current = abortController;
     setThinkingByMessage((prev) => ({
       ...prev,
       [botIndex]: {
@@ -369,6 +381,7 @@ const createNewChat = async () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userMessage, history, sessionId }),
+        signal: abortController.signal,
       });
 
       const contentType = response.headers.get("content-type") ?? "";
@@ -460,14 +473,19 @@ const createNewChat = async () => {
 
       refreshChatSessions().catch((error) => console.error("Failed to refresh chats:", error));
 
-    } catch {
-      setBotMessageAt(botIndex, "Failed to connect to the server.");
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        setBotMessageAt(botIndex, "Failed to connect to the server.");
+      }
       clearThinkingAt(botIndex);
     } finally {
-      setIsLoading(false);
-      chatInFlightRef.current = false;
-      botMessageIndexRef.current = null;
-      pendingBotMessageIndexRef.current = null;
+      if (chatRequestIdRef.current === requestId) {
+        chatAbortControllerRef.current = null;
+        setIsLoading(false);
+        chatInFlightRef.current = false;
+        botMessageIndexRef.current = null;
+        pendingBotMessageIndexRef.current = null;
+      }
       clearThinkingAt(botIndex);
     }
   };
@@ -1001,9 +1019,21 @@ const createNewChat = async () => {
               disabled={!input.trim() || isLoading || !activeSessionId}
               className="absolute right-2 top-2 p-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 transition-all font-semibold"
             >
-              <Send className="w-5 h-5" />
+              {isLoading ? <Square className="w-5 h-5" /> : <Send className="w-5 h-5" />}
             </button>
           </form>
+          {isLoading && (
+            <div className="max-w-4xl mx-auto mt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={stopActiveChat}
+                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/70 hover:bg-white/[0.08] hover:text-white transition-colors"
+              >
+                <Square className="h-3.5 w-3.5" />
+                Stop answer
+              </button>
+            </div>
+          )}
           <p className="text-center text-[10px] text-white/20 mt-4 uppercase tracking-[0.2em]">
             Powered by Notion & OpenAI
           </p>

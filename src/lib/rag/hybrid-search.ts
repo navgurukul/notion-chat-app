@@ -67,6 +67,14 @@ function getMaxContextChars() {
   );
 }
 
+function yearWindow(year?: number) {
+  if (!year) return null;
+  return {
+    start: `${year}-01-01`,
+    end: `${year + 1}-01-01`,
+  };
+}
+
 function getSemWeight() {
   const w = Number(process.env.HYBRID_SEM_WEIGHT);
   return Number.isFinite(w) && w >= 0 && w <= 1 ? w : 0.6;
@@ -149,6 +157,7 @@ export function mergeHybridChunkRows(
 export async function fetchHybridChunkRows(
   searchQuery: string,
   titleBoost?: string,
+  options?: { year?: number },
 ): Promise<ChunkHybridRow[]> {
   const raw = searchQuery.trim();
   if (!raw) return [];
@@ -162,96 +171,192 @@ export async function fetchHybridChunkRows(
   const wSem = getSemWeight();
   const wKw = getKwWeight();
   const wSum = wSem + wKw > 0 ? wSem + wKw : 1;
+  const bounds = yearWindow(options?.year);
 
   const embedding = await embedText(raw);
   const vectorLiteral = embedding ? `[${embedding.join(",")}]` : null;
 
   if (vectorLiteral) {
-    return query<ChunkHybridRow>(
-      `
-      WITH sem AS (
-        SELECT
-          c.id,
-          1 - (c.embedding <=> $1::vector) AS sem_score
-        FROM notion_chunks c
-        WHERE c.embedding IS NOT NULL
-        ORDER BY c.embedding <=> $1::vector ASC
-        LIMIT $3
-      ),
-      kw AS (
-        SELECT
-          c.id,
-          LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $2)))::float8 AS kw_score
-        FROM notion_chunks c
-        WHERE c.fts @@ plainto_tsquery('english', $2)
-        ORDER BY kw_score DESC NULLS LAST
-        LIMIT $3
-      ),
-      ids AS (
-        SELECT id FROM sem
-        UNION
-        SELECT id FROM kw
-      )
-      SELECT
-        c.id AS chunk_id,
-        c.page_id,
-        c.chunk_index,
-        c.section_heading,
-        c.content AS chunk_content,
-        p.title,
-        p.url,
-        p.owner,
-        p.created_by,
-        p.status,
-        COALESCE(sem.sem_score, 0)::float8 AS sem_score,
-        COALESCE(kw.kw_score, 0)::float8 AS kw_score,
-        (
-          ($4 * COALESCE(sem.sem_score, 0) + $5 * COALESCE(kw.kw_score, 0)) / $6
-          + CASE
+    return bounds
+      ? query<ChunkHybridRow>(
+          `
+          WITH sem AS (
+            SELECT
+              c.id,
+              1 - (c.embedding <=> $1::vector) AS sem_score
+            FROM notion_chunks c
+            JOIN notion_pages p ON p.id = c.page_id
+            WHERE c.embedding IS NOT NULL
+              AND p.notion_edited_at >= $8::timestamptz
+              AND p.notion_edited_at < $9::timestamptz
+            ORDER BY c.embedding <=> $1::vector ASC
+            LIMIT $3
+          ),
+          kw AS (
+            SELECT
+              c.id,
+              LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $2)))::float8 AS kw_score
+            FROM notion_chunks c
+            JOIN notion_pages p ON p.id = c.page_id
+            WHERE c.fts @@ plainto_tsquery('english', $2)
+              AND p.notion_edited_at >= $8::timestamptz
+              AND p.notion_edited_at < $9::timestamptz
+            ORDER BY kw_score DESC NULLS LAST
+            LIMIT $3
+          ),
+          ids AS (
+            SELECT id FROM sem
+            UNION
+            SELECT id FROM kw
+          )
+          SELECT
+            c.id AS chunk_id,
+            c.page_id,
+            c.chunk_index,
+            c.section_heading,
+            c.content AS chunk_content,
+            p.title,
+            p.url,
+            p.owner,
+            p.created_by,
+            p.status,
+            COALESCE(sem.sem_score, 0)::float8 AS sem_score,
+            COALESCE(kw.kw_score, 0)::float8 AS kw_score,
+            (
+              ($4 * COALESCE(sem.sem_score, 0) + $5 * COALESCE(kw.kw_score, 0)) / $6
+              + CASE
   WHEN $7 <> '' AND lower(coalesce(p.title, '')) = lower(replace($7, '%', ''))
     THEN 0.40
   WHEN $7 <> '' AND lower(coalesce(p.title, '')) LIKE lower($7)
     THEN 0.20
   ELSE 0
 END
-        )::float8 AS final_score,
-        c.embedding::text AS embedding_literal
-      FROM ids
-      JOIN notion_chunks c ON c.id = ids.id
-      JOIN notion_pages p ON p.id = c.page_id
-      LEFT JOIN sem ON sem.id = c.id
-      LEFT JOIN kw ON kw.id = c.id
-      ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
-      LIMIT $3
-      `,
-      [vectorLiteral, ftsInput, cand, wSem, wKw, wSum, boostPattern],
-    );
+            )::float8 AS final_score,
+            c.embedding::text AS embedding_literal
+          FROM ids
+          JOIN notion_chunks c ON c.id = ids.id
+          JOIN notion_pages p ON p.id = c.page_id
+          LEFT JOIN sem ON sem.id = c.id
+          LEFT JOIN kw ON kw.id = c.id
+          WHERE p.notion_edited_at >= $8::timestamptz
+            AND p.notion_edited_at < $9::timestamptz
+          ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
+          LIMIT $3
+          `,
+          [vectorLiteral, ftsInput, cand, wSem, wKw, wSum, boostPattern, bounds.start, bounds.end],
+        )
+      : query<ChunkHybridRow>(
+          `
+          WITH sem AS (
+            SELECT
+              c.id,
+              1 - (c.embedding <=> $1::vector) AS sem_score
+            FROM notion_chunks c
+            WHERE c.embedding IS NOT NULL
+            ORDER BY c.embedding <=> $1::vector ASC
+            LIMIT $3
+          ),
+          kw AS (
+            SELECT
+              c.id,
+              LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $2)))::float8 AS kw_score
+            FROM notion_chunks c
+            WHERE c.fts @@ plainto_tsquery('english', $2)
+            ORDER BY kw_score DESC NULLS LAST
+            LIMIT $3
+          ),
+          ids AS (
+            SELECT id FROM sem
+            UNION
+            SELECT id FROM kw
+          )
+          SELECT
+            c.id AS chunk_id,
+            c.page_id,
+            c.chunk_index,
+            c.section_heading,
+            c.content AS chunk_content,
+            p.title,
+            p.url,
+            p.owner,
+            p.created_by,
+            p.status,
+            COALESCE(sem.sem_score, 0)::float8 AS sem_score,
+            COALESCE(kw.kw_score, 0)::float8 AS kw_score,
+            (
+              ($4 * COALESCE(sem.sem_score, 0) + $5 * COALESCE(kw.kw_score, 0)) / $6
+              + CASE
+  WHEN $7 <> '' AND lower(coalesce(p.title, '')) = lower(replace($7, '%', ''))
+    THEN 0.40
+  WHEN $7 <> '' AND lower(coalesce(p.title, '')) LIKE lower($7)
+    THEN 0.20
+  ELSE 0
+END
+            )::float8 AS final_score,
+            c.embedding::text AS embedding_literal
+          FROM ids
+          JOIN notion_chunks c ON c.id = ids.id
+          JOIN notion_pages p ON p.id = c.page_id
+          LEFT JOIN sem ON sem.id = c.id
+          LEFT JOIN kw ON kw.id = c.id
+          ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
+          LIMIT $3
+          `,
+          [vectorLiteral, ftsInput, cand, wSem, wKw, wSum, boostPattern],
+        );
   }
 
-  return query<ChunkHybridRow>(
-    `
-      SELECT
-        c.id AS chunk_id,
-        c.page_id,
-        c.chunk_index,
-        c.section_heading,
-        c.content AS chunk_content,
-        p.title,
-        p.url,
-        p.owner,
-        p.created_by,
-        p.status,
-        0::float8 AS sem_score,
-        LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS kw_score,
-        LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS final_score
-      FROM notion_chunks c
-      JOIN notion_pages p ON p.id = c.page_id
-      WHERE c.fts @@ plainto_tsquery('english', $1)
-      ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
-      LIMIT $2
-      `,
-    [ftsInput, cand],
-  );
+  return bounds
+    ? query<ChunkHybridRow>(
+        `
+          SELECT
+            c.id AS chunk_id,
+            c.page_id,
+            c.chunk_index,
+            c.section_heading,
+            c.content AS chunk_content,
+            p.title,
+            p.url,
+            p.owner,
+            p.created_by,
+            p.status,
+            0::float8 AS sem_score,
+            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS kw_score,
+            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS final_score
+          FROM notion_chunks c
+          JOIN notion_pages p ON p.id = c.page_id
+          WHERE c.fts @@ plainto_tsquery('english', $1)
+            AND p.notion_edited_at >= $2::timestamptz
+            AND p.notion_edited_at < $3::timestamptz
+          ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
+          LIMIT $4
+        `,
+        [ftsInput, bounds.start, bounds.end, cand],
+      )
+    : query<ChunkHybridRow>(
+        `
+          SELECT
+            c.id AS chunk_id,
+            c.page_id,
+            c.chunk_index,
+            c.section_heading,
+            c.content AS chunk_content,
+            p.title,
+            p.url,
+            p.owner,
+            p.created_by,
+            p.status,
+            0::float8 AS sem_score,
+            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS kw_score,
+            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS final_score
+          FROM notion_chunks c
+          JOIN notion_pages p ON p.id = c.page_id
+          WHERE c.fts @@ plainto_tsquery('english', $1)
+          ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
+          LIMIT $2
+        `,
+        [ftsInput, cand],
+      );
 }
 
 export type HybridChunkRetrieval = {
@@ -264,6 +369,7 @@ export type HybridChunkRetrieval = {
 export async function runHybridChunkRetrieval(
   searchQueries: string[],
   titleBoost?: string,
+  options?: { year?: number },
 ): Promise<HybridChunkRetrieval> {
   const unique = [
     ...new Set(searchQueries.map((q) => q.trim()).filter(Boolean)),
@@ -274,7 +380,7 @@ export async function runHybridChunkRetrieval(
 
   const topK = getHybridTopK();
   const rowSets = await Promise.all(
-    unique.map((q) => fetchHybridChunkRows(q, titleBoost)),
+    unique.map((q) => fetchHybridChunkRows(q, titleBoost, options)),
   );
   const merged = mergeHybridChunkRows(rowSets);
 
@@ -295,9 +401,10 @@ export async function runHybridChunkRetrieval(
  */
 export async function hybridChunkContextFromQueries(
   searchQueries: string[],
+  options?: { year?: number },
 ): Promise<string | null> {
   const { context, rows, queries } =
-    await runHybridChunkRetrieval(searchQueries);
+    await runHybridChunkRetrieval(searchQueries, undefined, options);
 
   if (process.env.NODE_ENV !== "production" && rows.length) {
     console.log("[retrieval] multi_query_chunks", {
@@ -318,6 +425,7 @@ export async function hybridChunkContextFromQueries(
  */
 export async function hybridChunkContext(
   searchQuery: string,
+  options?: { year?: number },
 ): Promise<string | null> {
-  return hybridChunkContextFromQueries([searchQuery]);
+  return hybridChunkContextFromQueries([searchQuery], options);
 }

@@ -58,6 +58,14 @@ function isExplicitPageQuestion(message: string, docTitle?: string) {
   return message.toLowerCase().includes(needle.slice(0, Math.min(needle.length, 24)));
 }
 
+const SCOPED_RAG_KINDS = new Set<ParsedQuery["kind"]>([
+  "owner_list",
+  "created_by_list",
+  "assigned_list",
+  "worked_on_list",
+  "activity_summary",
+]);
+
 export type ChatRequestBody = {
   message?: unknown;
   history?: unknown;
@@ -263,6 +271,7 @@ async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext, session: 
   const hints: string[] = [];
   if (titleBoost && !explicitPage) hints.push(titleBoost);
   if (parsed.personName?.trim()) hints.push(parsed.personName.trim());
+  if (parsed.year) hints.push(String(parsed.year));
   if (hints.length && !explicitPage) {
     const hintBlock = hints.join(" ");
     const lower = searchQuery.toLowerCase();
@@ -271,11 +280,10 @@ async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext, session: 
     }
   }
 
-  const { queries: searchQueries, method: multiQueryMethod } = await expandSearchQueries(
-    ctx.message,
-    ctx.history,
-    searchQuery,
-  );
+  const searchQueries = SCOPED_RAG_KINDS.has(parsed.kind)
+    ? [searchQuery]
+    : (await expandSearchQueries(ctx.message, ctx.history, searchQuery)).queries;
+  const multiQueryMethod = SCOPED_RAG_KINDS.has(parsed.kind) ? "primary_only" : "llm";
 
   logChatRoute("semantic_rag", parsed, {
     reformulation: method,
@@ -286,6 +294,7 @@ async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext, session: 
   const { context: notionContext, confidence, chunkHits } =
     await buildNotionContextWithConfidence(searchQueries, {
       titleBoost: titleBoost || undefined,
+      year: parsed.year,
     });
 
   logRetrievalDiagnostics(parsed, searchQueries, confidence, chunkHits);

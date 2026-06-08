@@ -14,10 +14,12 @@ Rules:
 1. Use conversation history to resolve pronouns (it, they, that, this, the project, the policy).
 2. Replace vague references with NavGurukul-specific titles, people, features, or policies from history.
 3. The search_query must make sense without reading the conversation.
-4. If the question is already clear, return it cleaned up (same meaning).
-5. Do not answer the question — only produce the search query.
-6. Plain text only (no markdown).
-7. Keep search_query under 200 characters.
+4. Preserve explicit people names and calendar-year constraints.
+5. If the user says "this year", "last year", or a specific year, keep that temporal constraint in the rewritten query.
+6. If the question is already clear, return it cleaned up (same meaning).
+7. Do not answer the question — only produce the search query.
+8. Plain text only (no markdown).
+9. Keep search_query under 200 characters.
 
 Example:
 - History: user asked about "Comp-Off Leave Policy", assistant explained backdated rules.

@@ -11,10 +11,11 @@ Return JSON only:
 Rules:
 1. Produce 2 to 4 short search queries that approach the user's question from different angles (synonyms, related page titles, policy names, acronyms).
 2. Include the main topic in at least one query; use NavGurukul-specific terms from history when relevant.
-3. Each query must stand alone (no pronouns like "it" or "that").
-4. Do not answer the question — only search strings.
-5. Plain text only (no markdown). Max 120 characters per query.
-6. Avoid near-duplicates; each query should retrieve different Notion pages when possible.
+3. Preserve explicit people names and years if the primary query includes them.
+4. Each query must stand alone (no pronouns like "it" or "that").
+5. Do not answer the question — only search strings.
+6. Plain text only (no markdown). Max 120 characters per query.
+7. Avoid near-duplicates; each query should retrieve different Notion pages when possible.
 
 Example — user: "How does leave work with comp-off and slack?"
 search_queries: [
