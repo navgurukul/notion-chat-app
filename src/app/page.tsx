@@ -634,6 +634,25 @@ const createNewChat = async () => {
     return `${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
   };
 
+  const formatAbsoluteSyncTime = (isoTime: string | null) => {
+    if (!isoTime) return "No sync recorded yet";
+    const syncTime = parseSyncTimestamp(isoTime);
+    if (!Number.isFinite(syncTime)) return "Unknown sync time";
+
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(syncTime));
+  };
+
+  const formatSyncDisplay = (isoTime: string | null) => {
+    if (!isoTime) return "No sync recorded yet";
+    const absolute = formatAbsoluteSyncTime(isoTime);
+    const relative = formatRelativeSyncTime(isoTime);
+    if (absolute === "Unknown sync time") return absolute;
+    return `${absolute} (${relative})`;
+  };
+
   if (status === "loading") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] text-white">
@@ -860,16 +879,16 @@ const createNewChat = async () => {
                 <div className="text-white/45 uppercase tracking-wide text-[10px] mb-1">
                   Last sync by admin
                 </div>
-                <div className="font-medium text-white/90" title={formatRelativeSyncTime(lastSyncedAt)}>
-                  {formatRelativeSyncTime(lastSyncedAt)}
+                <div className="font-medium text-white/90" title={formatSyncDisplay(lastSyncedAt)}>
+                  {formatSyncDisplay(lastSyncedAt)}
                 </div>
               </div>
             )}
             <p
               className="mt-2 px-1 text-[10px] text-white/45 leading-snug"
-              title={formatRelativeSyncTime(lastSyncedAt)}
+              title={formatSyncDisplay(lastSyncedAt)}
             >
-              {isSyncing ? "Sync in progress…" : formatRelativeSyncTime(lastSyncedAt)}
+              {isSyncing ? "Sync in progress…" : formatSyncDisplay(lastSyncedAt)}
             </p>
           </div>
         </div>
