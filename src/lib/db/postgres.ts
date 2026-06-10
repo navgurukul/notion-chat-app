@@ -6,12 +6,22 @@ if (!databaseUrl) {
   throw new Error("DATABASE_URL is not defined");
 }
 
-export const pool = new Pool({
+const globalForPostgres = globalThis as unknown as {
+  pool: Pool | undefined;
+  schemaReady: boolean | undefined;
+  schemaPromise: Promise<void> | null | undefined;
+};
+
+export const pool = globalForPostgres.pool ?? new Pool({
   connectionString: databaseUrl,
 });
 
-let schemaReady = false;
-let schemaPromise: Promise<void> | null = null;
+if (process.env.NODE_ENV !== "production") {
+  globalForPostgres.pool = pool;
+}
+
+let schemaReady = globalForPostgres.schemaReady ?? false;
+let schemaPromise = globalForPostgres.schemaPromise ?? null;
 
 const SCHEMA_ADVISORY_LOCK_ID = 9_152_4001;
 
@@ -242,6 +252,10 @@ export async function ensureSchema() {
       `,
       );
 
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS chat_sessions_user_id_idx ON chat_sessions(user_id);
+      `);
+
       await runColumnMigrations(client, CORE_COLUMN_MIGRATIONS);
 
       await safeCreateTable(
@@ -256,6 +270,11 @@ export async function ensureSchema() {
         );
       `,
       );
+
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS chat_messages_session_id_idx ON chat_messages(session_id);
+        CREATE INDEX IF NOT EXISTS chat_messages_session_created_idx ON chat_messages(session_id, created_at DESC);
+      `);
 
       await reconcileNotionPagesSchema(client);
 
@@ -298,6 +317,7 @@ export async function ensureSchema() {
       );
 
       schemaReady = true;
+      globalForPostgres.schemaReady = true;
     } finally {
       await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_ADVISORY_LOCK_ID]).catch(
         () => undefined,
@@ -306,9 +326,11 @@ export async function ensureSchema() {
     }
   })().catch((error) => {
     schemaPromise = null;
+    globalForPostgres.schemaPromise = null;
     throw error;
   });
 
+  globalForPostgres.schemaPromise = schemaPromise;
   await schemaPromise;
 }
 

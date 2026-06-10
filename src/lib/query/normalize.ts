@@ -1,14 +1,14 @@
 import {
   containsAnyPhrase,
   containsPhrase,
-  extractYear,
   splitWords,
   toLower,
 } from "@/lib/shared/text-utils";
+import { extractYear } from "./year";
 
 export function extractYearFromQuestion(question: string): number | undefined {
   const explicitYear = extractYear(question);
-  if (explicitYear) return explicitYear;
+  if (explicitYear !== null) return explicitYear;
 
   const currentYear = new Date().getFullYear();
   const lower = question.toLowerCase();

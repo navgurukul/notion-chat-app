@@ -5,6 +5,7 @@
  */
 export { resolveQuery, resolveQueryRulesOnly } from "@/lib/query/resolve-query";
 export { classifyQueryIntent } from "@/lib/query/intent-classifier";
+export { detectIntent } from "@/lib/query/intent";
 export {
   parseQueryByRules,
   parseQueryByRules as parseQuery,

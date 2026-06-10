@@ -1,5 +1,6 @@
 import { getJsonCompletion } from "@/lib/ai/gemini";
 import { extractYearFromQuestion } from "./normalize";
+import { extractYear } from "./year";
 import type { ClassifiedIntent, ParsedQuery, QueryKind } from "./types";
 
 const ALL_KINDS: QueryKind[] = [
@@ -78,7 +79,7 @@ function toParsedQuery(question: string, data: ClassifiedIntent): ParsedQuery | 
   const year =
     typeof data.year === "number" && data.year >= 2020 && data.year <= 2099
       ? data.year
-      : extractYearFromQuestion(question);
+      : extractYear(question) ?? extractYearFromQuestion(question);
 
   return {
     kind: data.intent,

@@ -1,104 +1,71 @@
-// A simple list of team members to be used as a whitelist for person extraction.
-// This helps prevent the system from hallucinating names from random text.
-// In a real-world scenario, this would likely be populated from a database or an API.
+// src/lib/db/team-members.ts
+import { query } from "@/lib/db";
 
-export const TEAM_MEMBER_WHITELIST = new Set([
-  "Aastha",
-  "Abhishek",
-  "Aditi",
-  "Akhil",
-  "Akshay",
-  "Anjali",
-  "Ankit",
-  "Anshul",
-  "Anurag",
-  "Aparna",
-  "Astha",
-  "Ayush",
-  "Bala",
-  "Bhupendra",
-  "Deb",
-  "Debabrata",
-  "Deepak",
-  "Faisal",
-  "Gaurav",
-  "Himanshu",
-  "Javed",
-  "Jyoti",
-  "Kajal",
-  "Kanak",
-  "Kiran",
-  "Kunal",
-  "Lorin",
-  "Manish",
-  "Mayank",
-  "Misbah",
-  "Mohit",
-  "Naga",
-  "Navgurukul",
-  "Nikhil",
-  "Nishi",
-  "Nishika",
-  "Pooja",
-  "Pragya",
-  "Prakash",
-  "Pranay",
-  "Prashant",
-  "Pratik",
-  "Praveen",
-  "Priyanka",
-  "Puja",
-  "Rachit",
-  "Rahul",
-  "Rajat",
-  "Rajesh",
-  "Rakesh",
-  "Ravi",
-  "Rishabh",
-  "Ritik",
-  "Riya",
-  "Rohit",
-  "Sachin",
-  "Sagar",
-  "Sahil",
-  "Samir",
-  "Sandeep",
-  "Sanjay",
-  "Sanjna",
-  "Sanket",
-  "Sarika",
-  "Satish",
-  "Saurabh",
-  "Shailesh",
-  "Shakti",
-  "Shikha",
-  "Shiv",
-  "Shiva",
-  "Shivam",
-  "Shruti",
-  "Shubham",
-  "Siddharth",
-  "Simer",
-  "Sourav",
-  "Subham",
-  "Sumit",
-  "Sunny",
-  "Suraj",
-  "Swati",
-  "Tamanna",
-  "Tanu",
-  "Tapas",
-  "Udit",
-  "Vaibhav",
-  "Vibhor",
-  "Vikas",
-  "Vinay",
-  "Vineet",
-  "Vinod",
-  "Vipin",
-  "Vipul",
-  "Vishal",
-  "Vivek",
-  "Yogesh",
-  "Zoe",
-]);
+export type PersonRecord = {
+  name: string;
+  normalized: string;
+};
+
+let _directory: PersonRecord[] | null = null;
+let _lastFetched = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+export async function getPeopleDirectory(): Promise<PersonRecord[]> {
+  const now = Date.now();
+  if (_directory && now - _lastFetched < CACHE_TTL_MS) return _directory;
+
+  const rows = await query<{ name: string }>(`
+    SELECT DISTINCT name FROM (
+      SELECT trim(unnest(string_to_array(owner, ','))) AS name FROM notion_pages WHERE owner IS NOT NULL
+      UNION
+      SELECT trim(created_by) FROM notion_pages WHERE created_by IS NOT NULL
+      UNION
+      SELECT trim(last_edited_by) FROM notion_pages WHERE last_edited_by IS NOT NULL
+    ) AS people
+    WHERE trim(name) <> '' AND length(trim(name)) >= 2
+    ORDER BY name
+  `);
+
+  _directory = rows
+    .map((r) => r.name.trim())
+    .filter(Boolean)
+    .map((name) => ({ name, normalized: name.toLowerCase() }));
+
+  _lastFetched = now;
+  return _directory;
+}
+
+export function invalidatePeopleDirectory() {
+  _directory = null;
+}
+
+export async function resolvePersonName(
+  input: string,
+): Promise<{ exact: string | null; candidates: string[] }> {
+  const dir = await getPeopleDirectory();
+  const q = input.trim().toLowerCase();
+  if (!q) return { exact: null, candidates: [] };
+
+  const exact = dir.find((p) => p.normalized === q);
+  if (exact) return { exact: exact.name, candidates: [] };
+
+  const firstNameMatches = dir.filter((p) => {
+    const firstName = p.normalized.split(/\s+/)[0];
+    return firstName === q;
+  });
+  if (firstNameMatches.length === 1)
+    return { exact: firstNameMatches[0].name, candidates: [] };
+  if (firstNameMatches.length > 1)
+    return { exact: null, candidates: firstNameMatches.map((p) => p.name) };
+
+  const partialMatches = dir.filter((p) => p.normalized.includes(q));
+  if (partialMatches.length === 1)
+    return { exact: partialMatches[0].name, candidates: [] };
+  if (partialMatches.length > 1)
+    return { exact: null, candidates: partialMatches.map((p) => p.name) };
+
+  return { exact: null, candidates: [] };
+}
+
+// Backward compatibility — team-roster.ts still imports this
+export const TEAM_MEMBER_WHITELIST = new Set<string>();

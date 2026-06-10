@@ -34,8 +34,36 @@ function buildSessionTitle(message: string) {
   return cleaned.length > 48 ? `${cleaned.slice(0, 48)}...` : cleaned;
 }
 
+const globalForUserCache = globalThis as unknown as {
+  userCache: Map<string, string> | undefined;
+};
+
+const userCache = globalForUserCache.userCache ?? new Map<string, string>();
+
+if (process.env.NODE_ENV !== "production") {
+  globalForUserCache.userCache = userCache;
+}
+
 export async function getOrCreateUser(session: Session | null) {
   const email = requireUserEmail(session);
+
+  const cachedId = userCache.get(email);
+  if (cachedId) {
+    return { id: cachedId };
+  }
+
+  // 1. Try a fast SELECT first to avoid write transactions
+  const existing = await query<UserRow>(
+    "SELECT id FROM users WHERE email = $1",
+    [email]
+  );
+  if (existing.length > 0) {
+    const userId = existing[0].id;
+    userCache.set(email, userId);
+    return { id: userId };
+  }
+
+  // 2. Otherwise insert/create user
   const rows = await query<UserRow>(
     `
     INSERT INTO users (email, name, image_url, provider, last_login_at, updated_at)
@@ -49,7 +77,12 @@ export async function getOrCreateUser(session: Session | null) {
     `,
     [email, session?.user?.name ?? null, session?.user?.image ?? null],
   );
-  return rows[0];
+
+  const user = rows[0];
+  if (user) {
+    userCache.set(email, user.id);
+  }
+  return user;
 }
 
 export async function listChatSessions(userId: string) {

@@ -28,6 +28,10 @@ import {
   extractProjectScopeTopic,
   fetchProjectPages,
 } from "@/lib/sql/team-roster";
+import {
+  calculateActivityScore,
+  findPersonActivityRows,
+} from "@/lib/sql/activity";
 
 const SQL_RESULT_LIMIT = 20;
 const HISTORICAL_PROJECT_LIMIT = 50;
@@ -2023,61 +2027,6 @@ export async function handleMetadataQuery(
     );
     const projectNameQuery = wantsProjectNameAnswer(parsed.raw);
 
-    const personPropertyInContentSql = `
-      (
-        (
-          lower(coalesce(content, '')) LIKE '%captain:%'
-          OR lower(coalesce(content, '')) LIKE '%assignee:%'
-          OR lower(coalesce(content, '')) LIKE '%assign:%'
-        )
-        AND lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
-      )
-    `;
-
-    const personMatchSql = `
-      (
-        lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-        OR lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\'
-        OR lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-        OR ${personPropertyInContentSql}
-      )
-    `;
-
-    const topicFilterSql = `
-      (
-        $3::text IS NULL
-        OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
-        OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
-      )
-    `;
-
-    const yearFilterSql = `
-      (
-        $4::text IS NULL
-        OR (
-          notion_edited_at IS NOT NULL
-          AND notion_edited_at >= $4::timestamptz
-          AND notion_edited_at < $5::timestamptz
-        )
-      )
-    `;
-
-    const statusRankSql = `
-      CASE lower(trim(coalesce(status, '')))
-        WHEN 'in progress' THEN 1
-        WHEN 'testing' THEN 2
-        WHEN 'scoping' THEN 3
-        WHEN 'not started' THEN 4
-        WHEN 'blocked' THEN 5
-        WHEN 'on hold' THEN 6
-        WHEN 'done' THEN 99
-        ELSE 50
-      END
-    `;
-
     const historicalWork = isHistoricalWorkQuery(parsed.raw);
     const listAllProjects = wantsAllProjectsList(parsed.raw);
     const rowLimit =
@@ -2085,68 +2034,16 @@ export async function handleMetadataQuery(
         ? HISTORICAL_PROJECT_LIMIT
         : SQL_RESULT_LIMIT;
 
-    const orderSql =
-      historicalWork && year
-        ? `notion_edited_at DESC NULLS LAST, role_rank ASC, title ASC`
-        : workingOnQuery
-          ? `role_rank ASC, status_rank ASC, notion_edited_at DESC NULLS LAST, title ASC`
-          : `role_rank ASC, notion_edited_at DESC NULLS LAST, title ASC`;
-
     async function fetchActivityRows(requireYear: boolean) {
-      return query<ActivityRow>(
-        `
-        SELECT
-          id,
-          title,
-          url,
-          owner,
-          created_by,
-          last_edited_by,
-          doc_type,
-          status,
-          left(coalesce(content, ''), 2500) AS content,
-          notion_edited_at::text AS notion_edited_at,
-          CASE
-            WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-              OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-              THEN 'owner'
-            WHEN ${personPropertyInContentSql}
-              THEN 'captain/assignee'
-            WHEN lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
-              OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-              THEN 'last editor'
-            ELSE 'creator'
-          END AS activity_role,
-          CASE
-            WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-              OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-              THEN 1
-            WHEN ${personPropertyInContentSql}
-              THEN 2
-            WHEN lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
-              OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-              THEN 3
-            ELSE 4
-          END AS role_rank,
-          ${statusRankSql} AS status_rank
-        FROM notion_pages
-        WHERE ${personMatchSql} AND ${topicFilterSql}
-          AND (
-            $6::boolean = false
-            OR ${yearFilterSql}
-          )
-        ORDER BY ${orderSql}
-        LIMIT ${rowLimit}
-        `,
-        [
-          personTerm,
-          fuzzyPersonTerm,
-          topicTerm,
-          requireYear ? yearStart : null,
-          requireYear ? yearEnd : null,
-          requireYear,
-        ],
-      );
+      return findPersonActivityRows({
+        personTerm,
+        fuzzyPersonTerm,
+        topicTerm,
+        requireYear,
+        yearStart,
+        yearEnd,
+        rowLimit,
+      });
     }
 
     let primaryRows = await fetchActivityRows(Boolean(year));
@@ -2195,10 +2092,30 @@ export async function handleMetadataQuery(
           `,
           [personTerm, topicTerm, yearStart, yearEnd],
         );
+``
+    rows.sort(
+      (a, b) =>
+        calculateActivityScore(b, person) - calculateActivityScore(a, person),
+    );
+
+    console.log("[retrieval_debug]", {
+      rows: rows.length,
+      topResult: rows[0]?.title ?? null,
+    });
 
     if (!rows.length) {
       const yearNote = year ? ` in **${year}**` : "";
-      return `I couldn't find any Notion pages linked to **${person}**${yearNote}${docTitle ? ` for "${docTitle}"` : ""}. Try **Sync changes** if data is stale, or ask **"What projects is ${person} assigned to?"**`;
+      if (year) {
+        return (
+          `No Notion pages found for **${person}** in **${year}** in synced data.\n\n` +
+          `_This means no pages were edited or assigned to **${person}** in ${year} according to Notion's last-edited date._\n\n` +
+          `_If work happened in ${year}, try **Sync changes** to refresh Notion data._`
+        );
+      }
+      return (
+        `No Notion pages found for **${person}**${docTitle ? ` matching "${docTitle}"` : ""} in synced Notion.\n\n` +
+        `_Try **Sync changes** if assignments were updated recently._`
+      );
     }
 
     const topicNote = docTitle ? ` (filtered by "${docTitle}")` : "";

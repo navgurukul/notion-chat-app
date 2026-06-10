@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import type { Session } from "next-auth";
 import type { ChatHistoryItem } from "@/lib/ai/gemini";
-import { addChatMessage, ensureSessionBelongsToUser, getOrCreateUser } from "@/lib/chat/store";
+import {
+  addChatMessage,
+  ensureSessionBelongsToUser,
+  getOrCreateUser,
+} from "@/lib/chat/store";
 import { MAX_MESSAGE_LENGTH } from "@/lib/chat/constants";
 import { sanitizeChatHistory } from "@/lib/chat/history";
 import {
@@ -12,6 +16,8 @@ import { expandSearchQueries } from "@/lib/chat/multi-query";
 import { reformulateSearchQuery } from "@/lib/chat/query-reformulation";
 import { streamGeminiAnswer } from "@/lib/chat/stream-response";
 import { resolveQuery } from "@/lib/query/resolve-query";
+import { detectIntent } from "@/lib/query/intent";
+import { extractYear } from "@/lib/query/year";
 import type { ParsedQuery } from "@/lib/query/types";
 import { handleMetadataQuery, lookupPageLinkByTitle } from "@/lib/sql/answers";
 import {
@@ -23,11 +29,14 @@ import {
   isMetadataOnlyKind,
   metadataNotFoundAnswer,
 } from "@/lib/chat/routing-policy";
-import { logChatRoute, logRetrievalDiagnostics } from "@/lib/chat/retrieval-diagnostics";
+import {
+  logChatRoute,
+  logRetrievalDiagnostics,
+} from "@/lib/chat/retrieval-diagnostics";
 import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
 import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag/retrieval-confidence";
 import { normalizeLanguage } from "@/lib/chat/normalize-language";
-
+import { resolvePersonName } from "@/lib/db/team-members";
 
 function stripTitleEmoji(title: string) {
   return title
@@ -36,7 +45,6 @@ function stripTitleEmoji(title: string) {
     .trim();
 }
 
-/** Use the user's project name for RAG, not a misleading canonical page title. */
 function resolveRagTitleBoost(parsed: ParsedQuery, message: string) {
   if (parsed.kind === "team_activity") {
     const match = message.match(
@@ -55,7 +63,9 @@ function isExplicitPageQuestion(message: string, docTitle?: string) {
   if (!docTitle?.trim()) return false;
   const needle = stripTitleEmoji(docTitle).toLowerCase();
   if (needle.length < 4) return false;
-  return message.toLowerCase().includes(needle.slice(0, Math.min(needle.length, 24)));
+  return message
+    .toLowerCase()
+    .includes(needle.slice(0, Math.min(needle.length, 24)));
 }
 
 const SCOPED_RAG_KINDS = new Set<ParsedQuery["kind"]>([
@@ -78,37 +88,101 @@ type PipelineContext = {
   sessionId: string | null;
 };
 
-/**
- * Main chat flow — read these steps top to bottom.
- *
- * 1. Link shortcut (no AI)
- * 2. Classify question (router)
- * 3. SQL answer when possible
- * 4. History-aware query reformulation → RAG retrieval → LLM stream
- */
-/**
- * Replace first-person pronouns with the logged-in user's first name so that
- * "tasks assigned to me" correctly searches for the real Notion owner name.
- * Only replaces standalone "me", "my", "I" (word boundaries) to avoid false hits
- * inside other words.
- */
-function resolveFirstPerson(message: string, session: Session): string {
+async function resolveFirstPerson(
+  message: string,
+  session: Session,
+): Promise<{ message: string; ambiguous?: string[] }> {
+  const hasPronoun = /\b(me|my|myself|I)\b/i.test(message);
+  if (!hasPronoun) return { message };
+
   const fullName = session?.user?.name?.trim();
-  if (!fullName) return message;
-  // Use first name only (e.g. "Tamanna" from "Tamanna Singh")
-  const firstName = fullName.split(/\s+/)[0];
-  return message.replace(/\b(me|my|myself|I)\b/g, firstName);
+  if (!fullName) return { message };
+
+  const { exact, candidates } = await resolvePersonName(fullName);
+
+  if (candidates.length > 1) {
+    return { message, ambiguous: candidates };
+  }
+
+  const resolvedName = exact ?? fullName.split(/\s+/)[0];
+  return {
+    message: message.replace(/\b(me|my|myself|I)\b/g, resolvedName),
+  };
 }
 
-export async function runChatPipeline(session: Session, body: ChatRequestBody, signal?: AbortSignal) {
+function extractLastEntityFromHistory(history: ChatHistoryItem[]): {
+  lastProject?: string;
+  lastPerson?: string;
+} {
+  const recentHistory = [...history].reverse().slice(0, 6);
+
+  for (const item of recentHistory) {
+    const content = item.content;
+    const boldMatches = [...content.matchAll(/\*\*([^*]{4,60})\*\*/g)];
+
+    for (const match of boldMatches) {
+      const candidate = match[1].trim();
+
+      if (
+        /^(status|owner|done|backlog|unknown|open|closed|in progress|testing|blocked|not started|yes|no|true|false|sync changes|re-sync)$/i.test(
+          candidate,
+        )
+      )
+        continue;
+      if (candidate.split(/\s+/).length > 6) continue;
+      if (candidate.length < 4) continue;
+
+      if (
+        /project|status|working|owner|summary|about|explain|overview|maintaining|backlog|development/i.test(
+          content,
+        )
+      ) {
+        return { lastProject: candidate };
+      }
+    }
+
+    // Person — bold name near ownership label
+    for (const match of boldMatches) {
+      const candidate = match[1].trim();
+      const surroundingText = content.slice(
+        Math.max(0, (match.index ?? 0) - 30),
+        (match.index ?? 0) + 60,
+      );
+      if (
+        /\b(owner|assignee|created by|last edited by|working on)\b/i.test(
+          surroundingText,
+        )
+      ) {
+        if (candidate.split(/\s+/).length <= 3 && candidate.length >= 3) {
+          return { lastPerson: candidate };
+        }
+      }
+    }
+  }
+
+  return {};
+}
+
+export async function runChatPipeline(
+  session: Session,
+  body: ChatRequestBody,
+  signal?: AbortSignal,
+) {
   const rawMessage = validateMessage(body.message);
-  
-  // Save raw message to DB, then build the processed version for the pipeline
   const sessionId = await attachSession(session, body.sessionId, rawMessage);
-  
+
   const normalized = await normalizeLanguage(rawMessage);
-  const message = resolveFirstPerson(normalized, session);
-  
+  const { message, ambiguous } = await resolveFirstPerson(normalized, session);
+
+  if (ambiguous?.length) {
+    return jsonAnswer(
+      sessionId,
+      `Multiple people named **${session.user?.name}** found in Notion:\n${ambiguous
+        .map((n) => `- ${n}`)
+        .join("\n")}\n\nWhich one did you mean?`,
+    );
+  }
+
   const history = sanitizeChatHistory(body.history);
   const ctx: PipelineContext = { message, history, sessionId };
 
@@ -116,13 +190,23 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
   if (linkResponse) return linkResponse;
 
   const parsed = await resolveQuery(message);
+  console.log("[query_debug]", {
+    query: message,
+    intent: detectIntent(message),
+    year: extractYear(message),
+    resolvedPerson: parsed.personName ?? null,
+    resolvedProject: parsed.docTitle ?? null,
+  });
   logParsedQuery(parsed);
 
   const sqlResponse = await trySqlAnswer(parsed, ctx);
   if (sqlResponse) return sqlResponse;
 
   if (isNotionLinkRequest(message)) {
-    return jsonAnswer(sessionId, "Ask for a Notion link using the page title, e.g. **link for Employee Onboarding Hub**.");
+    return jsonAnswer(
+      sessionId,
+      "Ask for a Notion link using the page title, e.g. **link for Employee Onboarding Hub**.",
+    );
   }
 
   return tryRagAnswer(parsed, ctx, session, signal);
@@ -210,7 +294,6 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
   const metadataOnly = isMetadataOnlyKind(parsed.kind);
   const directAnswer = await handleMetadataQuery(parsed);
 
-  // DEBUG LOG — remove after bug is found
   console.log("[trySqlAnswer] debug", {
     kind: parsed.kind,
     metadataOnly,
@@ -224,11 +307,18 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
       logChatRoute("sql_hit", parsed, { answer_chars: directAnswer.length });
       return jsonAnswer(ctx.sessionId, directAnswer);
     }
-    if (parsed.kind === "team_activity" && isTeamActivityMetadataGap(directAnswer)) {
-      logChatRoute("sql_weak_rag", parsed, { team_activity_metadata_gap: true });
+    if (
+      parsed.kind === "team_activity" &&
+      isTeamActivityMetadataGap(directAnswer)
+    ) {
+      logChatRoute("sql_weak_rag", parsed, {
+        team_activity_metadata_gap: true,
+      });
       return null;
     }
-    logChatRoute("sql_miss_metadata", parsed, { had_sql: Boolean(directAnswer) });
+    logChatRoute("sql_miss_metadata", parsed, {
+      had_sql: Boolean(directAnswer),
+    });
     return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed));
   }
 
@@ -246,9 +336,12 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
   return null;
 }
 
-
-
-async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext, session: Session, signal?: AbortSignal) {
+async function tryRagAnswer(
+  parsed: ParsedQuery,
+  ctx: PipelineContext,
+  session: Session,
+  signal?: AbortSignal,
+) {
   if (isMetadataOnlyKind(parsed.kind) && parsed.kind !== "team_activity") {
     logChatRoute("sql_miss_metadata", parsed, { blocked_rag: true });
     return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed));
@@ -280,24 +373,67 @@ async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext, session: 
     }
   }
 
+  // Follow-up context resolution from history
+  const { lastProject, lastPerson } = extractLastEntityFromHistory(ctx.history);
+
+  const isVagueFollowUp =
+    !parsed.docTitle &&
+    !parsed.personName &&
+    /\b(this|that|it|more|explain|project|core|detail|in depth|elaborate|tell me more|what about|only for|for \d{4}|in \d{4})\b/i.test(
+      ctx.message,
+    ) &&
+    ctx.message.trim().split(/\s+/).length < 10;
+
+  if (isVagueFollowUp) {
+    if (lastProject && !titleBoost) {
+      searchQuery = `${lastProject} ${searchQuery}`.trim();
+      method = "history_entity";
+    } else if (lastPerson && !parsed.personName) {
+      searchQuery = `${lastPerson} ${searchQuery}`.trim();
+      method = "history_entity";
+    }
+  }
+
   const searchQueries = SCOPED_RAG_KINDS.has(parsed.kind)
     ? [searchQuery]
-    : (await expandSearchQueries(ctx.message, ctx.history, searchQuery)).queries;
-  const multiQueryMethod = SCOPED_RAG_KINDS.has(parsed.kind) ? "primary_only" : "llm";
+    : (await expandSearchQueries(ctx.message, ctx.history, searchQuery))
+        .queries;
+  const multiQueryMethod = SCOPED_RAG_KINDS.has(parsed.kind)
+    ? "primary_only"
+    : "llm";
 
   logChatRoute("semantic_rag", parsed, {
     reformulation: method,
     multi_query: multiQueryMethod,
     search_queries: searchQueries,
+    history_entity: isVagueFollowUp ? { lastProject, lastPerson } : undefined,
   });
 
-  const { context: notionContext, confidence, chunkHits } =
-    await buildNotionContextWithConfidence(searchQueries, {
-      titleBoost: titleBoost || undefined,
-      year: parsed.year,
-    });
+  const {
+    context: notionContext,
+    confidence,
+    chunkHits,
+  } = await buildNotionContextWithConfidence(searchQueries, {
+    titleBoost: titleBoost || undefined,
+    year: parsed.year,
+  });
 
   logRetrievalDiagnostics(parsed, searchQueries, confidence, chunkHits);
+
+  // Telemetry
+  console.log(
+    "[telemetry]",
+    JSON.stringify({
+      kind: parsed.kind,
+      expandedQueryCount: searchQueries.length,
+      contextChars: notionContext.length,
+      topScore: confidence.topScore,
+      avgScore: confidence.avgScore,
+      confidenceOk: confidence.ok,
+      historyEntityUsed: isVagueFollowUp && (!!lastProject || !!lastPerson),
+      ts: Date.now(),
+    }),
+  );
 
   if (!notionContext.trim()) {
     return jsonAnswer(
@@ -310,5 +446,12 @@ async function tryRagAnswer(parsed: ParsedQuery, ctx: PipelineContext, session: 
     return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE);
   }
 
-  return streamGeminiAnswer(ctx.message, notionContext, ctx.history, ctx.sessionId, parsed.kind, signal);
+  return streamGeminiAnswer(
+    ctx.message,
+    notionContext,
+    ctx.history,
+    ctx.sessionId,
+    parsed.kind,
+    signal,
+  );
 }

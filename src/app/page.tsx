@@ -89,23 +89,32 @@ export default function ChatPage() {
 
     const loadInitialData = async () => {
       setIsLoadingChats(true);
-      try {
-        const [syncResponse, chatsResponse] = await Promise.all([
-          fetch("/api/sync"),
-          fetch("/api/chats"),
-        ]);
 
-        if (syncResponse.ok) {
-          const data = await syncResponse.json();
-          if (typeof data?.synced_at === "string" && data.synced_at) {
-            setLastSyncedAt(data.synced_at);
-            localStorage.setItem(LAST_SYNC_STORAGE_KEY, data.synced_at);
+      // Load sync status in the background
+      const loadSyncStatus = async () => {
+        try {
+          const syncResponse = await fetch("/api/sync");
+          if (syncResponse.ok) {
+            const data = await syncResponse.json();
+            if (typeof data?.synced_at === "string" && data.synced_at) {
+              setLastSyncedAt(data.synced_at);
+              localStorage.setItem(LAST_SYNC_STORAGE_KEY, data.synced_at);
+            }
+          } else {
+            const stored = localStorage.getItem(LAST_SYNC_STORAGE_KEY);
+            if (stored) setLastSyncedAt(stored);
           }
-        } else {
+        } catch (error) {
+          console.error("Failed to load sync status:", error);
           const stored = localStorage.getItem(LAST_SYNC_STORAGE_KEY);
           if (stored) setLastSyncedAt(stored);
         }
+      };
 
+      loadSyncStatus();
+
+      try {
+        const chatsResponse = await fetch("/api/chats");
         if (!chatsResponse.ok) throw new Error("Failed to load chats");
         const chatsData = await chatsResponse.json();
         let sessions: ChatSession[] = Array.isArray(chatsData?.sessions)
