@@ -118,39 +118,61 @@ function extractLastEntityFromHistory(history: ChatHistoryItem[]): {
 
   for (const item of recentHistory) {
     const content = item.content;
-    const boldMatches = [...content.matchAll(/\*\*([^*]{4,60})\*\*/g)];
+    const boldMatches = [...content.matchAll(/\*\*([^*]{2,60})\*\*/g)];
 
+    // Pattern 1: "X is assigned to: Person" → lastProject = X
+    const assignedToMatch = content.match(
+      /\*\*[""]?([^*"]{4,60})[""]?\*\*\s+is assigned to/i,
+    );
+    if (assignedToMatch?.[1]) {
+      return { lastProject: assignedToMatch[1].trim() };
+    }
+
+    // Pattern 2: "about X", "objective of X", "tell me about X"
+    const aboutMatch = content.match(
+      /(?:about|objective of|overview of|summary of)\s+(?:the\s+)?\*\*([^*]{4,60})\*\*/i,
+    );
+    if (aboutMatch?.[1]) {
+      return { lastProject: aboutMatch[1].trim() };
+    }
+
+    // Pattern 3: Bold title near project keywords
     for (const match of boldMatches) {
       const candidate = match[1].trim();
 
       if (
-        /^(status|owner|done|backlog|unknown|open|closed|in progress|testing|blocked|not started|yes|no|true|false|sync changes|re-sync)$/i.test(
+        /^(status|owner|done|backlog|unknown|open|closed|in progress|testing|blocked|not started|sync changes)$/i.test(
           candidate,
         )
       )
         continue;
       if (candidate.split(/\s+/).length > 6) continue;
-      if (candidate.length < 4) continue;
+      if (candidate.length < 3) continue;
+
+      const surrounding = content.slice(
+        Math.max(0, (match.index ?? 0) - 50),
+        (match.index ?? 0) + 100,
+      );
 
       if (
-        /project|status|working|owner|summary|about|explain|overview|maintaining|backlog|development/i.test(
-          content,
+        /project|status|working|owner|summary|about|assigned|scope|objective|maintaining|backlog|development/i.test(
+          surrounding,
         )
       ) {
         return { lastProject: candidate };
       }
     }
 
-    // Person — bold name near ownership label
+    // Pattern 4: Person near ownership label
     for (const match of boldMatches) {
       const candidate = match[1].trim();
-      const surroundingText = content.slice(
-        Math.max(0, (match.index ?? 0) - 30),
-        (match.index ?? 0) + 60,
+      const surrounding = content.slice(
+        Math.max(0, (match.index ?? 0) - 40),
+        (match.index ?? 0) + 80,
       );
       if (
-        /\b(owner|assignee|created by|last edited by|working on)\b/i.test(
-          surroundingText,
+        /\b(owner|assignee|created by|assigned to|working on)\b/i.test(
+          surrounding,
         )
       ) {
         if (candidate.split(/\s+/).length <= 3 && candidate.length >= 3) {
@@ -379,10 +401,10 @@ async function tryRagAnswer(
   const isVagueFollowUp =
     !parsed.docTitle &&
     !parsed.personName &&
-    /\b(this|that|it|more|explain|project|core|detail|in depth|elaborate|tell me more|what about|only for|for \d{4}|in \d{4})\b/i.test(
+    /\b(this|that|it|more|explain|project|core|detail|in depth|elaborate|tell me more|what about|only for|for \d{4}|in \d{4}|more information|more about|about it)\b/i.test(
       ctx.message,
     ) &&
-    ctx.message.trim().split(/\s+/).length < 10;
+    ctx.message.trim().split(/\s+/).length < 12;
 
   if (isVagueFollowUp) {
     if (lastProject && !titleBoost) {
