@@ -1,23 +1,32 @@
 "use client";
 
 import { signIn, useSession } from "next-auth/react";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
+
 import { useRouter } from "next/navigation";
 import { LogIn } from "lucide-react";
+import { hasNavgurukulDomainAccess } from "@/lib/shared/navgurukul-domain";
 
 export default function LoginPage() {
-  const { status } = useSession();
+  const { status, data } = useSession();
   const router = useRouter();
+  const allowed = useMemo(() => {
+    if (status !== "authenticated") return false;
+    return hasNavgurukulDomainAccess({ user: { email: data?.user?.email } });
+  }, [status, data?.user?.email]);
 
   useEffect(() => {
     if (status === "authenticated") {
-      router.push("/");
+      if (allowed) router.push("/");
     }
-  }, [status, router]);
+  }, [status, allowed, router]);
+
+
 
   if (status === "loading") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] text-white">
+
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
       </div>
     );
@@ -42,6 +51,7 @@ export default function LoginPage() {
           className="w-full py-4 px-6 rounded-xl bg-white text-black font-semibold flex items-center justify-center gap-3 hover:bg-white/90 transition-all active:scale-[0.98]"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24">
+
             <path
               fill="currentColor"
               d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
