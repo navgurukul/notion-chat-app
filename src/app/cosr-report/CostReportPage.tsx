@@ -1,51 +1,30 @@
 "use client";
 
-import { DEFAULT_COMPUTE_SIZING, DEFAULT_RDS_SIZING, estimateEc2Monthly, estimateRdsMonthly, formatMoney } from "./AwsComputeCost";
+import {
+  CHAT_PRICES,
+  embeddingMonthlyUsdFromTokens,
+  llmMonthlyUsdFromTokens,
+  OPENAI_EMBEDDING_PRICING,
+  formatMoney,
+} from "./AwsComputeCost";
+
+
 import { useMemo, useState } from "react";
+
 
 type Model = {
   id: string;
   label: string;
-  pricing: {
-    inputPer1M: number; // $ / 1M input tokens
-    outputPer1M: number; // $ / 1M output tokens
-  };
 };
 
+
 const MODELS: Model[] = [
-  {
-    id: "gpt-4o-mini",
-    label: "GPT-4o-mini (placeholder pricing)",
-    pricing: {
-      inputPer1M: 0.15,
-      outputPer1M: 0.60,
-    },
-  },
-  {
-    id: "gpt-4.1",
-    label: "GPT-4.1 (placeholder pricing)",
-    pricing: {
-      inputPer1M: 1.00,
-      outputPer1M: 3.00,
-    },
-  },
-  {
-    id: "deepseek-chat",
-    label: "DeepSeek Chat (placeholder pricing)",
-    pricing: {
-      inputPer1M: 0.14,
-      outputPer1M: 0.28,
-    },
-  },
-  {
-    id: "deepseek-4",
-    label: "DeepSeek 4 (placeholder pricing)",
-    pricing: {
-      inputPer1M: 0.20,
-      outputPer1M: 0.40,
-    },
-  },
+  { id: "gpt-4o-mini", label: "GPT-4o-mini" },
+  { id: "gpt-4.1", label: "GPT-4.1" },
+  { id: "deepseek-chat", label: "DeepSeek Chat" },
+  { id: "deepseek-4", label: "DeepSeek 4" },
 ];
+
 
 function fmtNumber(n: number) {
   if (!Number.isFinite(n)) return "—";
@@ -64,23 +43,7 @@ const ASSUMPTIONS = {
   avgRetryMultiplier: 1.0,
 };
 
-function estimateCosts({
-  inputTokens,
-  outputTokens,
-  pricing,
-}: {
-  inputTokens: number;
-  outputTokens: number;
-  pricing: { inputPer1M: number; outputPer1M: number };
-}) {
-  const inputCost = (inputTokens / 1_000_000) * pricing.inputPer1M;
-  const outputCost = (outputTokens / 1_000_000) * pricing.outputPer1M;
-  return {
-    inputCost,
-    outputCost,
-    total: inputCost + outputCost,
-  };
-}
+
 
 function estimateMonthlyForModel({
   model,
@@ -103,33 +66,34 @@ function estimateMonthlyForModel({
   const inputTokens = promptTokens + retrievalTokens;
   const outputTokens = completionTokens;
 
-  const daily = estimateCosts({
+  // Keep return shape but remove any dollar-based pricing.
+  const tokensDaily = {
     inputTokens,
     outputTokens,
-    pricing: model.pricing,
-  });
-
-  const monthly = {
-    inputCost: daily.inputCost * 30,
-    outputCost: daily.outputCost * 30,
-    total: daily.total * 30,
+    totalTokens: inputTokens + outputTokens,
   };
 
-  const yearly = {
-    inputCost: daily.inputCost * 365,
-    outputCost: daily.outputCost * 365,
-    total: daily.total * 365,
+  const tokensMonthly = {
+    inputTokens: inputTokens * 30,
+    outputTokens: outputTokens * 30,
+    totalTokens: (inputTokens + outputTokens) * 30,
+  };
+
+  const tokensYearly = {
+    inputTokens: inputTokens * 365,
+    outputTokens: outputTokens * 365,
+    totalTokens: (inputTokens + outputTokens) * 365,
   };
 
   return {
+    model,
     questionsPerDay,
-    inputTokensDaily: inputTokens,
-    completionTokensDaily: outputTokens,
-    daily,
-    monthly,
-    yearly,
+    tokensDaily,
+    tokensMonthly,
+    tokensYearly,
   };
 }
+
 
 export default function CostReportPage() {
   const [users, setUsers] = useState(2);
@@ -139,15 +103,7 @@ export default function CostReportPage() {
     "deepseek-chat",
   ]);
 
-  const ec2Monthly = useMemo(
-    () => estimateEc2Monthly({ hourlyUsd: DEFAULT_COMPUTE_SIZING.instance.hourlyUsd }).monthlyUsd,
-    []
-  );
 
-  const rdsMonthly = useMemo(
-    () => estimateRdsMonthly({ monthlyUsd: DEFAULT_RDS_SIZING.monthlyUsd }).monthlyUsd,
-    []
-  );
 
   const selectedModels = useMemo(
     () => MODELS.filter((m) => selectedModelIds.includes(m.id)),
@@ -164,8 +120,13 @@ export default function CostReportPage() {
     );
   }, [selectedModels, users, questionsPerUserPerDay]);
 
-  const overallModelMonthlyCost = modelEstimates.reduce((sum, e) => sum + e.monthly.total, 0);
-  const overallMonthlyCost = overallModelMonthlyCost + ec2Monthly + rdsMonthly;
+
+
+
+  type CostMode = "llm" | "embedding";
+  const [costMode, setCostMode] = useState<CostMode>("llm");
+
+
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white">
@@ -181,7 +142,34 @@ export default function CostReportPage() {
         {/* Controls */}
         <div className="rounded-2xl border border-white/10 bg-white/5 p-5 mb-6">
           <h2 className="font-bold text-lg">Inputs</h2>
+
+          <div className="mt-4 mb-4 flex flex-col gap-2">
+            <div className="text-sm text-white/70">Cost mode</div>
+            <div className="flex flex-wrap gap-4">
+
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="costMode"
+                  checked={costMode === "llm"}
+                  onChange={() => setCostMode("llm")}
+                />
+                <span>LLM i/p-o/p cost</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="costMode"
+                  checked={costMode === "embedding"}
+                  onChange={() => setCostMode("embedding")}
+                />
+                <span>Embedding cost</span>
+              </label>
+            </div>
+          </div>
+
           <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+
             <label className="rounded-xl bg-black/20 border border-white/10 p-4">
               <div className="text-xs text-white/55">Users (scroll to adjust)</div>
               <div className="mt-1 flex items-center justify-between gap-3">
@@ -238,30 +226,64 @@ export default function CostReportPage() {
                   );
                 })}
               </div>
-              <div className="mt-2 text-xs text-white/45">
-                Prices are placeholders—swap with your real provider pricing.
-              </div>
+
             </div>
           </div>
 
           {/* Overall */}
-          <div className="mt-5 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              <div>
-                <div className="text-xs text-white/70">Overall monthly cost</div>
-                <div className="text-3xl font-extrabold mt-1">{formatMoney(overallMonthlyCost)}</div>
+        <div className="mt-5 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <div className="text-xs text-white/70">Overall monthly API cost (estimate)</div>
+          <div className="text-3xl font-extrabold mt-1">
+                {formatMoney(
+                  selectedModels.length === 0
+                    ? 0
+                    : costMode === "llm"
+                      ? selectedModels.reduce((sum, m) => {
+                          const pricing = CHAT_PRICES[m.id];
+                          if (!pricing) return sum;
+                          const idx = selectedModels.findIndex((x) => x.id === m.id);
+                          const est = modelEstimates[idx];
+                          if (!est) return sum;
+
+                          if (
+                            !Number.isFinite(pricing.inputPer1MTokensUsd) ||
+                            !Number.isFinite(pricing.outputPer1MTokensUsd)
+                          ) {
+                            return sum;
+                          }
+
+                          return (
+                            sum +
+                            llmMonthlyUsdFromTokens({
+                              inputTokens: est.tokensMonthly.inputTokens,
+                              outputTokens: est.tokensMonthly.outputTokens,
+                              pricing,
+                            })
+                          );
+                        }, 0)
+                      : embeddingMonthlyUsdFromTokens({
+                          // NOTE: embeddings are expensive for indexing; this report currently models query embeddings + a stored approximation.
+                          inputTokens:
+                            users * questionsPerUserPerDay * ASSUMPTIONS.avgRetrievalContextTokensPerQuestion * 30,
+                          pricing: OPENAI_EMBEDDING_PRICING,
+                        })
+                )}
               </div>
-              <div className="text-sm text-white/70">
-                <div>
-                  Models: <b className="text-white">{formatMoney(overallModelMonthlyCost)}</b>
-                </div>
-                <div>
-                  Infra (EC2 {"+"} RDS): <b className="text-white">{formatMoney(ec2Monthly + rdsMonthly)}</b>
-                </div>
+
+            </div>
+            <div className="text-sm text-white/70">
+              <div>
+                {costMode === "llm" ? "Sum of selected LLM i/p-o/p costs" : "Embedding cost (query+stored approximation)"}
               </div>
             </div>
           </div>
         </div>
+
+
+        </div>
+
 
         {/* Assumptions */}
         <div className="rounded-2xl border border-white/10 bg-white/5 p-5 mb-6">
@@ -296,42 +318,39 @@ export default function CostReportPage() {
                       <h3 className="text-lg font-bold">{model.label}</h3>
                       <p className="text-sm text-white/60">~{est.questionsPerDay} questions/day total</p>
                     </div>
-                    <div className="text-right">
-                      <p className="text-xs text-white/50">Pricing</p>
-                      <p className="text-sm font-semibold text-blue-200">
-                        Input ${model.pricing.inputPer1M}/1M • Output ${model.pricing.outputPer1M}/1M
-                      </p>
-                    </div>
+
                   </div>
 
                   <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div className="rounded-xl bg-black/20 border border-white/10 p-4">
-                      <div className="text-xs text-white/50">Monthly</div>
-                      <div className="text-2xl font-bold mt-1">{formatMoney(est.monthly.total)}</div>
+                      <div className="text-xs text-white/50">Monthly tokens</div>
+                      <div className="text-2xl font-bold mt-1">{fmtNumber(est.tokensMonthly.totalTokens)}</div>
                       <div className="text-xs text-white/60 mt-1">
-                        Input {formatMoney(est.monthly.inputCost)} • Output {formatMoney(est.monthly.outputCost)}
+                        Input {fmtNumber(est.tokensMonthly.inputTokens)} • Output {fmtNumber(est.tokensMonthly.outputTokens)}
                       </div>
                     </div>
                     <div className="rounded-xl bg-black/20 border border-white/10 p-4">
-                      <div className="text-xs text-white/50">Daily</div>
-                      <div className="text-2xl font-bold mt-1">{formatMoney(est.daily.total)}</div>
+                      <div className="text-xs text-white/50">Daily tokens</div>
+                      <div className="text-2xl font-bold mt-1">{fmtNumber(est.tokensDaily.totalTokens)}</div>
                       <div className="text-xs text-white/60 mt-1">
-                        Input {formatMoney(est.daily.inputCost)} • Output {formatMoney(est.daily.outputCost)}
+                        Input {fmtNumber(est.tokensDaily.inputTokens)} • Output {fmtNumber(est.tokensDaily.outputTokens)}
                       </div>
                     </div>
                     <div className="rounded-xl bg-black/20 border border-white/10 p-4">
-                      <div className="text-xs text-white/50">Yearly</div>
-                      <div className="text-2xl font-bold mt-1">{formatMoney(est.yearly.total)}</div>
+                      <div className="text-xs text-white/50">Yearly tokens</div>
+                      <div className="text-2xl font-bold mt-1">{fmtNumber(est.tokensYearly.totalTokens)}</div>
                       <div className="text-xs text-white/60 mt-1">
-                        Input {formatMoney(est.yearly.inputCost)} • Output {formatMoney(est.yearly.outputCost)}
+                        Input {fmtNumber(est.tokensYearly.inputTokens)} • Output {fmtNumber(est.tokensYearly.outputTokens)}
                       </div>
                     </div>
+
                   </div>
 
                   <div className="mt-4 text-xs text-white/55">
-                    Token inputs (daily): prompt+retrieval {fmtNumber(est.inputTokensDaily)} • completion {" "}
-                    {fmtNumber(est.completionTokensDaily)}
+                    Token inputs (daily): prompt+retrieval {fmtNumber(est.tokensDaily.inputTokens)} • completion {" "}
+                    {fmtNumber(est.tokensDaily.outputTokens)}
                   </div>
+
                 </div>
               );
             })}
