@@ -8,15 +8,33 @@ import {
   formatMoney,
 } from "./AwsComputeCost";
 
+const USD_TO_INR = 94.5;
 
-import { useMemo, useState } from "react";
+function formatMoneyInr(n: number) {
+  if (!Number.isFinite(n)) return "—";
+  return `₹${(n * USD_TO_INR).toFixed(2)}`;
+}
+
+function ThinMoneyRow({ usd }: { usd: number }) {
+  return (
+    <div className="text-xs text-white/60 mt-0.5">
+      <span className="mr-2">INR: {formatMoneyInr(usd)}</span>
+    </div>
+  );
+}
+
+
+
+import { useEffect, useMemo, useState } from "react";
+
+
+
 
 
 type Model = {
   id: string;
   label: string;
 };
-
 
 const MODELS: Model[] = [
   { id: "gpt-4o-mini", label: "GPT-4o-mini" },
@@ -98,6 +116,91 @@ function estimateMonthlyForModel({
 export default function CostReportPage() {
   const [users, setUsers] = useState(2);
   const [questionsPerUserPerDay, setQuestionsPerUserPerDay] = useState(10);
+
+  const [llmUsage, setLlmUsage] = useState<
+    | null
+    | {
+        modelId: string;
+        totals: {
+          inputTokensEst: number;
+          outputTokensEst: number;
+          totalTokensEst: number;
+          inputUsdEst: number;
+          outputUsdEst: number;
+          totalUsdEst: number;
+          totalUserMessages: number;
+          totalBotMessages: number;
+        };
+        users: {
+          userId: string;
+          email: string;
+          name: string | null;
+          totalUserMessages: number;
+          totalBotMessages: number;
+          inputTokensEst: number;
+          outputTokensEst: number;
+          totalTokensEst: number;
+          inputUsdEst: number;
+          outputUsdEst: number;
+          totalUsdEst: number;
+        }[];
+      }
+  >(null);
+  const [llmUsageLoading, setLlmUsageLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        setLlmUsageLoading(true);
+        const res = await fetch("/api/cosr-report/llm-usage", {
+          method: "GET",
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as {
+          modelId: string;
+          totals: {
+            inputTokensEst: number;
+            outputTokensEst: number;
+            totalTokensEst: number;
+            inputUsdEst: number;
+            outputUsdEst: number;
+            totalUsdEst: number;
+            totalUserMessages: number;
+            totalBotMessages: number;
+          };
+          users: {
+            userId: string;
+            email: string;
+            name: string | null;
+            totalUserMessages: number;
+            totalBotMessages: number;
+            inputTokensEst: number;
+            outputTokensEst: number;
+            totalTokensEst: number;
+            inputUsdEst: number;
+            outputUsdEst: number;
+            totalUsdEst: number;
+          }[];
+        };
+        if (cancelled) return;
+        setLlmUsage(data);
+      } catch (e) {
+        console.error("Failed to load LLM usage", e);
+        if (cancelled) return;
+        setLlmUsage(null);
+      } finally {
+        if (!cancelled) setLlmUsageLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([
     "gpt-4o-mini",
     "deepseek-chat",
@@ -142,6 +245,14 @@ export default function CostReportPage() {
         {/* Controls */}
         <div className="rounded-2xl border border-white/10 bg-white/5 p-5 mb-6">
           <h2 className="font-bold text-lg">Inputs</h2>
+
+          <div className="mt-4 flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <div className="text-xs text-white/70">LLM usage model</div>
+              <div className="text-sm text-white/85 mt-1">Estimate from stored chat messages: tokens ≈ chars/4</div>
+            </div>
+          </div>
+
 
           <div className="mt-4 mb-4 flex flex-col gap-2">
             <div className="text-sm text-white/70">Cost mode</div>
@@ -236,40 +347,58 @@ export default function CostReportPage() {
             <div>
               <div className="text-xs text-white/70">Overall monthly API cost (estimate)</div>
           <div className="text-3xl font-extrabold mt-1">
-                {formatMoney(
-                  selectedModels.length === 0
-                    ? 0
-                    : costMode === "llm"
-                      ? selectedModels.reduce((sum, m) => {
-                          const pricing = CHAT_PRICES[m.id];
-                          if (!pricing) return sum;
-                          const idx = selectedModels.findIndex((x) => x.id === m.id);
-                          const est = modelEstimates[idx];
-                          if (!est) return sum;
+{(() => {
+                  const usd =
+                    selectedModels.length === 0
+                      ? 0
+                      : costMode === "llm"
+                        ? selectedModels.reduce((sum, m) => {
+                            const pricing = CHAT_PRICES[m.id];
+                            if (!pricing) return sum;
+                            const idx = selectedModels.findIndex(
+                              (x) => x.id === m.id
+                            );
+                            const est = modelEstimates[idx];
+                            if (!est) return sum;
 
-                          if (
-                            !Number.isFinite(pricing.inputPer1MTokensUsd) ||
-                            !Number.isFinite(pricing.outputPer1MTokensUsd)
-                          ) {
-                            return sum;
-                          }
+                            if (
+                              !Number.isFinite(
+                                pricing.inputPer1MTokensUsd
+                              ) ||
+                              !Number.isFinite(pricing.outputPer1MTokensUsd)
+                            ) {
+                              return sum;
+                            }
 
-                          return (
-                            sum +
-                            llmMonthlyUsdFromTokens({
-                              inputTokens: est.tokensMonthly.inputTokens,
-                              outputTokens: est.tokensMonthly.outputTokens,
-                              pricing,
-                            })
-                          );
-                        }, 0)
-                      : embeddingMonthlyUsdFromTokens({
-                          // NOTE: embeddings are expensive for indexing; this report currently models query embeddings + a stored approximation.
-                          inputTokens:
-                            users * questionsPerUserPerDay * ASSUMPTIONS.avgRetrievalContextTokensPerQuestion * 30,
-                          pricing: OPENAI_EMBEDDING_PRICING,
-                        })
-                )}
+                            return (
+                              sum +
+                              llmMonthlyUsdFromTokens({
+                                inputTokens:
+                                  est.tokensMonthly.inputTokens,
+                                outputTokens:
+                                  est.tokensMonthly.outputTokens,
+                                pricing,
+                              })
+                            );
+                          }, 0)
+                        : embeddingMonthlyUsdFromTokens({
+                            // NOTE: embeddings are expensive for indexing; this report currently models query embeddings + a stored approximation.
+                            inputTokens:
+                              users *
+                              questionsPerUserPerDay *
+                              ASSUMPTIONS.avgRetrievalContextTokensPerQuestion *
+                              30,
+                            pricing: OPENAI_EMBEDDING_PRICING,
+                          });
+
+                  return (
+                    <>
+                      <span className="inline-block">{formatMoney(usd)}</span>
+                      <ThinMoneyRow usd={usd} />
+                    </>
+                  );
+                })()}
+
               </div>
 
             </div>
@@ -282,6 +411,73 @@ export default function CostReportPage() {
         </div>
 
 
+        </div>
+
+        {/* Actual usage */}
+        <div className="rounded-2xl border border-white/10 bg-white/5 p-5 mb-6">
+          <h2 className="font-bold text-lg">LLM Usage (Actual, till now)</h2>
+
+          {llmUsageLoading ? (
+            <div className="mt-3 text-sm text-white/60">Loading usage...</div>
+          ) : llmUsage ? (
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="rounded-xl bg-black/20 border border-white/10 p-4">
+                <div className="text-xs text-white/50">Total questions</div>
+                <div className="text-2xl font-bold mt-1">{llmUsage.totals.totalUserMessages}</div>
+                <div className="text-xs text-white/60 mt-1">Total answers: {llmUsage.totals.totalBotMessages}</div>
+              </div>
+
+              <div className="rounded-xl bg-black/20 border border-white/10 p-4">
+                <div className="text-xs text-white/50">Estimated tokens</div>
+                <div className="text-2xl font-bold mt-1">{fmtNumber(llmUsage.totals.totalTokensEst)}</div>
+                <div className="text-xs text-white/60 mt-1">Input {fmtNumber(llmUsage.totals.inputTokensEst)} • Output {fmtNumber(llmUsage.totals.outputTokensEst)}</div>
+              </div>
+
+
+              <div className="rounded-xl bg-black/20 border border-white/10 p-4">
+                <div className="text-xs text-white/50">Estimated cost so far</div>
+                <div className="text-2xl font-bold mt-1">
+                  {formatMoney(llmUsage.totals.totalUsdEst)}
+                </div>
+                <ThinMoneyRow usd={llmUsage.totals.totalUsdEst} />
+                <div className="text-xs text-white/60 mt-1">Model priced: {llmUsage.modelId}</div>
+
+              </div>
+            </div>
+          ) : (
+            <div className="mt-3 text-sm text-white/60">No usage data found (or not authorized).</div>
+          )}
+
+          {llmUsage && llmUsage.users.length > 0 ? (
+            <div className="mt-5">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <h3 className="font-semibold">Per-user breakdown</h3>
+                <div className="text-xs text-white/50">Showing top {llmUsage.users.length}</div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                {llmUsage.users.map((u) => (
+                  <div key={u.userId} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-bold truncate">{u.name || u.email}</div>
+                        <div className="text-xs text-white/60">Questions: {u.totalUserMessages}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-xs text-white/60">Cost</div>
+                        <div className="text-lg font-extrabold">{formatMoney(u.totalUsdEst)}</div>
+                        <ThinMoneyRow usd={u.totalUsdEst} />
+
+                      </div>
+                    </div>
+                    <div className="mt-3 text-xs text-white/60">
+                      Input {fmtNumber(u.inputTokensEst)} • Output {fmtNumber(u.outputTokensEst)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
 
 
