@@ -12,9 +12,11 @@ const globalForPostgres = globalThis as unknown as {
   schemaPromise: Promise<void> | null | undefined;
 };
 
-export const pool = globalForPostgres.pool ?? new Pool({
-  connectionString: databaseUrl,
-});
+export const pool =
+  globalForPostgres.pool ??
+  new Pool({
+    connectionString: databaseUrl,
+  });
 
 if (process.env.NODE_ENV !== "production") {
   globalForPostgres.pool = pool;
@@ -25,10 +27,7 @@ let schemaPromise = globalForPostgres.schemaPromise ?? null;
 
 const SCHEMA_ADVISORY_LOCK_ID = 9_152_4001;
 
-async function safeCreateTable(
-  client: PoolClient,
-  sql: string,
-) {
+async function safeCreateTable(client: PoolClient, sql: string) {
   try {
     await client.query(sql);
   } catch (error) {
@@ -49,8 +48,16 @@ const CORE_COLUMN_MIGRATIONS: ColumnMigration[] = [
   { table: "users", column: "image_url", definition: "TEXT" },
   { table: "users", column: "provider", definition: "TEXT DEFAULT 'google'" },
   { table: "users", column: "last_login_at", definition: "TIMESTAMP" },
-  { table: "users", column: "updated_at", definition: "TIMESTAMP DEFAULT NOW()" },
-  { table: "chat_sessions", column: "updated_at", definition: "TIMESTAMP DEFAULT NOW()" },
+  {
+    table: "users",
+    column: "updated_at",
+    definition: "TIMESTAMP DEFAULT NOW()",
+  },
+  {
+    table: "chat_sessions",
+    column: "updated_at",
+    definition: "TIMESTAMP DEFAULT NOW()",
+  },
 ];
 
 const NOTION_PAGE_COLUMN_MIGRATIONS: ColumnMigration[] = [
@@ -62,7 +69,11 @@ const NOTION_PAGE_COLUMN_MIGRATIONS: ColumnMigration[] = [
   { table: "notion_pages", column: "status", definition: "TEXT" },
   { table: "notion_pages", column: "due_date", definition: "TEXT" },
   { table: "notion_pages", column: "embedding", definition: "vector(1536)" },
-  { table: "notion_pages", column: "notion_edited_at", definition: "TIMESTAMP" },
+  {
+    table: "notion_pages",
+    column: "notion_edited_at",
+    definition: "TIMESTAMP",
+  },
   {
     table: "notion_pages",
     column: "embedding_status",
@@ -71,11 +82,7 @@ const NOTION_PAGE_COLUMN_MIGRATIONS: ColumnMigration[] = [
   { table: "notion_pages", column: "last_error", definition: "TEXT" },
 ];
 
-async function columnExists(
-  client: PoolClient,
-  table: string,
-  column: string,
-) {
+async function columnExists(client: PoolClient, table: string, column: string) {
   const result = await client.query(
     `
     SELECT 1
@@ -90,10 +97,7 @@ async function columnExists(
   return result.rows.length > 0;
 }
 
-async function tableExists(
-  client: PoolClient,
-  table: string,
-) {
+async function tableExists(client: PoolClient, table: string) {
   const result = await client.query(
     `
     SELECT 1
@@ -108,13 +112,15 @@ async function tableExists(
 }
 
 /** v2 bootstrap used uuid id + notion_page_id; sync expects Notion page id as TEXT primary key. */
-async function reconcileNotionPagesSchema(
-  client: PoolClient,
-) {
+async function reconcileNotionPagesSchema(client: PoolClient) {
   if (!(await tableExists(client, "notion_pages"))) return;
 
   const hasUrl = await columnExists(client, "notion_pages", "url");
-  const hasLegacyNotionPageId = await columnExists(client, "notion_pages", "notion_page_id");
+  const hasLegacyNotionPageId = await columnExists(
+    client,
+    "notion_pages",
+    "notion_page_id",
+  );
 
   if (hasUrl && !hasLegacyNotionPageId) return;
 
@@ -133,9 +139,7 @@ async function reconcileNotionPagesSchema(
   await client.query("DROP TABLE IF EXISTS notion_pages CASCADE");
 }
 
-async function ensureNotionChunksSchema(
-  client: PoolClient,
-) {
+async function ensureNotionChunksSchema(client: PoolClient) {
   await safeCreateTable(
     client,
     `
@@ -146,7 +150,7 @@ async function ensureNotionChunksSchema(
       section_heading TEXT,
       content TEXT NOT NULL,
       embedding vector(1536),
-      fts tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, ''))) STORED,
+     fts tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, ''))) STORED,
       UNIQUE (page_id, chunk_index)
     );
   `,
@@ -160,11 +164,11 @@ async function ensureNotionChunksSchema(
   }
 
   await client.query(`
-    CREATE INDEX IF NOT EXISTS notion_chunks_embedding_idx
-    ON notion_chunks
-    USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
-  `);
+  CREATE INDEX IF NOT EXISTS notion_chunks_embedding_idx
+  ON notion_chunks
+  USING hnsw (embedding vector_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
+`);
 
   await client.query(`
     CREATE INDEX IF NOT EXISTS notion_chunks_fts_idx
@@ -216,7 +220,9 @@ export async function ensureSchema() {
     const client = await pool.connect();
 
     try {
-      await client.query("SELECT pg_advisory_lock($1)", [SCHEMA_ADVISORY_LOCK_ID]);
+      await client.query("SELECT pg_advisory_lock($1)", [
+        SCHEMA_ADVISORY_LOCK_ID,
+      ]);
 
       await client.query(`
         CREATE EXTENSION IF NOT EXISTS vector;
@@ -319,9 +325,9 @@ export async function ensureSchema() {
       schemaReady = true;
       globalForPostgres.schemaReady = true;
     } finally {
-      await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_ADVISORY_LOCK_ID]).catch(
-        () => undefined,
-      );
+      await client
+        .query("SELECT pg_advisory_unlock($1)", [SCHEMA_ADVISORY_LOCK_ID])
+        .catch(() => undefined);
       client.release();
     }
   })().catch((error) => {

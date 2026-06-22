@@ -616,6 +616,16 @@ export async function syncNotionToPostgres(
 ): Promise<SyncResult> {
   await ensureSchema();
 
+  await query(`
+  UPDATE notion_pages
+  SET embedding_status = 'failed',
+      last_error = 'Interrupted — previous sync did not complete'
+  WHERE embedding_status = 'processing'
+    AND synced_at IS NOT NULL
+    AND synced_at < NOW() - INTERVAL '2 hours'
+`);
+  
+
   const notion = getNotionClient();
   const embed = options.embed !== false && isEmbeddingsEnabled();
   const runStartedAt = new Date().toISOString();
