@@ -82,6 +82,22 @@ const NOTION_PAGE_COLUMN_MIGRATIONS: ColumnMigration[] = [
   { table: "notion_pages", column: "last_error", definition: "TEXT" },
 ];
 
+// FIX (Schema): Added heading_path, char_count, token_count migrations.
+// These columns are required by sync.ts bulk insert.
+const NOTION_CHUNK_COLUMN_MIGRATIONS: ColumnMigration[] = [
+  { table: "notion_chunks", column: "heading_path", definition: "TEXT" },
+  {
+    table: "notion_chunks",
+    column: "char_count",
+    definition: "INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    table: "notion_chunks",
+    column: "token_count",
+    definition: "INTEGER NOT NULL DEFAULT 0",
+  },
+];
+
 async function columnExists(client: PoolClient, table: string, column: string) {
   const result = await client.query(
     `
@@ -111,7 +127,6 @@ async function tableExists(client: PoolClient, table: string) {
   return result.rows.length > 0;
 }
 
-/** v2 bootstrap used uuid id + notion_page_id; sync expects Notion page id as TEXT primary key. */
 async function reconcileNotionPagesSchema(client: PoolClient) {
   if (!(await tableExists(client, "notion_pages"))) return;
 
@@ -140,35 +155,46 @@ async function reconcileNotionPagesSchema(client: PoolClient) {
 }
 
 async function ensureNotionChunksSchema(client: PoolClient) {
+  // FIX (Schema): CREATE TABLE now includes heading_path, char_count, token_count.
+  // FIX (FTS):    Using 'simple' dictionary consistently (was 'english' in ALTER TABLE).
+  //               'simple' = no stemming, works for all languages in your workspace.
   await safeCreateTable(
     client,
     `
     CREATE TABLE IF NOT EXISTS notion_chunks (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      page_id TEXT NOT NULL REFERENCES notion_pages(id) ON DELETE CASCADE,
-      chunk_index INTEGER NOT NULL,
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      page_id       TEXT NOT NULL REFERENCES notion_pages(id) ON DELETE CASCADE,
+      chunk_index   INTEGER NOT NULL,
       section_heading TEXT,
-      content TEXT NOT NULL,
-      embedding vector(1536),
-     fts tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, ''))) STORED,
+      heading_path  TEXT,
+      content       TEXT NOT NULL,
+      char_count    INTEGER NOT NULL DEFAULT 0,
+      token_count   INTEGER NOT NULL DEFAULT 0,
+      embedding     vector(1536),
+      fts           tsvector GENERATED ALWAYS AS (
+                      to_tsvector('simple', coalesce(content, ''))
+                    ) STORED,
       UNIQUE (page_id, chunk_index)
     );
   `,
   );
 
+  // FIX (FTS): ALTER TABLE also uses 'simple' now (was 'english' — inconsistent).
   if (!(await columnExists(client, "notion_chunks", "fts"))) {
     await client.query(`
       ALTER TABLE notion_chunks
-      ADD COLUMN fts tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, ''))) STORED
+      ADD COLUMN fts tsvector GENERATED ALWAYS AS (
+        to_tsvector('simple', coalesce(content, ''))
+      ) STORED
     `);
   }
 
   await client.query(`
-  CREATE INDEX IF NOT EXISTS notion_chunks_embedding_idx
-  ON notion_chunks
-  USING hnsw (embedding vector_cosine_ops)
-  WITH (m = 16, ef_construction = 64);
-`);
+    CREATE INDEX IF NOT EXISTS notion_chunks_embedding_idx
+    ON notion_chunks
+    USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+  `);
 
   await client.query(`
     CREATE INDEX IF NOT EXISTS notion_chunks_fts_idx
@@ -309,7 +335,21 @@ export async function ensureSchema() {
 
       await runColumnMigrations(client, NOTION_PAGE_COLUMN_MIGRATIONS);
 
+      // Indexes for resume-mode queries (WHERE embedding_status = 'completed')
+      // and for incremental sync comparisons (notion_edited_at check).
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS notion_pages_embedding_status_idx
+        ON notion_pages (embedding_status);
+
+        CREATE INDEX IF NOT EXISTS notion_pages_edited_idx
+        ON notion_pages (notion_edited_at);
+      `);
+
       await ensureNotionChunksSchema(client);
+
+      // FIX (Schema): Run chunk column migrations for existing tables
+      // that were created before heading_path/char_count/token_count were added.
+      await runColumnMigrations(client, NOTION_CHUNK_COLUMN_MIGRATIONS);
 
       await safeCreateTable(
         client,
