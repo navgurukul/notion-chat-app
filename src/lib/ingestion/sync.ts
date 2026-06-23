@@ -28,7 +28,7 @@
 
 import { Client } from "@notionhq/client";
 
-import { ensureSchema, query, pool, setNotionLastSyncRun } from "@/lib/db";
+import { ensureSchema, query, getClient, setNotionLastSyncRun } from "@/lib/db";
 import { chunkPageContent } from "@/lib/ingestion/chunk";
 
 import {
@@ -325,7 +325,7 @@ async function loadStoredPageSyncState() {
     id: string;
     notion_edited_at: string | null;
     embedding_status: string | null;
-  }>(`SELECT id, notion_edited_at::text, embedding_status FROM notion_pages`);
+  }>(`SELECT id, to_char(notion_edited_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS notion_edited_at, embedding_status FROM notion_pages`);
   return new Map(rows.map((row) => [row.id, { notion_edited_at: row.notion_edited_at, embedding_status: row.embedding_status }]));
 }
 
@@ -418,7 +418,7 @@ async function replacePageChunks(
   // FIX: Use a dedicated pool client so BEGIN/DELETE/INSERT/COMMIT
   // all execute on the same Postgres connection. pool.query() can
   // route each call to a different connection, silently breaking transactions.
-  const client = await pool.connect();
+  const client = await getClient();
   try {
     await client.query("BEGIN");
 

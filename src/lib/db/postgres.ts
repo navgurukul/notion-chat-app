@@ -343,6 +343,9 @@ export async function ensureSchema() {
 
         CREATE INDEX IF NOT EXISTS notion_pages_edited_idx
         ON notion_pages (notion_edited_at);
+
+        CREATE INDEX IF NOT EXISTS notion_pages_synced_at_idx
+        ON notion_pages (synced_at);
       `);
 
       await ensureNotionChunksSchema(client);
@@ -378,6 +381,28 @@ export async function ensureSchema() {
 
   globalForPostgres.schemaPromise = schemaPromise;
   await schemaPromise;
+}
+
+/**
+ * Get a dedicated pool client for multi-statement transactions.
+ * Caller must call client.release() in a finally block.
+ *
+ * Usage:
+ *   const client = await getClient();
+ *   try {
+ *     await client.query("BEGIN");
+ *     ...
+ *     await client.query("COMMIT");
+ *   } catch (err) {
+ *     await client.query("ROLLBACK").catch(() => undefined);
+ *     throw err;
+ *   } finally {
+ *     client.release();
+ *   }
+ */
+export async function getClient() {
+  await ensureSchema();
+  return pool.connect();
 }
 
 export async function query<T = unknown>(

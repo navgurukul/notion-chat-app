@@ -1,4 +1,4 @@
-export { ensureSchema, query } from "./postgres";
+export { ensureSchema, query, getClient } from "./postgres";
 export { escapeLike, likePattern } from "./sql-utils";
 export {
   getNotionLastSyncRun,
