@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { isSessionResponse, requireSession } from "@/lib/auth";
 import { query } from "@/lib/db";
-import { CHAT_PRICES } from "@/app/cosr-report/AwsComputeCost";
+import { CHAT_PRICES } from "@/app/cost-report/AwsComputeCost";
 
 function ceilDiv4(n: number) {
   if (!Number.isFinite(n) || n <= 0) return 0;
