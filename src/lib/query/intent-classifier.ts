@@ -22,10 +22,10 @@ const ALL_KINDS: QueryKind[] = [
   "project_eta",
   "page_about",
   "project_summary",
-  "compare_pages",
   "risks_for",
   "onboarding_tasks",
   "semantic",
+  "smalltalk",
 ];
 
 const KIND_SET = new Set<QueryKind>(ALL_KINDS);
@@ -117,7 +117,8 @@ Intent guide:
 - project_eta: deadline/completion date
 - team_activity: most/least active person in a team/project (based on question wording)
 - team_roster: who is working on a project (all contributors, not only owner)
-- semantic: open-ended why/how, synthesis, or unclear
+- semantic: open-ended why/how, synthesis, or unclear factual inquiries
+- smalltalk: greetings (hi, hello), feedback/comments (thanks, nice, great), casual banter, jokes, playful remarks, laughing (hahaha), statements about feelings/moods (e.g., "she needs proper sleep"), or generic chatbot chit-chat that doesn't seek factual information from Notion.
 
 Rules:
 - personName = human name only (not "it", not "the project")

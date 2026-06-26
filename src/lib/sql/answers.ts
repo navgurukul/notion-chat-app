@@ -16,6 +16,7 @@ import {
   compactSnippet,
   formatCompareAnswer,
   formatCompactListItem,
+  formatDetailedListItem,
   formatCostEstimationPage,
   formatPageCard,
 } from "@/lib/sql/format-display";
@@ -620,7 +621,7 @@ function formatBlockerListAnswer(rows: NotionPageRow[], scopeLabel?: string) {
     for (const row of sectionRows) {
       const theme = inferProjectThemeForPage(row);
       lines.push(
-        `- ${formatCompactListItem(row, theme ? [theme] : undefined)}`,
+        `- ${formatDetailedListItem(row, theme ? [theme] : undefined)}`,
       );
     }
     lines.push("");
@@ -1309,7 +1310,7 @@ export async function handleMetadataQuery(
 
     const rows = await query<NotionPageRow>(
       `
-      SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status
+      SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
       FROM notion_pages
       WHERE
         lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
@@ -1366,13 +1367,7 @@ export async function handleMetadataQuery(
       formatListHeader(uniqueRows.length, label),
       "",
       formatRows(uniqueRows, (row) => {
-        const meta = [
-          `owner: ${row.owner || "Unknown"}`,
-          row.status ? `status: ${row.status}` : "",
-        ]
-          .filter(Boolean)
-          .join(" · ");
-        return `**${formatLink(row.title || "Untitled", row.url)}** — ${meta}`;
+        return formatDetailedListItem(row);
       }),
     );
 
@@ -1382,7 +1377,7 @@ export async function handleMetadataQuery(
   if (parsed.kind === "created_by_list" && person) {
     const rows = await query<NotionPageRow>(
       `
-      SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status
+      SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
       FROM notion_pages
       WHERE lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\'
       ORDER BY title ASC
@@ -1393,8 +1388,12 @@ export async function handleMetadataQuery(
     if (!rows.length) return null;
     return `${formatListHeader(rows.length, `created by ${person}`)}\n\n${formatRows(
       rows,
-      (row) =>
-        `**${formatLink(row.title || "Untitled", row.url)}** — created by: ${row.created_by || "Unknown"}`,
+      (row) => {
+        return formatDetailedListItem(
+          row,
+          [row.created_by ? `created by: ${row.created_by}` : ""].filter(Boolean),
+        );
+      },
     )}`;
   }
 
@@ -1493,7 +1492,7 @@ export async function handleMetadataQuery(
           "notion_edited_at" in row && row.notion_edited_at
             ? String(row.notion_edited_at).slice(0, 10)
             : "";
-        return formatCompactListItem(
+        return formatDetailedListItem(
           row,
           [
             row.owner ? `assignee: ${row.owner}` : "assignee: Unknown",
@@ -1616,16 +1615,15 @@ export async function handleMetadataQuery(
                 : row.match_source === "last editor"
                   ? `last edited by: ${row.last_edited_by || "Unknown"}`
                   : "mentioned";
-        const metadata = [
-          who,
-          row.status ? `status: ${row.status}` : "",
-          row.notion_edited_at
-            ? `last edited: ${new Date(row.notion_edited_at).toLocaleDateString()}`
-            : "",
-        ]
-          .filter(Boolean)
-          .join(" · ");
-        return `**${formatLink(row.title || "Untitled", row.url)}** — ${metadata}`;
+        return formatDetailedListItem(
+          row,
+          [
+            who,
+            row.notion_edited_at
+              ? `last edited: ${new Date(row.notion_edited_at).toLocaleDateString()}`
+              : "",
+          ].filter(Boolean),
+        );
       },
     )}`;
   }

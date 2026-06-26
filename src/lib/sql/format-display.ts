@@ -283,3 +283,87 @@ export function formatCompactListItem(
   const line = meta ? `${title} — ${meta}` : title;
   return snippet ? `${line}\n  _${snippet}_` : line;
 }
+
+export function formatDetailedListItem(
+  row: NotionPageRow & { content?: string | null },
+  extras?: string[],
+) {
+  const metaParts: string[] = [];
+
+  // 1. Status
+  if (row.status?.trim()) {
+    metaParts.push(`**${row.status.trim()}**`);
+  }
+
+  // 2. Owner/Assignee (avoiding duplicates if caller passes it in extras)
+  const ownerVal = row.owner?.trim();
+  const hasOwnerInExtras = extras?.some((e) => {
+    const lower = e.toLowerCase();
+    return (
+      (lower.startsWith("assignee:") || lower.startsWith("owner:")) &&
+      ownerVal &&
+      lower.includes(ownerVal.toLowerCase())
+    );
+  });
+
+  if (ownerVal && !hasOwnerInExtras) {
+    metaParts.push(`owner: ${ownerVal}`);
+  }
+
+  // 3. Extras
+  if (extras) {
+    for (const ext of extras) {
+      const trimmed = ext.trim();
+      if (!trimmed) continue;
+
+      const lowerExt = trimmed.toLowerCase();
+      if (
+        row.status &&
+        (lowerExt === row.status.toLowerCase() ||
+          lowerExt === `status: ${row.status.toLowerCase()}`)
+      ) {
+        continue;
+      }
+
+      metaParts.push(trimmed);
+    }
+  }
+
+  const metaStr = metaParts.join(" · ");
+  const title = formatDisplayLink(row.title || "Untitled", row.url);
+  const mainLine = metaStr ? `${title} — ${metaStr}` : title;
+
+  const lines = [mainLine];
+
+  // Extract Scope/Overview
+  const scope = extractScopeSummary(row.content, 4);
+  if (scope.length) {
+    lines.push("  - **What's Inside / Scope**:");
+    for (const s of scope) {
+      lines.push(`    - ${s}`);
+    }
+  }
+
+  // Extract Tasks/Checklist
+  const tasks = extractNotionTaskItems(row.content, 5);
+  if (tasks.length) {
+    lines.push("  - **Tasks**:");
+    for (const t of tasks) {
+      const cleanTask = t.startsWith("• ") ? t.slice(2) : t;
+      lines.push(`    - ${cleanTask}`);
+    }
+  }
+
+  // Fallback snippet if both are empty
+  if (!scope.length && !tasks.length) {
+    const snippet = compactSnippet(row.content, 250);
+    if (snippet) {
+      lines.push(`  - **Summary**: ${snippet}`);
+    } else {
+      lines.push(`  - _No additional content found in the synced page._`);
+    }
+  }
+
+  return lines.join("\n");
+}
+

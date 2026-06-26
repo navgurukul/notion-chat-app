@@ -81,7 +81,7 @@ export async function streamGeminiAnswer(
   const tStreamStart = performance.now();
   let stream: Awaited<ReturnType<typeof getChatStream>>;
   try {
-    stream = await getChatStream(message, enrichedContext, chatHistory, userEmotion);
+    stream = await getChatStream(message, enrichedContext, chatHistory, userEmotion, queryKind);
   } catch (error) {
     if (isGeminiQuotaError(error)) {
       if (sessionId) await addChatMessage(sessionId, "bot", GEMINI_QUOTA_USER_MESSAGE);
@@ -162,7 +162,7 @@ export async function streamGeminiAnswer(
         }
 
         const answerForStorage = extractFinalAnswer(rawAnswer);
-        if (sessionId && answerForStorage) {
+        if (sessionId && answerForStorage && !signal?.aborted) {
           try {
             await addChatMessage(sessionId, "bot", answerForStorage, userEmotion);
           } catch (error) {

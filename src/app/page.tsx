@@ -30,6 +30,35 @@ const emotionConfig: Record<string, { label: string; adjective: string; emoji: s
   neutral: { label: "Professional", adjective: "Professionally", emoji: "😐", classes: "bg-white/5 text-white/50 border-white/10" },
 };
 
+function injectEmojiIntoMarkdown(content: string, emoji: string): string {
+  if (!content) return content;
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().length === 0) continue;
+    
+    // Check if the line is a heading (starts with one or more '#' followed by space)
+    const headingMatch = line.match(/^(#{1,6}\s+)(.*)/);
+    if (headingMatch) {
+      lines[i] = `${headingMatch[1]}${emoji} ${headingMatch[2]}`;
+      return lines.join("\n");
+    }
+    
+    // Check if the line is a list item (starts with '-', '*', '+', or digit+.)
+    const listMatch = line.match(/^(\s*[-*+]\s+)(.*)/) || line.match(/^(\s*\d+\.\s+)(.*)/);
+    if (listMatch) {
+      lines[i] = `${listMatch[1]}${emoji} ${listMatch[2]}`;
+      return lines.join("\n");
+    }
+    
+    // Otherwise, prepend the emoji at the start of the first content line
+    lines[i] = `${emoji} ${line}`;
+    return lines.join("\n");
+  }
+  return `${emoji} ${content}`;
+}
+
+
 type ChatSession = {
   id: string;
   title: string;
@@ -160,8 +189,10 @@ export default function ChatPage() {
     sessionId: string,
     options?: { keepLocalBotIndex?: number },
   ) => {
+    if (sessionId !== activeSessionIdRef.current) return false;
     const response = await fetch(`/api/chats/${sessionId}/messages`);
     if (!response.ok) return false;
+    if (sessionId !== activeSessionIdRef.current) return false;
     const data = await response.json();
     const loadedMessages = Array.isArray(data?.messages) ? data.messages : [];
     const mapped: Message[] = loadedMessages.map((message: Message) => ({
@@ -534,6 +565,9 @@ const createNewChat = async () => {
         chatInFlightRef.current = false;
         botMessageIndexRef.current = null;
         pendingBotMessageIndexRef.current = null;
+        if (sessionId) {
+          await syncMessagesFromSession(sessionId);
+        }
       }
       clearThinkingAt(botIndex);
     }
@@ -815,7 +849,7 @@ const createNewChat = async () => {
             </div>
             <h3 className="text-xl font-bold mb-2">Sign out?</h3>
             <p className="text-white/60 text-sm mb-6 leading-relaxed">
-              You'll be signed out. Your chats are saved and will be here when you sign back in.
+              You&apos;ll be signed out. Your chats are saved and will be here when you sign back in.
             </p>
             <div className="flex gap-3">
               <button
@@ -1114,14 +1148,6 @@ const createNewChat = async () => {
                       </div>
                     ) : (
                       <div className="relative max-w-[80%] flex flex-col">
-                        {msg.emotion && msg.emotion !== "neutral" && (
-                          <div className={`inline-flex items-center gap-1.5 text-[10px] font-semibold tracking-wide uppercase px-2.5 py-0.5 rounded-full border ${
-                            msg.role === "user" ? "self-end" : "self-start"
-                          } ${emotionConfig[msg.emotion]?.classes || "bg-white/5 text-white/50 border-white/10"} mb-1.5 animate-in fade-in duration-300`}>
-                            <span>{emotionConfig[msg.emotion]?.emoji}</span>
-                            <span>{msg.role === "user" ? `${emotionConfig[msg.emotion]?.label} Vibe` : `Responding ${emotionConfig[msg.emotion]?.adjective}`}</span>
-                          </div>
-                        )}
                         <div className={`p-4 rounded-2xl ${msg.role === "user"
                           ? "bg-white/10 border border-white/10 rounded-tr-none"
                           : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
@@ -1145,7 +1171,9 @@ const createNewChat = async () => {
                                     ),
                                   }}
                                 >
-                                  {msg.content}
+                                  {msg.role === "bot" && msg.emotion && msg.emotion !== "neutral" && emotionConfig[msg.emotion]?.emoji
+                                    ? injectEmojiIntoMarkdown(msg.content, emotionConfig[msg.emotion].emoji)
+                                    : msg.content}
                                 </ReactMarkdown>
                               ) : null}
                             </div>

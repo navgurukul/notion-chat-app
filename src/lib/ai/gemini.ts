@@ -4,6 +4,7 @@ import {
   getJsonCompletion as getOpenAIJsonCompletion,
   getChatStream as getOpenAIChatStream,
 } from "@/lib/ai/openai";
+import type { QueryKind } from "@/lib/query/types";
 
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 const DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions";
@@ -78,6 +79,7 @@ function formatConversationHistory(history: ChatHistoryItem[] = []) {
 
 type SystemPromptOptions = {
   streaming?: boolean;
+  queryKind?: QueryKind | null;
 };
 
 function buildSystemPrompt(
@@ -94,11 +96,17 @@ function buildSystemPrompt(
   `
     : "";
 
-  return `
-    You are a helpful assistant for NavGurukul's synced Notion workspace.
-    The context below contains real page titles, URLs, status, owners, and body text from PostgreSQL.
-    Use the conversation history only for follow-ups and pronouns — not as facts.
+  const isSmalltalk = options.queryKind === "smalltalk";
 
+  const rules = isSmalltalk
+    ? `
+    RULES:
+    1. The user is engaging in casual conversation, small talk, greetings, feedback, jokes, or banter. You do NOT need to answer from the retrieved context. Rely on the conversation history to respond naturally.
+    2. Do NOT use structured sections (###) or bullet points. Reply with a short, warm, and natural conversational response.
+    3. Do NOT include a "Sources:" section.
+    4. Match the user's emotion/vibe naturally and playfully if appropriate.
+    `
+    : `
     RULES:
     1. Answer ONLY from the retrieved context. Do not invent facts, people, dates, or amounts.
     2. Start with a direct answer in 1–2 sentences, then ### sections with bullets (max 6–8 per section).
@@ -106,6 +114,14 @@ function buildSystemPrompt(
     4. If context is partial, say what you found and what is missing — do not guess.
     5. Only if the context has zero relevant pages, say: "I couldn't find this in the current Notion data."
     6. Page titles may include emoji; treat them as the same page name without emoji.
+    `;
+
+  return `
+    You are a helpful assistant for NavGurukul's synced Notion workspace.
+    The context below contains real page titles, URLs, status, owners, and body text from PostgreSQL.
+    Use the conversation history only for follow-ups and pronouns — not as facts.
+
+    ${rules}
 
     ${streamingInstruction}
 
@@ -212,16 +228,20 @@ async function requestDeepSeek(payload: unknown) {
   return response;
 }
 
-async function getDeepSeekResponse(prompt: string, context: string, history: ChatHistoryItem[]) {
+async function getDeepSeekResponse(
+  prompt: string,
+  context: string,
+  history: ChatHistoryItem[],
+  queryKind?: QueryKind | null,
+) {
   const response = await withRetry(
     () =>
       requestDeepSeek({
         model: getDeepSeekModel(),
-        messages: buildDeepSeekMessages(prompt, context, history),
+        messages: buildDeepSeekMessages(prompt, context, history, { queryKind }),
       }),
     "DeepSeek generateContent",
   );
-
   const data = (await response.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
   };
@@ -236,12 +256,13 @@ async function* getDeepSeekStream(
   prompt: string,
   context: string,
   history: ChatHistoryItem[],
+  queryKind?: QueryKind | null,
 ): AsyncGenerator<ChatStreamChunk> {
   const response = await withRetry(
     () =>
       requestDeepSeek({
         model: getDeepSeekModel(),
-        messages: buildDeepSeekMessages(prompt, context, history, { streaming: true }),
+        messages: buildDeepSeekMessages(prompt, context, history, { streaming: true, queryKind }),
         stream: true,
       }),
     "DeepSeek generateContentStream",
@@ -294,8 +315,9 @@ export async function getChatResponse(
   context: string,
   history: ChatHistoryItem[] = [],
   userEmotion?: string,
+  queryKind?: QueryKind | null,
 ) {
-  return await getOpenAIChatResponse(prompt, context, history, userEmotion);
+  return await getOpenAIChatResponse(prompt, context, history, userEmotion, queryKind);
 }
 
 export async function getJsonCompletion(systemPrompt: string, prompt: string) {
@@ -307,6 +329,7 @@ export async function getChatStream(
   context: string,
   history: ChatHistoryItem[] = [],
   userEmotion?: string,
+  queryKind?: QueryKind | null,
 ) {
-  return await getOpenAIChatStream(prompt, context, history, userEmotion);
+  return await getOpenAIChatStream(prompt, context, history, userEmotion, queryKind);
 }

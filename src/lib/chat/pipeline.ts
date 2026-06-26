@@ -228,12 +228,14 @@ export async function runChatPipeline(
       `Multiple people named **${session.user?.name}** found in Notion:\n${ambiguous
         .map((n) => `- ${n}`)
         .join("\n")}\n\nWhich one did you mean?`,
+      undefined,
+      signal,
     );
   }
 
   const ctx: PipelineContext = { message, history, sessionId };
 
-  const linkResponse = await tryNotionLinkAnswer(ctx, userEmotion);
+  const linkResponse = await tryNotionLinkAnswer(ctx, userEmotion, signal);
   if (linkResponse) return linkResponse;
 
   const tResolveStart = performance.now();
@@ -249,8 +251,35 @@ export async function runChatPipeline(
   });
   logParsedQuery(parsed);
 
+  if (parsed.kind === "smalltalk") {
+    return streamGeminiAnswer(
+      ctx.message,
+      "",
+      ctx.history,
+      ctx.sessionId,
+      parsed.kind,
+      signal,
+      {
+        tStart,
+        normalization: Math.round(dNormalization),
+        intentClassification: Math.round(dResolveQuery),
+        sqlAnswerAttempt: 0,
+        queryReformulation: 0,
+        queryExpansion: 0,
+        retrieval: 0,
+        expandedQueryCount: 0,
+        contextChars: 0,
+        topScore: 0,
+        avgScore: 0,
+        confidenceOk: true,
+        historyEntityUsed: false,
+      },
+      userEmotion,
+    );
+  }
+
   const tSqlStart = performance.now();
-  const sqlResponse = await trySqlAnswer(parsed, ctx, userEmotion);
+  const sqlResponse = await trySqlAnswer(parsed, ctx, userEmotion, signal);
   const dSqlAnswer = performance.now() - tSqlStart;
 
   if (sqlResponse) {
@@ -276,6 +305,7 @@ export async function runChatPipeline(
       sessionId,
       "Ask for a Notion link using the page title, e.g. **link for Employee Onboarding Hub**.",
       userEmotion,
+      signal,
     );
   }
 
@@ -324,22 +354,26 @@ export class ChatNotFoundError extends Error {
   }
 }
 
-async function jsonAnswer(sessionId: string | null, answer: string, emotion?: string) {
+async function jsonAnswer(sessionId: string | null, answer: string, emotion?: string, signal?: AbortSignal) {
+  if (signal?.aborted) {
+    return new Response(null, { status: 499 });
+  }
   if (sessionId) await addChatMessage(sessionId, "bot", answer, emotion);
   return NextResponse.json({ answer, emotion });
 }
 
-async function tryNotionLinkAnswer(ctx: PipelineContext, emotion?: string) {
+async function tryNotionLinkAnswer(ctx: PipelineContext, emotion?: string, signal?: AbortSignal) {
   if (!isNotionLinkRequest(ctx.message)) return null;
 
   const linkTitle = extractReferencedTitle(ctx.message, ctx.history);
   if (linkTitle) {
     const linkAnswer = await lookupPageLinkByTitle(linkTitle);
-    if (linkAnswer) return jsonAnswer(ctx.sessionId, linkAnswer, emotion);
+    if (linkAnswer) return jsonAnswer(ctx.sessionId, linkAnswer, emotion, signal);
     return jsonAnswer(
       ctx.sessionId,
       `I couldn't find a synced Notion page titled **${linkTitle}**. Use **Sync changes**, or ask with the exact page title from Notion.`,
       emotion,
+      signal,
     );
   }
 
@@ -348,7 +382,7 @@ async function tryNotionLinkAnswer(ctx: PipelineContext, emotion?: string) {
       ctx.history.length > 0
         ? "I couldn't resolve which page you mean from chat history. Ask again with the full page title, e.g. link for **Structuring the Product Team**."
         : "I couldn't resolve which page you mean — include the page title, or ask about a page first so chat history has context.";
-    return jsonAnswer(ctx.sessionId, unresolved, emotion);
+    return jsonAnswer(ctx.sessionId, unresolved, emotion, signal);
   }
 
   return null;
@@ -365,11 +399,13 @@ function logParsedQuery(parsed: ParsedQuery) {
   });
 }
 
-async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext, emotion?: string) {
-  if (parsed.kind === "semantic") return null;
+async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext, emotion?: string, signal?: AbortSignal) {
+  if (parsed.kind === "semantic" || parsed.kind === "smalltalk") return null;
 
   const metadataOnly = isMetadataOnlyKind(parsed.kind);
   const directAnswer = await handleMetadataQuery(parsed);
+
+  if (signal?.aborted) return null;
 
   console.log("[trySqlAnswer] debug", {
     kind: parsed.kind,
@@ -382,7 +418,7 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext, emotion?:
   if (metadataOnly) {
     if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer)) {
       logChatRoute("sql_hit", parsed, { answer_chars: directAnswer.length });
-      return jsonAnswer(ctx.sessionId, directAnswer, emotion);
+      return jsonAnswer(ctx.sessionId, directAnswer, emotion, signal);
     }
     if (
       parsed.kind === "team_activity" &&
@@ -396,12 +432,12 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext, emotion?:
     logChatRoute("sql_miss_metadata", parsed, {
       had_sql: Boolean(directAnswer),
     });
-    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed), emotion);
+    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed), emotion, signal);
   }
 
   if (directAnswer && !shouldFallbackToRag(parsed, directAnswer)) {
     logChatRoute("sql_hit", parsed, { answer_chars: directAnswer.length });
-    return jsonAnswer(ctx.sessionId, directAnswer, emotion);
+    return jsonAnswer(ctx.sessionId, directAnswer, emotion, signal);
   }
 
   if (directAnswer) {
@@ -426,9 +462,13 @@ async function tryRagAnswer(
   signal?: AbortSignal,
   userEmotion?: string,
 ) {
+  if (signal?.aborted) {
+    return new Response(null, { status: 499 });
+  }
+
   if (isMetadataOnlyKind(parsed.kind) && parsed.kind !== "team_activity") {
     logChatRoute("sql_miss_metadata", parsed, { blocked_rag: true });
-    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed), userEmotion);
+    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed), userEmotion, signal);
   }
 
   const titleBoost = resolveRagTitleBoost(parsed, ctx.message);
@@ -534,6 +574,7 @@ async function tryRagAnswer(
       ctx.sessionId,
       "I couldn't find matching pages in the synced Notion database. Try **Sync changes** in the sidebar, or rephrase with a project/person/page name from Notion.",
       userEmotion,
+      signal,
     );
   }
 
@@ -556,7 +597,7 @@ async function tryRagAnswer(
         ts: Date.now(),
       }),
     );
-    return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE, userEmotion);
+    return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE, userEmotion, signal);
   }
 
   return streamGeminiAnswer(

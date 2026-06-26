@@ -20,7 +20,8 @@ export type QueryKind =
   | "compare_pages"
   | "risks_for"
   | "onboarding_tasks"
-  | "semantic";
+  | "semantic"
+  | "smalltalk";
 
 export type QuerySource = "regex" | "llm" | "merged";
 

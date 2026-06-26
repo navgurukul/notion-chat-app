@@ -3,6 +3,8 @@ export type ChatHistoryItem = {
   content: string;
 };
 
+import type { QueryKind } from "@/lib/query/types";
+
 type ChatStreamChunk = { text: () => string };
 export type ChatStream = AsyncIterable<ChatStreamChunk>;
 
@@ -37,6 +39,7 @@ function formatConversationHistory(history: ChatHistoryItem[] = []) {
 type SystemPromptOptions = {
   streaming?: boolean;
   userEmotion?: string;
+  queryKind?: QueryKind | null;
 };
 
 function getEmotionInstruction(emotion?: string): string {
@@ -97,11 +100,17 @@ function buildSystemPrompt(
     `
     : "";
 
-  return `
-    You are a helpful assistant for NavGurukul's synced Notion workspace.
-    The context below contains real page titles, URLs, status, owners, and body text from PostgreSQL.
-    Use the conversation history only for follow-ups and pronouns — not as facts.
+  const isSmalltalk = options.queryKind === "smalltalk";
 
+  const rules = isSmalltalk
+    ? `
+    RULES:
+    1. The user is engaging in casual conversation, small talk, greetings, feedback, jokes, or banter. You do NOT need to answer from the retrieved context. Rely on the conversation history to respond naturally.
+    2. Do NOT use structured sections (###) or bullet points. Reply with a short, warm, and natural conversational response.
+    3. Do NOT include a "Sources:" section.
+    4. Match the user's emotion/vibe naturally and playfully if appropriate.
+    `
+    : `
     RULES:
     1. Answer ONLY from the retrieved context. Do not invent facts, people, dates, or amounts.
     2. Start with a direct answer in 1–2 sentences, then ### sections with bullets (max 6–8 per section).
@@ -109,6 +118,14 @@ function buildSystemPrompt(
     4. If context is partial, say what you found and what is missing — do not guess.
     5. Only if the context has zero relevant pages, say: "I couldn't find this in the current Notion data."
     6. Page titles may include emoji; treat them as the same page name without emoji.
+    `;
+
+  return `
+    You are a helpful assistant for NavGurukul's synced Notion workspace.
+    The context below contains real page titles, URLs, status, owners, and body text from PostgreSQL.
+    Use the conversation history only for follow-ups and pronouns — not as facts.
+
+    ${rules}
 
     ${streamingInstruction}
     ${emotionInstruction}
@@ -189,11 +206,12 @@ export async function getChatResponse(
   context: string,
   history: ChatHistoryItem[] = [],
   userEmotion?: string,
+  queryKind?: QueryKind | null,
 ) {
   const apiKey = requireEnv("OPENAI_API_KEY");
   const model = getOpenAIChatModel();
 
-  const messages = buildMessages(prompt, context, history, { userEmotion });
+  const messages = buildMessages(prompt, context, history, { userEmotion, queryKind });
 
   const result = await withRetry(
     async () => {
@@ -282,11 +300,12 @@ export async function getChatStream(
   context: string,
   history: ChatHistoryItem[] = [],
   userEmotion?: string,
+  queryKind?: QueryKind | null,
 ): Promise<ChatStream> {
   const apiKey = requireEnv("OPENAI_API_KEY");
   const model = getOpenAIChatModel();
 
-  const systemPrompt = buildSystemPrompt(context, history, { streaming: true, userEmotion });
+  const systemPrompt = buildSystemPrompt(context, history, { streaming: true, userEmotion, queryKind });
   const messages = [
     { role: "system", content: systemPrompt },
     { role: "user", content: prompt },
