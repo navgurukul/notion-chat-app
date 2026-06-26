@@ -1,7 +1,7 @@
 import type { ParsedQuery } from "@/lib/query/types";
 import type { ChunkRetrievalHit, RetrievalConfidenceResult } from "@/lib/rag/retrieval-confidence";
 
-export type RouteDecision = "sql_hit" | "sql_miss_metadata" | "sql_weak_rag" | "semantic_rag" | "link";
+export type RouteDecision = "sql_hit" | "sql_miss_metadata" | "sql_weak_rag" | "semantic_rag" | "link" | "sql_synthesis_stream";
 
 export function logChatRoute(decision: RouteDecision, parsed: ParsedQuery, extra?: Record<string, unknown>) {
   if (process.env.NODE_ENV === "production" && process.env.CHAT_DEBUG !== "true") return;
