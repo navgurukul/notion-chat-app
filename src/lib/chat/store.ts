@@ -15,6 +15,7 @@ export type ChatMessageRow = {
   session_id: string;
   role: "user" | "bot";
   content: string;
+  emotion?: string;
   created_at: string;
 };
 
@@ -126,9 +127,9 @@ export async function ensureSessionBelongsToUser(sessionId: string, userId: stri
 export async function listChatMessages(sessionId: string, limit = CHAT_HISTORY_LIMIT) {
   return query<ChatMessageRow>(
     `
-    SELECT id, session_id, role, content, created_at::text
+    SELECT id, session_id, role, content, emotion, created_at::text
     FROM (
-      SELECT id, session_id, role, content, created_at
+      SELECT id, session_id, role, content, emotion, created_at
       FROM chat_messages
       WHERE session_id = $1
       ORDER BY created_at DESC
@@ -140,14 +141,14 @@ export async function listChatMessages(sessionId: string, limit = CHAT_HISTORY_L
   );
 }
 
-export async function addChatMessage(sessionId: string, role: "user" | "bot", content: string) {
+export async function addChatMessage(sessionId: string, role: "user" | "bot", content: string, emotion?: string) {
   const rows = await query<ChatMessageRow>(
     `
-    INSERT INTO chat_messages (session_id, role, content)
-    VALUES ($1, $2, $3)
-    RETURNING id, session_id, role, content, created_at::text
+    INSERT INTO chat_messages (session_id, role, content, emotion)
+    VALUES ($1, $2, $3, $4)
+    RETURNING id, session_id, role, content, emotion, created_at::text
     `,
-    [sessionId, role, content],
+    [sessionId, role, content, emotion ?? null],
   );
 
   if (role === "user") {

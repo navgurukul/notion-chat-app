@@ -95,4 +95,5 @@ export function assessRetrievalConfidence(
 }
 
 export const RETRIEVAL_REFUSAL_MESSAGE =
-  "I couldn't find enough evidence in the synced Notion database to answer confidently. Try **Sync changes**, use an exact page or project name from Notion, or rephrase with more specific keywords.";
+  "I couldn’t confidently answer from the currently synced Notion data. I found some related context but it may be incomplete—try **Sync changes**, include the exact project/person/page title from Notion, or rephrase with more specific keywords.";
+

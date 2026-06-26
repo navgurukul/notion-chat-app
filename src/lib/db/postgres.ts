@@ -58,6 +58,11 @@ const CORE_COLUMN_MIGRATIONS: ColumnMigration[] = [
     column: "updated_at",
     definition: "TIMESTAMP DEFAULT NOW()",
   },
+  {
+    table: "chat_messages",
+    column: "emotion",
+    definition: "TEXT",
+  },
 ];
 
 const NOTION_PAGE_COLUMN_MIGRATIONS: ColumnMigration[] = [
@@ -298,6 +303,7 @@ export async function ensureSchema() {
           session_id UUID REFERENCES chat_sessions(id) ON DELETE CASCADE,
           role TEXT NOT NULL,
           content TEXT NOT NULL,
+          emotion TEXT,
           created_at TIMESTAMP DEFAULT NOW()
         );
       `,

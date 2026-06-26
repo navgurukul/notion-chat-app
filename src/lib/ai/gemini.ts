@@ -293,8 +293,9 @@ export async function getChatResponse(
   prompt: string,
   context: string,
   history: ChatHistoryItem[] = [],
+  userEmotion?: string,
 ) {
-  return await getOpenAIChatResponse(prompt, context, history);
+  return await getOpenAIChatResponse(prompt, context, history, userEmotion);
 }
 
 export async function getJsonCompletion(systemPrompt: string, prompt: string) {
@@ -305,6 +306,7 @@ export async function getChatStream(
   prompt: string,
   context: string,
   history: ChatHistoryItem[] = [],
+  userEmotion?: string,
 ) {
-  return await getOpenAIChatStream(prompt, context, history);
+  return await getOpenAIChatStream(prompt, context, history, userEmotion);
 }

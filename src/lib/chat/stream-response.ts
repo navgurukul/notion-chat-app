@@ -13,6 +13,20 @@ const STATUS_KINDS = new Set<QueryKind>([
   "risks_for",
 ]);
 
+const BASE_DIRECTIVE = `
+## Conversation style
+You are a helpful workplace assistant for NavGurukul.
+Talk like a knowledgeable colleague, not a search engine.
+
+Rules:
+- Be warm and direct. If you found the answer, say it clearly without unnecessary caveats.
+- If the user asks a follow-up (e.g. "tell me more", "what about X"), build on what was discussed before.
+- Never say "I couldn't find information" if you have partial information — share what you found and note what's missing.
+- Give complete answers. Don't truncate.
+- If multiple people share a name, explicitly disambiguate based on context.
+
+`.trimStart();
+
 const STATUS_SYNTHESIS_DIRECTIVE = `
 ## Answering instructions
 The user is asking about the status or progress of a project. The context below may come from multiple Notion pages about the same project.
@@ -31,9 +45,11 @@ function buildEnrichedContext(
   notionContext: string,
   queryKind: QueryKind | null,
 ): string {
-  if (!queryKind || !STATUS_KINDS.has(queryKind)) return notionContext;
-  return `${STATUS_SYNTHESIS_DIRECTIVE}${notionContext}`;
+  const base = `${BASE_DIRECTIVE}${notionContext}`;
+  if (!queryKind || !STATUS_KINDS.has(queryKind)) return base;
+  return `${STATUS_SYNTHESIS_DIRECTIVE}${base}`;
 }
+
 
 /** Stream Gemini tokens to the browser and save the final answer to the chat session. */
 export async function streamGeminiAnswer(
@@ -43,12 +59,29 @@ export async function streamGeminiAnswer(
   sessionId: string | null,
   queryKind: QueryKind | null = null,
   signal?: AbortSignal,
+  telemetryMetadata?: {
+    tStart: number;
+    normalization: number;
+    intentClassification: number;
+    sqlAnswerAttempt: number;
+    queryReformulation: number;
+    queryExpansion: number;
+    retrieval: number;
+    expandedQueryCount: number;
+    contextChars: number;
+    topScore: number;
+    avgScore: number;
+    confidenceOk: boolean;
+    historyEntityUsed: boolean;
+  },
+  userEmotion?: string,
 ) {
   const enrichedContext = buildEnrichedContext(notionContext, queryKind);
 
+  const tStreamStart = performance.now();
   let stream: Awaited<ReturnType<typeof getChatStream>>;
   try {
-    stream = await getChatStream(message, enrichedContext, chatHistory);
+    stream = await getChatStream(message, enrichedContext, chatHistory, userEmotion);
   } catch (error) {
     if (isGeminiQuotaError(error)) {
       if (sessionId) await addChatMessage(sessionId, "bot", GEMINI_QUOTA_USER_MESSAGE);
@@ -59,12 +92,14 @@ export async function streamGeminiAnswer(
     }
     throw error;
   }
+  const dGetChatStream = performance.now() - tStreamStart;
 
   const encoder = new TextEncoder();
 
   const readableStream = new ReadableStream({
     async start(controller) {
       let rawAnswer = "";
+      let firstTokenTime = 0;
       try {
         for await (const chunk of stream) {
           if (signal?.aborted) {
@@ -72,6 +107,9 @@ export async function streamGeminiAnswer(
           }
           const text = chunk.text();
           rawAnswer += text;
+          if (firstTokenTime === 0 && text.trim().length > 0) {
+            firstTokenTime = performance.now();
+          }
           controller.enqueue(encoder.encode(text));
         }
       } catch (error) {
@@ -80,10 +118,53 @@ export async function streamGeminiAnswer(
         rawAnswer += errorText;
         controller.enqueue(encoder.encode(errorText));
       } finally {
+        const tEnd = performance.now();
+        const totalDuration = tEnd - (telemetryMetadata?.tStart ?? tStreamStart);
+        const ttft = firstTokenTime > 0 ? (firstTokenTime - (telemetryMetadata?.tStart ?? tStreamStart)) : 0;
+
+        if (telemetryMetadata) {
+          console.log(
+            "[telemetry]",
+            JSON.stringify({
+              kind: queryKind,
+              expandedQueryCount: telemetryMetadata.expandedQueryCount,
+              contextChars: telemetryMetadata.contextChars,
+              topScore: telemetryMetadata.topScore,
+              avgScore: telemetryMetadata.avgScore,
+              confidenceOk: telemetryMetadata.confidenceOk,
+              historyEntityUsed: telemetryMetadata.historyEntityUsed,
+              durations: {
+                normalization: telemetryMetadata.normalization,
+                intentClassification: telemetryMetadata.intentClassification,
+                sqlAnswerAttempt: telemetryMetadata.sqlAnswerAttempt,
+                queryReformulation: telemetryMetadata.queryReformulation,
+                queryExpansion: telemetryMetadata.queryExpansion,
+                retrieval: telemetryMetadata.retrieval,
+                getChatStream: Math.round(dGetChatStream),
+                ttft: Math.round(ttft),
+                total: Math.round(totalDuration),
+              },
+              ts: Date.now(),
+            }),
+          );
+        } else {
+          console.log(
+            "[telemetry]",
+            JSON.stringify({
+              kind: queryKind,
+              durations: {
+                getChatStream: Math.round(dGetChatStream),
+                total: Math.round(totalDuration),
+              },
+              ts: Date.now(),
+            }),
+          );
+        }
+
         const answerForStorage = extractFinalAnswer(rawAnswer);
         if (sessionId && answerForStorage) {
           try {
-            await addChatMessage(sessionId, "bot", answerForStorage);
+            await addChatMessage(sessionId, "bot", answerForStorage, userEmotion);
           } catch (error) {
             console.error("Failed to persist bot message:", error);
           }
@@ -94,6 +175,9 @@ export async function streamGeminiAnswer(
   });
 
   return new Response(readableStream, {
-    headers: { "Content-Type": "text/plain; charset=utf-8" },
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      ...(userEmotion ? { "X-User-Emotion": userEmotion } : {}),
+    },
   });
 }

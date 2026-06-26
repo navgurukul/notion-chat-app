@@ -36,7 +36,43 @@ function formatConversationHistory(history: ChatHistoryItem[] = []) {
 
 type SystemPromptOptions = {
   streaming?: boolean;
+  userEmotion?: string;
 };
+
+function getEmotionInstruction(emotion?: string): string {
+  if (!emotion) return "";
+  switch (emotion) {
+    case "funny":
+      return `
+      - The user is in a playful/funny mood. Match their vibe! Inject clean workspace-friendly humor, wit, or lighthearted jokes in your response where appropriate. Do not be overly stiff or robotic. Keep it professional but fun and entertaining.
+      `;
+    case "happy":
+      return `
+      - The user is in a great/happy mood! Be enthusiastic, positive, and warm. Celebrate achievements or progress mentioned, and use encouraging language.
+      `;
+    case "sad":
+      return `
+      - The user seems down or sad. Show empathy, be extremely gentle, supportive, and kind. Keep your tone soft, understanding, and reassuring.
+      `;
+    case "angry":
+      return `
+      - The user seems angry or upset. Maintain a calm, patient, and highly professional demeanor. Be extremely polite, brief, and de-escalate with helpful facts. Do not match their anger.
+      `;
+    case "frustrated":
+      return `
+      - The user is frustrated. Be validating and action-oriented. Empathize briefly with their frustration, then provide extremely clear, structured, and direct answers to help resolve their issue immediately.
+      `;
+    case "curious":
+      return `
+      - The user is highly curious and wants to explore. Provide a slightly more detailed explanation of concepts, suggest areas they might want to inspect further, and keep an open, inviting tone.
+      `;
+    case "neutral":
+    default:
+      return `
+      - Keep a standard professional, helpful colleague tone.
+      `;
+  }
+}
 
 function buildSystemPrompt(
   context: string,
@@ -50,6 +86,15 @@ function buildSystemPrompt(
     Do not include internal reasoning (e.g. "I will scan the chunks", "The user is asking").
     Start with the answer immediately.
   `
+    : "";
+
+  const emotionInstruction = options.userEmotion
+    ? `
+    USER EMOTION/MOOD ADAPTATION:
+    The user is currently expressing the emotion/mood: "${options.userEmotion}".
+    ${getEmotionInstruction(options.userEmotion)}
+    Adjust your tone, vocabulary, style, and approach to naturally engage and match/respond to this mood while strictly preserving all context facts, rules, and sources below.
+    `
     : "";
 
   return `
@@ -66,6 +111,7 @@ function buildSystemPrompt(
     6. Page titles may include emoji; treat them as the same page name without emoji.
 
     ${streamingInstruction}
+    ${emotionInstruction}
 
     Conversation history:
     ---
@@ -142,11 +188,12 @@ export async function getChatResponse(
   prompt: string,
   context: string,
   history: ChatHistoryItem[] = [],
+  userEmotion?: string,
 ) {
   const apiKey = requireEnv("OPENAI_API_KEY");
   const model = getOpenAIChatModel();
 
-  const messages = buildMessages(prompt, context, history);
+  const messages = buildMessages(prompt, context, history, { userEmotion });
 
   const result = await withRetry(
     async () => {
@@ -234,11 +281,12 @@ export async function getChatStream(
   prompt: string,
   context: string,
   history: ChatHistoryItem[] = [],
+  userEmotion?: string,
 ): Promise<ChatStream> {
   const apiKey = requireEnv("OPENAI_API_KEY");
   const model = getOpenAIChatModel();
 
-  const systemPrompt = buildSystemPrompt(context, history, { streaming: true });
+  const systemPrompt = buildSystemPrompt(context, history, { streaming: true, userEmotion });
   const messages = [
     { role: "system", content: systemPrompt },
     { role: "user", content: prompt },

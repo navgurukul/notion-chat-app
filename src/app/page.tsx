@@ -17,7 +17,18 @@ interface Message {
   id?: string;
   role: "user" | "bot";
   content: string;
+  emotion?: string;
 }
+
+const emotionConfig: Record<string, { label: string; adjective: string; emoji: string; classes: string }> = {
+  funny: { label: "Playful", adjective: "Playfully", emoji: "😜", classes: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
+  happy: { label: "Happy", adjective: "Warmly", emoji: "😊", classes: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" },
+  sad: { label: "Gentle", adjective: "Gently", emoji: "😢", classes: "bg-indigo-500/10 text-indigo-400 border-indigo-500/20" },
+  angry: { label: "Patient", adjective: "Patiently", emoji: "😐", classes: "bg-rose-500/10 text-rose-400 border-rose-500/20" },
+  frustrated: { label: "Action-oriented", adjective: "Directly", emoji: "😤", classes: "bg-orange-500/10 text-orange-400 border-orange-500/20" },
+  curious: { label: "Curious", adjective: "Curiously", emoji: "🧐", classes: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" },
+  neutral: { label: "Professional", adjective: "Professionally", emoji: "😐", classes: "bg-white/5 text-white/50 border-white/10" },
+};
 
 type ChatSession = {
   id: string;
@@ -157,6 +168,7 @@ export default function ChatPage() {
       id: message.id,
       role: message.role,
       content: message.content,
+      emotion: message.emotion,
     }));
 
     setMessages((prev) => {
@@ -171,7 +183,7 @@ export default function ChatPage() {
       if (localBot.length <= remoteBot.length) return mapped;
 
       const merged = [...mapped];
-      merged[lastBotIdx] = { role: "bot", content: localBot };
+      merged[lastBotIdx] = { role: "bot", content: localBot, emotion: mapped[lastBotIdx]?.emotion };
       return merged;
     });
     setThinkingByMessage({});
@@ -207,6 +219,7 @@ export default function ChatPage() {
             id: message.id,
             role: message.role,
             content: message.content,
+            emotion: message.emotion,
           })),
         );
         setThinkingByMessage({});
@@ -402,6 +415,7 @@ const createNewChat = async () => {
       });
 
       const contentType = response.headers.get("content-type") ?? "";
+      const userEmotion = response.headers.get("X-User-Emotion");
 
       if (contentType.includes("application/json")) {
         const data: unknown = await response.json();
@@ -419,9 +433,24 @@ const createNewChat = async () => {
           typeof (data as { error: unknown }).error === "string"
             ? (data as { error: string }).error
             : null;
+        const emotion =
+          data &&
+          typeof data === "object" &&
+          "emotion" in data &&
+          typeof (data as { emotion: unknown }).emotion === "string"
+            ? (data as { emotion: string }).emotion
+            : null;
 
         if (answer !== null) {
           setBotMessageAt(botIndex, answer);
+          if (emotion) {
+            setMessages((prev) => {
+              const next = [...prev];
+              if (next[botIndex - 1]) next[botIndex - 1].emotion = emotion;
+              if (next[botIndex]) next[botIndex].emotion = emotion;
+              return next;
+            });
+          }
           clearThinkingAt(botIndex);
           await syncMessagesFromSession(sessionId);
           refreshChatSessions().catch((error) => console.error("Failed to refresh chats:", error));
@@ -442,6 +471,15 @@ const createNewChat = async () => {
         setBotMessageAt(botIndex, errText || "Failed to get response");
         clearThinkingAt(botIndex);
         return;
+      }
+
+      if (userEmotion) {
+        setMessages((prev) => {
+          const next = [...prev];
+          if (next[botIndex - 1]) next[botIndex - 1].emotion = userEmotion;
+          if (next[botIndex]) next[botIndex].emotion = userEmotion;
+          return next;
+        });
       }
 
       const reader = response.body?.getReader();
@@ -1075,7 +1113,15 @@ const createNewChat = async () => {
                         </div>
                       </div>
                     ) : (
-                      <div className="relative max-w-[80%]">
+                      <div className="relative max-w-[80%] flex flex-col">
+                        {msg.emotion && msg.emotion !== "neutral" && (
+                          <div className={`inline-flex items-center gap-1.5 text-[10px] font-semibold tracking-wide uppercase px-2.5 py-0.5 rounded-full border ${
+                            msg.role === "user" ? "self-end" : "self-start"
+                          } ${emotionConfig[msg.emotion]?.classes || "bg-white/5 text-white/50 border-white/10"} mb-1.5 animate-in fade-in duration-300`}>
+                            <span>{emotionConfig[msg.emotion]?.emoji}</span>
+                            <span>{msg.role === "user" ? `${emotionConfig[msg.emotion]?.label} Vibe` : `Responding ${emotionConfig[msg.emotion]?.adjective}`}</span>
+                          </div>
+                        )}
                         <div className={`p-4 rounded-2xl ${msg.role === "user"
                           ? "bg-white/10 border border-white/10 rounded-tr-none"
                           : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"

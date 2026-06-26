@@ -17,6 +17,7 @@ import { reformulateSearchQuery } from "@/lib/chat/query-reformulation";
 import { streamGeminiAnswer } from "@/lib/chat/stream-response";
 import { resolveQuery } from "@/lib/query/resolve-query";
 import { detectIntent } from "@/lib/query/intent";
+import { analyzeUserEmotion } from "@/lib/chat/emotion";
 import { extractYear } from "@/lib/query/year";
 import type { ParsedQuery } from "@/lib/query/types";
 import { handleMetadataQuery, lookupPageLinkByTitle } from "@/lib/sql/answers";
@@ -118,7 +119,19 @@ function extractLastEntityFromHistory(history: ChatHistoryItem[]): {
 
   for (const item of recentHistory) {
     const content = item.content;
+
     const boldMatches = [...content.matchAll(/\*\*([^*]{2,60})\*\*/g)];
+    const backtickMatches = [...content.matchAll(/`([^`]{2,60})`/g)];
+
+    // e.g. "Title: Employee Onboarding Hub"
+    const titlePrefixMatch = content.match(/^Title:\s*(.+)$/m);
+    const titlePrefixCandidate = titlePrefixMatch?.[1] ?? null;
+
+    const allCandidateSources: Array<[RegExpMatchArray | null, string]> = [];
+    for (const m of boldMatches) allCandidateSources.push([m, m[1]]);
+    for (const m of backtickMatches) allCandidateSources.push([m, m[1]]);
+    if (titlePrefixCandidate) allCandidateSources.push([null, titlePrefixCandidate]);
+
 
     // Pattern 1: "X is assigned to: Person" → lastProject = X
     const assignedToMatch = content.match(
@@ -136,9 +149,10 @@ function extractLastEntityFromHistory(history: ChatHistoryItem[]): {
       return { lastProject: aboutMatch[1].trim() };
     }
 
-    // Pattern 3: Bold title near project keywords
-    for (const match of boldMatches) {
-      const candidate = match[1].trim();
+    // Pattern 3: Title near project keywords
+    for (const [, rawCandidate] of allCandidateSources) {
+      const candidate = rawCandidate.trim();
+      if (!candidate) continue;
 
       if (
         /^(status|owner|done|backlog|unknown|open|closed|in progress|testing|blocked|not started|sync changes)$/i.test(
@@ -149,9 +163,10 @@ function extractLastEntityFromHistory(history: ChatHistoryItem[]): {
       if (candidate.split(/\s+/).length > 6) continue;
       if (candidate.length < 3) continue;
 
+      const idx = content.indexOf(rawCandidate);
       const surrounding = content.slice(
-        Math.max(0, (match.index ?? 0) - 50),
-        (match.index ?? 0) + 100,
+        Math.max(0, (idx ?? 0) - 50),
+        Math.min(content.length, (idx ?? 0) + 100),
       );
 
       if (
@@ -164,22 +179,23 @@ function extractLastEntityFromHistory(history: ChatHistoryItem[]): {
     }
 
     // Pattern 4: Person near ownership label
-    for (const match of boldMatches) {
-      const candidate = match[1].trim();
+    for (const [, rawCandidate] of allCandidateSources) {
+      const candidate = rawCandidate.trim();
+      if (!candidate) continue;
+
+      const idx = content.indexOf(rawCandidate);
       const surrounding = content.slice(
-        Math.max(0, (match.index ?? 0) - 40),
-        (match.index ?? 0) + 80,
+        Math.max(0, (idx ?? 0) - 40),
+        Math.min(content.length, (idx ?? 0) + 80),
       );
-      if (
-        /\b(owner|assignee|created by|assigned to|working on)\b/i.test(
-          surrounding,
-        )
-      ) {
+
+      if (/\b(owner|assignee|created by|assigned to|working on)\b/i.test(surrounding)) {
         if (candidate.split(/\s+/).length <= 3 && candidate.length >= 3) {
           return { lastPerson: candidate };
         }
       }
     }
+
   }
 
   return {};
@@ -190,11 +206,21 @@ export async function runChatPipeline(
   body: ChatRequestBody,
   signal?: AbortSignal,
 ) {
-  const rawMessage = validateMessage(body.message);
-  const sessionId = await attachSession(session, body.sessionId, rawMessage);
+  const tStart = performance.now();
 
+  const rawMessage = validateMessage(body.message);
+  const history = sanitizeChatHistory(body.history);
+
+  // 1. Analyze emotion!
+  const emotionAnalysis = await analyzeUserEmotion(rawMessage, history);
+  const userEmotion = emotionAnalysis.emotion;
+
+  const sessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion);
+
+  const tNormStart = performance.now();
   const normalized = await normalizeLanguage(rawMessage);
   const { message, ambiguous } = await resolveFirstPerson(normalized, session);
+  const dNormalization = performance.now() - tNormStart;
 
   if (ambiguous?.length) {
     return jsonAnswer(
@@ -205,13 +231,15 @@ export async function runChatPipeline(
     );
   }
 
-  const history = sanitizeChatHistory(body.history);
   const ctx: PipelineContext = { message, history, sessionId };
 
-  const linkResponse = await tryNotionLinkAnswer(ctx);
+  const linkResponse = await tryNotionLinkAnswer(ctx, userEmotion);
   if (linkResponse) return linkResponse;
 
+  const tResolveStart = performance.now();
   const parsed = await resolveQuery(message);
+  const dResolveQuery = performance.now() - tResolveStart;
+
   console.log("[query_debug]", {
     query: message,
     intent: detectIntent(message),
@@ -221,17 +249,42 @@ export async function runChatPipeline(
   });
   logParsedQuery(parsed);
 
-  const sqlResponse = await trySqlAnswer(parsed, ctx);
-  if (sqlResponse) return sqlResponse;
+  const tSqlStart = performance.now();
+  const sqlResponse = await trySqlAnswer(parsed, ctx, userEmotion);
+  const dSqlAnswer = performance.now() - tSqlStart;
+
+  if (sqlResponse) {
+    console.log(
+      "[telemetry]",
+      JSON.stringify({
+        kind: parsed.kind,
+        sqlHit: true,
+        durations: {
+          normalization: Math.round(dNormalization),
+          intentClassification: Math.round(dResolveQuery),
+          sqlAnswerAttempt: Math.round(dSqlAnswer),
+          total: Math.round(performance.now() - tStart),
+        },
+        ts: Date.now(),
+      }),
+    );
+    return sqlResponse;
+  }
 
   if (isNotionLinkRequest(message)) {
     return jsonAnswer(
       sessionId,
       "Ask for a Notion link using the page title, e.g. **link for Employee Onboarding Hub**.",
+      userEmotion,
     );
   }
 
-  return tryRagAnswer(parsed, ctx, session, signal);
+  return tryRagAnswer(parsed, ctx, session, {
+    tStart,
+    dNormalization,
+    dResolveQuery,
+    dSqlAnswer,
+  }, signal, userEmotion);
 }
 
 function validateMessage(raw: unknown) {
@@ -252,6 +305,7 @@ async function attachSession(
   session: Session,
   rawSessionId: unknown,
   message: string,
+  userEmotion?: string,
 ): Promise<string | null> {
   if (typeof rawSessionId !== "string" || !rawSessionId.trim()) return null;
 
@@ -259,7 +313,7 @@ async function attachSession(
   const ownsSession = await ensureSessionBelongsToUser(rawSessionId, user.id);
   if (!ownsSession) throw new ChatNotFoundError();
 
-  await addChatMessage(rawSessionId, "user", message);
+  await addChatMessage(rawSessionId, "user", message, userEmotion);
   return rawSessionId;
 }
 
@@ -270,21 +324,22 @@ export class ChatNotFoundError extends Error {
   }
 }
 
-async function jsonAnswer(sessionId: string | null, answer: string) {
-  if (sessionId) await addChatMessage(sessionId, "bot", answer);
-  return NextResponse.json({ answer });
+async function jsonAnswer(sessionId: string | null, answer: string, emotion?: string) {
+  if (sessionId) await addChatMessage(sessionId, "bot", answer, emotion);
+  return NextResponse.json({ answer, emotion });
 }
 
-async function tryNotionLinkAnswer(ctx: PipelineContext) {
+async function tryNotionLinkAnswer(ctx: PipelineContext, emotion?: string) {
   if (!isNotionLinkRequest(ctx.message)) return null;
 
   const linkTitle = extractReferencedTitle(ctx.message, ctx.history);
   if (linkTitle) {
     const linkAnswer = await lookupPageLinkByTitle(linkTitle);
-    if (linkAnswer) return jsonAnswer(ctx.sessionId, linkAnswer);
+    if (linkAnswer) return jsonAnswer(ctx.sessionId, linkAnswer, emotion);
     return jsonAnswer(
       ctx.sessionId,
       `I couldn't find a synced Notion page titled **${linkTitle}**. Use **Sync changes**, or ask with the exact page title from Notion.`,
+      emotion,
     );
   }
 
@@ -293,7 +348,7 @@ async function tryNotionLinkAnswer(ctx: PipelineContext) {
       ctx.history.length > 0
         ? "I couldn't resolve which page you mean from chat history. Ask again with the full page title, e.g. link for **Structuring the Product Team**."
         : "I couldn't resolve which page you mean — include the page title, or ask about a page first so chat history has context.";
-    return jsonAnswer(ctx.sessionId, unresolved);
+    return jsonAnswer(ctx.sessionId, unresolved, emotion);
   }
 
   return null;
@@ -310,7 +365,7 @@ function logParsedQuery(parsed: ParsedQuery) {
   });
 }
 
-async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
+async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext, emotion?: string) {
   if (parsed.kind === "semantic") return null;
 
   const metadataOnly = isMetadataOnlyKind(parsed.kind);
@@ -327,7 +382,7 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
   if (metadataOnly) {
     if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer)) {
       logChatRoute("sql_hit", parsed, { answer_chars: directAnswer.length });
-      return jsonAnswer(ctx.sessionId, directAnswer);
+      return jsonAnswer(ctx.sessionId, directAnswer, emotion);
     }
     if (
       parsed.kind === "team_activity" &&
@@ -341,12 +396,12 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext) {
     logChatRoute("sql_miss_metadata", parsed, {
       had_sql: Boolean(directAnswer),
     });
-    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed));
+    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed), emotion);
   }
 
   if (directAnswer && !shouldFallbackToRag(parsed, directAnswer)) {
     logChatRoute("sql_hit", parsed, { answer_chars: directAnswer.length });
-    return jsonAnswer(ctx.sessionId, directAnswer);
+    return jsonAnswer(ctx.sessionId, directAnswer, emotion);
   }
 
   if (directAnswer) {
@@ -362,11 +417,18 @@ async function tryRagAnswer(
   parsed: ParsedQuery,
   ctx: PipelineContext,
   session: Session,
+  timings: {
+    tStart: number;
+    dNormalization: number;
+    dResolveQuery: number;
+    dSqlAnswer: number;
+  },
   signal?: AbortSignal,
+  userEmotion?: string,
 ) {
   if (isMetadataOnlyKind(parsed.kind) && parsed.kind !== "team_activity") {
     logChatRoute("sql_miss_metadata", parsed, { blocked_rag: true });
-    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed));
+    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed), userEmotion);
   }
 
   const titleBoost = resolveRagTitleBoost(parsed, ctx.message);
@@ -374,11 +436,14 @@ async function tryRagAnswer(
 
   let searchQuery: string;
   let method = "original";
+  let dReformulate = 0;
 
   if (explicitPage && titleBoost) {
     searchQuery = titleBoost;
   } else {
+    const tRefStart = performance.now();
     const reformulated = await reformulateSearchQuery(ctx.message, ctx.history);
+    dReformulate = performance.now() - tRefStart;
     searchQuery = reformulated.searchQuery;
     method = reformulated.method;
   }
@@ -404,7 +469,7 @@ async function tryRagAnswer(
     /\b(this|that|it|more|explain|project|core|detail|in depth|elaborate|tell me more|what about|only for|for \d{4}|in \d{4}|more information|more about|about it)\b/i.test(
       ctx.message,
     ) &&
-    ctx.message.trim().split(/\s+/).length < 12;
+    ctx.message.trim().split(/\s+/).length < 20;
 
   if (isVagueFollowUp) {
     if (lastProject && !titleBoost) {
@@ -416,10 +481,12 @@ async function tryRagAnswer(
     }
   }
 
+  const tExpStart = performance.now();
   const searchQueries = SCOPED_RAG_KINDS.has(parsed.kind)
     ? [searchQuery]
     : (await expandSearchQueries(ctx.message, ctx.history, searchQuery))
         .queries;
+  const dExpand = SCOPED_RAG_KINDS.has(parsed.kind) ? 0 : performance.now() - tExpStart;
   const multiQueryMethod = SCOPED_RAG_KINDS.has(parsed.kind)
     ? "primary_only"
     : "llm";
@@ -431,6 +498,7 @@ async function tryRagAnswer(
     history_entity: isVagueFollowUp ? { lastProject, lastPerson } : undefined,
   });
 
+  const tRetStart = performance.now();
   const {
     context: notionContext,
     confidence,
@@ -439,33 +507,56 @@ async function tryRagAnswer(
     titleBoost: titleBoost || undefined,
     year: parsed.year,
   });
+  const dRetrieval = performance.now() - tRetStart;
 
   logRetrievalDiagnostics(parsed, searchQueries, confidence, chunkHits);
 
-  // Telemetry
-  console.log(
-    "[telemetry]",
-    JSON.stringify({
-      kind: parsed.kind,
-      expandedQueryCount: searchQueries.length,
-      contextChars: notionContext.length,
-      topScore: confidence.topScore,
-      avgScore: confidence.avgScore,
-      confidenceOk: confidence.ok,
-      historyEntityUsed: isVagueFollowUp && (!!lastProject || !!lastPerson),
-      ts: Date.now(),
-    }),
-  );
-
   if (!notionContext.trim()) {
+    console.log(
+      "[telemetry]",
+      JSON.stringify({
+        kind: parsed.kind,
+        confidenceOk: false,
+        reason: "empty_context",
+        durations: {
+          normalization: Math.round(timings.dNormalization),
+          intentClassification: Math.round(timings.dResolveQuery),
+          sqlAnswerAttempt: Math.round(timings.dSqlAnswer),
+          queryReformulation: Math.round(dReformulate),
+          queryExpansion: Math.round(dExpand),
+          retrieval: Math.round(dRetrieval),
+          total: Math.round(performance.now() - timings.tStart),
+        },
+        ts: Date.now(),
+      }),
+    );
     return jsonAnswer(
       ctx.sessionId,
       "I couldn't find matching pages in the synced Notion database. Try **Sync changes** in the sidebar, or rephrase with a project/person/page name from Notion.",
+      userEmotion,
     );
   }
 
   if (!confidence.ok) {
-    return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE);
+    console.log(
+      "[telemetry]",
+      JSON.stringify({
+        kind: parsed.kind,
+        confidenceOk: false,
+        reason: confidence.reason,
+        durations: {
+          normalization: Math.round(timings.dNormalization),
+          intentClassification: Math.round(timings.dResolveQuery),
+          sqlAnswerAttempt: Math.round(timings.dSqlAnswer),
+          queryReformulation: Math.round(dReformulate),
+          queryExpansion: Math.round(dExpand),
+          retrieval: Math.round(dRetrieval),
+          total: Math.round(performance.now() - timings.tStart),
+        },
+        ts: Date.now(),
+      }),
+    );
+    return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE, userEmotion);
   }
 
   return streamGeminiAnswer(
@@ -475,5 +566,24 @@ async function tryRagAnswer(
     ctx.sessionId,
     parsed.kind,
     signal,
+    {
+      tStart: timings.tStart,
+      normalization: Math.round(timings.dNormalization),
+      intentClassification: Math.round(timings.dResolveQuery),
+      sqlAnswerAttempt: Math.round(timings.dSqlAnswer),
+      queryReformulation: Math.round(dReformulate),
+      queryExpansion: Math.round(dExpand),
+      retrieval: Math.round(dRetrieval),
+      expandedQueryCount: searchQueries.length,
+      contextChars: notionContext.length,
+      topScore: confidence.topScore,
+      avgScore: confidence.avgScore,
+      confidenceOk: confidence.ok,
+      historyEntityUsed: isVagueFollowUp && (!!lastProject || !!lastPerson),
+    },
+    userEmotion,
   );
 }
+
+
+
