@@ -5,6 +5,7 @@ import {
   scoreTitleForTopic,
   shouldKeepOriginalTopic,
 } from "./topic-resolution";
+import { isWorkspaceScope } from "./normalize";
 
 /**
  * Map an ambiguous topic ("Oscar", "Stub") to the best-matching synced page title.
@@ -55,16 +56,24 @@ export async function resolveEntities(parsed: ParsedQuery): Promise<ParsedQuery>
 
   if (docTitle?.trim()) {
     const original = docTitle.trim();
-    docTitle = await canonicalizeDocTitle(original);
-    if (shouldKeepOriginalTopic(original, docTitle)) {
+    if (isWorkspaceScope(original)) {
       docTitle = original;
+    } else {
+      docTitle = await canonicalizeDocTitle(original);
+      if (shouldKeepOriginalTopic(original, docTitle)) {
+        docTitle = original;
+      }
     }
   }
   if (compareTitleB?.trim()) {
     const original = compareTitleB.trim();
-    compareTitleB = await canonicalizeDocTitle(original);
-    if (shouldKeepOriginalTopic(original, compareTitleB)) {
+    if (isWorkspaceScope(original)) {
       compareTitleB = original;
+    } else {
+      compareTitleB = await canonicalizeDocTitle(original);
+      if (shouldKeepOriginalTopic(original, compareTitleB)) {
+        compareTitleB = original;
+      }
     }
   }
 

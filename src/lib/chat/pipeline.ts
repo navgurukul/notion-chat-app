@@ -279,7 +279,11 @@ export async function runChatPipeline(
   }
 
   const tSqlStart = performance.now();
-  const sqlResponse = await trySqlAnswer(parsed, ctx, userEmotion, signal);
+  const sqlResponse = await trySqlAnswer(parsed, ctx, userEmotion, signal, {
+    tStart,
+    dNormalization,
+    dResolveQuery,
+  });
   const dSqlAnswer = performance.now() - tSqlStart;
 
   if (sqlResponse) {
@@ -399,7 +403,27 @@ function logParsedQuery(parsed: ParsedQuery) {
   });
 }
 
-async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext, emotion?: string, signal?: AbortSignal) {
+function isSynthesisRequest(message: string): boolean {
+  if (/\b(role|job|responsibilit|position|designation|title|summariz|summary|overview|analy[sz]|explain|opinion|think)\b/i.test(message)) {
+    return true;
+  }
+  if (/\bwhat\s+(?:do|does|did)\s+.*\b(do|handle|manage)\b/i.test(message)) {
+    return true;
+  }
+  return false;
+}
+
+async function trySqlAnswer(
+  parsed: ParsedQuery,
+  ctx: PipelineContext,
+  emotion?: string,
+  signal?: AbortSignal,
+  timings?: {
+    tStart: number;
+    dNormalization: number;
+    dResolveQuery: number;
+  },
+) {
   if (parsed.kind === "semantic" || parsed.kind === "smalltalk") return null;
 
   const metadataOnly = isMetadataOnlyKind(parsed.kind);
@@ -414,6 +438,39 @@ async function trySqlAnswer(parsed: ParsedQuery, ctx: PipelineContext, emotion?:
     directAnswerPreview: directAnswer?.slice(0, 80) ?? null,
     isMiss: directAnswer ? isSqlMissAnswer(directAnswer) : "no answer",
   });
+
+  if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer)) {
+    const isSynthesis = isSynthesisRequest(ctx.message);
+    if (isSynthesis) {
+      logChatRoute("sql_synthesis_stream", parsed, { answer_chars: directAnswer.length });
+      return streamGeminiAnswer(
+        ctx.message,
+        directAnswer,
+        ctx.history,
+        ctx.sessionId,
+        parsed.kind,
+        signal,
+        timings
+          ? {
+              tStart: timings.tStart,
+              normalization: Math.round(timings.dNormalization),
+              intentClassification: Math.round(timings.dResolveQuery),
+              sqlAnswerAttempt: Math.round(performance.now() - timings.tStart),
+              queryReformulation: 0,
+              queryExpansion: 0,
+              retrieval: 0,
+              expandedQueryCount: 1,
+              contextChars: directAnswer.length,
+              topScore: 1.0,
+              avgScore: 1.0,
+              confidenceOk: true,
+              historyEntityUsed: false,
+            }
+          : undefined,
+        emotion,
+      );
+    }
+  }
 
   if (metadataOnly) {
     if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer)) {

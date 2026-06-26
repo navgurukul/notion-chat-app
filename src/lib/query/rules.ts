@@ -15,7 +15,10 @@ import {
   looksLikeSinglePageTitle,
   normalizePersonNameForMatch,
   stripYearSuffixFromPerson,
+  isNoiseTopic,
 } from "@/lib/query/normalize";
+
+export { isNoiseTopic };
 
 export { extractCrossDocSummaryTopic, extractYearFromQuestion, isCrossDocSummaryQuestion };
 
@@ -82,11 +85,7 @@ function cleanPersonName(value: string | null) {
   return normalizePersonNameForMatch(cleaned);
 }
 
-export function isNoiseTopic(topic?: string) {
-  if (!topic?.trim()) return true;
-  const t = topic.trim().toLowerCase();
-  return ["which", "what", "who", "whom", "whose", "did", "does", "do", "has", "have", "had", "the", "a", "an"].includes(t);
-}
+
 
 function extractAfter(text: string, patterns: RegExp[]): string | null {
   for (const pattern of patterns) {

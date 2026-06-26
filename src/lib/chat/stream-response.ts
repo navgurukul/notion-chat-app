@@ -41,13 +41,34 @@ Rules:
 
 `.trimStart();
 
+const SQL_SYNTHESIS_DIRECTIVE = `
+## Synthesis Instructions
+The user is asking to summarize, analyze, or infer a role, job, or status based on a list of tasks/pages from Notion.
+Rules:
+- Read the list of Notion tasks/pages provided in the context.
+- Analyze the tasks to understand the person's responsibilities (e.g., frontend development, backend APIs, design, QA, project management, etc.).
+- Synthesize a professional, clear explanation of their role and major areas of contribution.
+- Reference specific tasks/projects from the list as evidence for your analysis.
+- Do not just output the raw list of tasks; explain the themes and what they represent.
+
+`.trimStart();
+
 function buildEnrichedContext(
   notionContext: string,
   queryKind: QueryKind | null,
+  message: string,
 ): string {
-  const base = `${BASE_DIRECTIVE}${notionContext}`;
-  if (!queryKind || !STATUS_KINDS.has(queryKind)) return base;
-  return `${STATUS_SYNTHESIS_DIRECTIVE}${base}`;
+  const isSynthesis = /\b(role|job|responsibilit|position|designation|title|summariz|summary|overview|analy[sz]|explain|opinion|think)\b/i.test(message) ||
+    /\bwhat\s+(?:do|does|did)\s+.*\b(do|handle|manage)\b/i.test(message);
+
+  let directive = BASE_DIRECTIVE;
+  if (isSynthesis) {
+    directive = `${SQL_SYNTHESIS_DIRECTIVE}${directive}`;
+  } else if (queryKind && STATUS_KINDS.has(queryKind)) {
+    directive = `${STATUS_SYNTHESIS_DIRECTIVE}${directive}`;
+  }
+  
+  return `${directive}${notionContext}`;
 }
 
 
@@ -76,7 +97,7 @@ export async function streamGeminiAnswer(
   },
   userEmotion?: string,
 ) {
-  const enrichedContext = buildEnrichedContext(notionContext, queryKind);
+  const enrichedContext = buildEnrichedContext(notionContext, queryKind, message);
 
   const tStreamStart = performance.now();
   let stream: Awaited<ReturnType<typeof getChatStream>>;

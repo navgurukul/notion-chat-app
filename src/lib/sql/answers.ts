@@ -9,7 +9,7 @@ import type {
   NotionPageRow,
   WorkedOnRow,
 } from "@/lib/shared/notion-types";
-import { normalizePersonNameForMatch } from "@/lib/query/normalize";
+import { normalizePersonNameForMatch, isWorkspaceScope } from "@/lib/query/normalize";
 import { isNoiseTopic } from "@/lib/query/rules";
 import type { ParsedQuery } from "@/lib/query/types";
 import {
@@ -579,13 +579,7 @@ function isHistoricalWorkQuery(raw: string) {
   );
 }
 
-/** "Navgurukul workspace" means whole synced DB — not a page title filter. */
-function isWorkspaceScope(scope?: string) {
-  if (!scope?.trim()) return true;
-  const t = scope.toLowerCase();
-  if (/\b(workspace|navgurukul|ng)\b/.test(t) && t.length < 40) return true;
-  return isNoiseTopic(scope);
-}
+
 
 function isBlockerStatus(status: string | null | undefined) {
   const s = (status ?? "").trim().toLowerCase();
@@ -1400,12 +1394,13 @@ export async function handleMetadataQuery(
   if (parsed.kind === "assigned_list" && person) {
     const personTerm = `%${escapeLike(person)}%`;
     const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
-    const normalizedTopic = docTitle ? normalizeTopic(docTitle) : "";
+    const isWorkspace = docTitle ? isWorkspaceScope(docTitle) : true;
+    const normalizedTopic = !isWorkspace && docTitle ? normalizeTopic(docTitle) : "";
     // Keep original docTitle as fallback in case normalization strips too much
     const topicTerm =
-      normalizedTopic.length >= 3
+      !isWorkspace && normalizedTopic.length >= 3
         ? `%${escapeLike(normalizedTopic)}%`
-        : docTitle
+        : !isWorkspace && docTitle
           ? `%${escapeLike(docTitle)}%`
           : null;
     const year = parsed.year;
@@ -1506,8 +1501,9 @@ export async function handleMetadataQuery(
   if (parsed.kind === "worked_on_list" && person) {
     const personTerm = `%${escapeLike(person)}%`;
     const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
+    const isWorkspace = docTitle ? isWorkspaceScope(docTitle) : true;
     const effectiveTopic =
-      docTitle && !isNoiseTopic(docTitle) ? docTitle : undefined;
+      !isWorkspace && docTitle && !isNoiseTopic(docTitle) ? docTitle : undefined;
     const normalizedTopic = effectiveTopic
       ? normalizeTopic(effectiveTopic)
       : "";
@@ -2013,7 +2009,8 @@ export async function handleMetadataQuery(
   if (parsed.kind === "activity_summary" && person) {
     const personTerm = `%${escapeLike(person)}%`;
     const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
-    const normalizedTopic = docTitle ? normalizeTopic(docTitle) : "";
+    const isWorkspace = docTitle ? isWorkspaceScope(docTitle) : true;
+    const normalizedTopic = !isWorkspace && docTitle ? normalizeTopic(docTitle) : "";
     const topicTerm = normalizedTopic
       ? `%${escapeLike(normalizedTopic)}%`
       : null;

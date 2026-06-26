@@ -150,3 +150,16 @@ export function looksLikeSinglePageTitle(title: string): boolean {
 
   return true;
 }
+
+export function isNoiseTopic(topic?: string): boolean {
+  if (!topic?.trim()) return true;
+  const t = topic.trim().toLowerCase();
+  return ["which", "what", "who", "whom", "whose", "did", "does", "do", "has", "have", "had", "the", "a", "an"].includes(t);
+}
+
+export function isWorkspaceScope(scope?: string): boolean {
+  if (!scope?.trim()) return true;
+  const t = scope.toLowerCase().trim();
+  if (/\b(workspace|navgurukul|ng|ng-navgurukul)\b/.test(t) && t.length < 40) return true;
+  return isNoiseTopic(scope);
+}
