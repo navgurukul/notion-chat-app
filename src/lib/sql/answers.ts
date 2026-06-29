@@ -65,6 +65,84 @@ function normalizeTopic(value: string) {
     .trim();
 }
 
+function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd: string | null } {
+  const q = rawQuery.toLowerCase();
+  const now = new Date();
+
+  if (/\btoday\b/i.test(q)) {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
+  if (/\byesterday\b/i.test(q)) {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - 1);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
+  if (/\bthis\s+week\b/i.test(q)) {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const day = start.getDay();
+    const diff = start.getDate() - day + (day === 0 ? -6 : 1);
+    start.setDate(diff);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 7);
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
+  if (/\blast\s+week\b/i.test(q)) {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const day = start.getDay();
+    const diff = start.getDate() - day + (day === 0 ? -6 : 1) - 7;
+    start.setDate(diff);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 7);
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
+  if (/\bthis\s+month\b/i.test(q)) {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
+  if (/\blast\s+month\b/i.test(q)) {
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
+  if (/\bthis\s+year\b/i.test(q)) {
+    const start = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear() + 1, 0, 1, 0, 0, 0, 0);
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
+  if (/\blast\s+year\b/i.test(q)) {
+    const start = new Date(now.getFullYear() - 1, 0, 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
+  const explicitYearMatch = q.match(/\b(20\d{2})\b/);
+  if (explicitYearMatch) {
+    const year = Number(explicitYearMatch[1]);
+    const start = new Date(year, 0, 1, 0, 0, 0, 0);
+    const end = new Date(year + 1, 0, 1, 0, 0, 0, 0);
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
+  return { dateStart: null, dateEnd: null };
+}
+
 function formatLink(title: string, url: string | null) {
   return url ? `[${title}](${url})` : title;
 }
@@ -1403,9 +1481,10 @@ export async function handleMetadataQuery(
         : !isWorkspace && docTitle
           ? `%${escapeLike(docTitle)}%`
           : null;
+    const { dateStart, dateEnd } = resolveDateRange(parsed.raw);
     const year = parsed.year;
-    const yearStart = year ? `${year}-01-01` : null;
-    const yearEnd = year ? `${year + 1}-01-01` : null;
+    const yearStart = dateStart ?? (year ? `${year}-01-01` : null);
+    const yearEnd = dateEnd ?? (year ? `${year + 1}-01-01` : null);
     const assigneeInContentSql = `
       (
         (
@@ -1456,7 +1535,20 @@ export async function handleMetadataQuery(
       `,
       [personTerm, fuzzyPersonTerm, topicTerm, yearStart, yearEnd],
     );
-    const yearNote = year ? ` in **${year}**` : "";
+
+    let dateNote = "";
+    if (/\btoday\b/i.test(parsed.raw)) dateNote = " for today";
+    else if (/\byesterday\b/i.test(parsed.raw)) dateNote = " for yesterday";
+    else if (/\bthis\s+week\b/i.test(parsed.raw)) dateNote = " for this week";
+    else if (/\blast\s+week\b/i.test(parsed.raw)) dateNote = " for last week";
+    else if (/\bthis\s+month\b/i.test(parsed.raw)) dateNote = " for this month";
+    else if (/\blast\s+month\b/i.test(parsed.raw)) dateNote = " for last month";
+    else if (/\bthis\s+year\b/i.test(parsed.raw)) dateNote = " for this year";
+    else if (/\blast\s+year\b/i.test(parsed.raw)) dateNote = " for last year";
+    else if (year) dateNote = ` in ${year}`;
+
+    const yearNote = dateNote;
+
     if (!rows.length) {
       console.log("[assigned_list] debug", {
         person,
@@ -1477,8 +1569,8 @@ export async function handleMetadataQuery(
     }
 
     const listLabel = asksForTasksOnly(parsed.raw)
-      ? `task(s) assigned to ${person}${yearNote}${docTitle ? ` matching "${docTitle}"` : ""}`
-      : `page(s) assigned to ${person}${yearNote}${docTitle ? ` matching "${docTitle}"` : ""}`;
+      ? `task(s) assigned to ${person}${yearNote}${!isWorkspace && docTitle ? ` matching "${docTitle}"` : ""}`
+      : `page(s) assigned to ${person}${yearNote}${!isWorkspace && docTitle ? ` matching "${docTitle}"` : ""}`;
 
     return `${formatListHeader(rows.length, listLabel)}\n\n${formatRows(
       rows,
@@ -2002,11 +2094,7 @@ export async function handleMetadataQuery(
       ]
         .filter(Boolean)
         .join(" · ");
-      return `**${formatLink(row.title || "Untitled", row.url)}** — ${meta}`;
-    })}`;
-  }
-
-  if (parsed.kind === "activity_summary" && person) {
+       if (parsed.kind === "activity_summary" && person) {
     const personTerm = `%${escapeLike(person)}%`;
     const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
     const isWorkspace = docTitle ? isWorkspaceScope(docTitle) : true;
@@ -2014,9 +2102,10 @@ export async function handleMetadataQuery(
     const topicTerm = normalizedTopic
       ? `%${escapeLike(normalizedTopic)}%`
       : null;
+    const { dateStart, dateEnd } = resolveDateRange(parsed.raw);
     const year = parsed.year;
-    const yearStart = year ? `${year}-01-01` : null;
-    const yearEnd = year ? `${year + 1}-01-01` : null;
+    const yearStart = dateStart ?? (year ? `${year}-01-01` : null);
+    const yearEnd = dateEnd ?? (year ? `${year + 1}-01-01` : null);
     const workingOnQuery = /\bworking\s+on\b|\bworking\s+currently\b/i.test(
       parsed.raw,
     );
@@ -2025,7 +2114,7 @@ export async function handleMetadataQuery(
     const historicalWork = isHistoricalWorkQuery(parsed.raw);
     const listAllProjects = wantsAllProjectsList(parsed.raw);
     const rowLimit =
-      year && (historicalWork || listAllProjects)
+      yearStart && (historicalWork || listAllProjects)
         ? HISTORICAL_PROJECT_LIMIT
         : SQL_RESULT_LIMIT;
 
@@ -2041,9 +2130,9 @@ export async function handleMetadataQuery(
       });
     }
 
-    let primaryRows = await fetchActivityRows(Boolean(year));
+    let primaryRows = await fetchActivityRows(Boolean(yearStart));
     let usedYearFallback = false;
-    if (!primaryRows.length && year && workingOnQuery) {
+    if (!primaryRows.length && yearStart && workingOnQuery) {
       primaryRows = await fetchActivityRows(false);
       primaryRows = primaryRows.filter((row) => isActiveStatus(row.status));
       usedYearFallback = primaryRows.length > 0;
@@ -2087,7 +2176,7 @@ export async function handleMetadataQuery(
           `,
           [personTerm, topicTerm, yearStart, yearEnd],
         );
-``
+
     rows.sort(
       (a, b) =>
         calculateActivityScore(b, person) - calculateActivityScore(a, person),
@@ -2098,23 +2187,32 @@ export async function handleMetadataQuery(
       topResult: rows[0]?.title ?? null,
     });
 
+    let dateNote = "";
+    if (/\btoday\b/i.test(parsed.raw)) dateNote = " for today";
+    else if (/\byesterday\b/i.test(parsed.raw)) dateNote = " for yesterday";
+    else if (/\bthis\s+week\b/i.test(parsed.raw)) dateNote = " for this week";
+    else if (/\blast\s+week\b/i.test(parsed.raw)) dateNote = " for last week";
+    else if (/\bthis\s+month\b/i.test(parsed.raw)) dateNote = " for this month";
+    else if (/\blast\s+month\b/i.test(parsed.raw)) dateNote = " for last month";
+    else if (/\bthis\s+year\b/i.test(parsed.raw)) dateNote = " for this year";
+    else if (/\blast\s+year\b/i.test(parsed.raw)) dateNote = " for last year";
+    else if (year) dateNote = ` in **${year}**`;
+
+    const yearNote = dateNote;
+
     if (!rows.length) {
-      const yearNote = year ? ` in **${year}**` : "";
-      if (year) {
+      if (yearStart) {
         return (
-          `No Notion pages found for **${person}** in **${year}** in synced data.\n\n` +
-          `_This means no pages were edited or assigned to **${person}** in ${year} according to Notion's last-edited date._\n\n` +
-          `_If work happened in ${year}, try **Sync changes** to refresh Notion data._`
+          `No Notion pages found for **${person}**${yearNote} in synced data.\n\n` +
+          `_This means no pages were edited or assigned to **${person}**${yearNote} according to Notion's last-edited date._\n\n` +
+          `_If work happened, try **Sync changes** to refresh Notion data._`
         );
       }
       return (
         `No Notion pages found for **${person}**${docTitle ? ` matching "${docTitle}"` : ""} in synced Notion.\n\n` +
         `_Try **Sync changes** if assignments were updated recently._`
       );
-    }
-
     const topicNote = docTitle ? ` (filtered by "${docTitle}")` : "";
-    const yearNote = year ? ` in **${year}**` : "";
     const activeRows = rows.filter((row) => isActiveStatus(row.status));
     const top = (workingOnQuery && activeRows.length ? activeRows : rows)[0];
     const editedLabel = top.notion_edited_at

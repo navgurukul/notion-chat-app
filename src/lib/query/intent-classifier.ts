@@ -125,13 +125,13 @@ Rules:
 - docTitle = project/page/topic name (Oscar, Zuvy, ReportList, Employee Onboarding Hub)
 - compareTitleB = second page name when comparing two pages
 - year = 4-digit year if mentioned (e.g. 2026), else null
-- confidence = 0.0–1.0 how sure you are
+- confidence = float between 0.0 and 1.0 (e.g. 0.95 if you are very confident in the classification, 0.5 if unsure)
 - Prefer a structured intent over semantic when the question clearly maps to SQL lookup
 - "Who's leading X" → project_manager_of
 - "What has Tamanna been handling recently" → activity_summary, person Tamanna
 
 JSON shape:
-{"intent":"...","personName":null,"docTitle":null,"compareTitleB":null,"year":null,"confidence":0.0}
+{"intent":"...","personName":null,"docTitle":null,"compareTitleB":null,"year":null,"confidence":0.95}
 `;
 
 export async function classifyQueryIntent(question: string): Promise<ParsedQuery | null> {

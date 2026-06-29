@@ -37,7 +37,7 @@ import {
 import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
 import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag/retrieval-confidence";
 import { normalizeLanguage } from "@/lib/chat/normalize-language";
-import { resolvePersonName } from "@/lib/db/team-members";
+import { getPeopleDirectory, resolvePersonName } from "@/lib/db/team-members";
 
 function stripTitleEmoji(title: string) {
   return title
@@ -87,12 +87,13 @@ type PipelineContext = {
   message: string;
   history: ChatHistoryItem[];
   sessionId: string | null;
+  reformulatedQuery?: string;
 };
 
 async function resolveFirstPerson(
   message: string,
   session: Session,
-): Promise<{ message: string; ambiguous?: string[] }> {
+): Promise<{ message: string; ambiguous?: string[]; resolvedName?: string }> {
   const hasPronoun = /\b(me|my|myself|I)\b/i.test(message);
   if (!hasPronoun) return { message };
 
@@ -107,49 +108,108 @@ async function resolveFirstPerson(
 
   const resolvedName = exact ?? fullName.split(/\s+/)[0];
   return {
-    message: message.replace(/\b(me|my|myself|I)\b/g, resolvedName),
+    message: message.replace(/\b(me|my|myself|I)\b/gi, resolvedName),
+    resolvedName,
   };
 }
 
-function extractLastEntityFromHistory(history: ChatHistoryItem[]): {
+async function findPersonInText(text: string): Promise<string | null> {
+  try {
+    const dir = await getPeopleDirectory();
+    const lowerText = text.toLowerCase();
+    
+    const sortedDir = [...dir].sort((a, b) => b.normalized.length - a.normalized.length);
+    
+    for (const person of sortedDir) {
+      const escaped = person.normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const regex = new RegExp(`\\b${escaped}\\b`, "i");
+      if (regex.test(lowerText)) {
+        return person.name;
+      }
+    }
+    
+    for (const person of sortedDir) {
+      const firstName = person.normalized.split(/\s+/)[0];
+      if (firstName && firstName.length >= 3) {
+        const escaped = firstName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regex = new RegExp(`\\b${escaped}\\b`, "i");
+        if (regex.test(lowerText)) {
+          return person.name;
+        }
+      }
+    }
+  } catch (error) {
+    console.warn("[chat] findPersonInText failed:", error);
+  }
+  return null;
+}
+
+function isFollowUpQuery(message: string, history: ChatHistoryItem[]): boolean {
+  if (history.length === 0) return false;
+  
+  const lower = message.toLowerCase().trim();
+  
+  if (/\b(it|this|that|they|them|he|him|she|her|his|its|their|the project|the policy|the page|the document)\b/i.test(lower)) {
+    return true;
+  }
+  
+  if (
+    /^(only\s+)?(today|this\s+week|this\s+month|this\s+year|yesterday|tomorrow|last\s+week|last\s+month|last\s+year)('s)?\s+(task|tasks|project|projects|work|docs|pages)?$/i.test(lower) ||
+    /^(for\s+)?(this\s+month|this\s+year|this\s+week|today|yesterday|last\s+year|last\s+month|20\d{2})$/i.test(lower) ||
+    /^(what\s+about\s+)?(20\d{2}|this\s+year|last\s+year)$/i.test(lower) ||
+    /^(any\s+)?blockers\??$/i.test(lower) ||
+    /^(who\s+is\s+)?(owner|assignee|manager|lead)\??$/i.test(lower) ||
+    /^(status|progress|eta)\??$/i.test(lower)
+  ) {
+    return true;
+  }
+  
+  if (lower.split(/\s+/).length <= 4) {
+    return true;
+  }
+
+  return false;
+}
+
+async function extractLastEntityFromHistory(history: ChatHistoryItem[]): Promise<{
   lastProject?: string;
   lastPerson?: string;
-} {
+}> {
   const recentHistory = [...history].reverse().slice(0, 6);
+
+  let lastProject: string | undefined;
+  let lastPerson: string | undefined;
 
   for (const item of recentHistory) {
     const content = item.content;
 
     const boldMatches = [...content.matchAll(/\*\*([^*]{2,60})\*\*/g)];
     const backtickMatches = [...content.matchAll(/`([^`]{2,60})`/g)];
+    const linkMatches = [...content.matchAll(/\[([^\]]{2,80})\]\([^)]+\)/g)];
 
-    // e.g. "Title: Employee Onboarding Hub"
     const titlePrefixMatch = content.match(/^Title:\s*(.+)$/m);
     const titlePrefixCandidate = titlePrefixMatch?.[1] ?? null;
 
     const allCandidateSources: Array<[RegExpMatchArray | null, string]> = [];
     for (const m of boldMatches) allCandidateSources.push([m, m[1]]);
     for (const m of backtickMatches) allCandidateSources.push([m, m[1]]);
+    for (const m of linkMatches) allCandidateSources.push([m, m[1]]);
     if (titlePrefixCandidate) allCandidateSources.push([null, titlePrefixCandidate]);
 
-
-    // Pattern 1: "X is assigned to: Person" → lastProject = X
     const assignedToMatch = content.match(
       /\*\*[""]?([^*"]{4,60})[""]?\*\*\s+is assigned to/i,
     );
-    if (assignedToMatch?.[1]) {
-      return { lastProject: assignedToMatch[1].trim() };
+    if (assignedToMatch?.[1] && !lastProject) {
+      lastProject = assignedToMatch[1].trim();
     }
 
-    // Pattern 2: "about X", "objective of X", "tell me about X"
     const aboutMatch = content.match(
       /(?:about|objective of|overview of|summary of)\s+(?:the\s+)?\*\*([^*]{4,60})\*\*/i,
     );
-    if (aboutMatch?.[1]) {
-      return { lastProject: aboutMatch[1].trim() };
+    if (aboutMatch?.[1] && !lastProject) {
+      lastProject = aboutMatch[1].trim();
     }
 
-    // Pattern 3: Title near project keywords
     for (const [, rawCandidate] of allCandidateSources) {
       const candidate = rawCandidate.trim();
       if (!candidate) continue;
@@ -174,11 +234,12 @@ function extractLastEntityFromHistory(history: ChatHistoryItem[]): {
           surrounding,
         )
       ) {
-        return { lastProject: candidate };
+        if (!lastProject) {
+          lastProject = candidate;
+        }
       }
     }
 
-    // Pattern 4: Person near ownership label
     for (const [, rawCandidate] of allCandidateSources) {
       const candidate = rawCandidate.trim();
       if (!candidate) continue;
@@ -191,14 +252,26 @@ function extractLastEntityFromHistory(history: ChatHistoryItem[]): {
 
       if (/\b(owner|assignee|created by|assigned to|working on)\b/i.test(surrounding)) {
         if (candidate.split(/\s+/).length <= 3 && candidate.length >= 3) {
-          return { lastPerson: candidate };
+          if (!lastPerson) {
+            lastPerson = candidate;
+          }
         }
       }
     }
 
+    if (!lastPerson) {
+      const detectedPerson = await findPersonInText(content);
+      if (detectedPerson) {
+        lastPerson = detectedPerson;
+      }
+    }
+
+    if (lastProject || lastPerson) {
+      break;
+    }
   }
 
-  return {};
+  return { lastProject, lastPerson };
 }
 
 export async function runChatPipeline(
@@ -219,7 +292,7 @@ export async function runChatPipeline(
 
   const tNormStart = performance.now();
   const normalized = await normalizeLanguage(rawMessage);
-  const { message, ambiguous } = await resolveFirstPerson(normalized, session);
+  const { message, ambiguous, resolvedName } = await resolveFirstPerson(normalized, session);
   const dNormalization = performance.now() - tNormStart;
 
   if (ambiguous?.length) {
@@ -239,7 +312,44 @@ export async function runChatPipeline(
   if (linkResponse) return linkResponse;
 
   const tResolveStart = performance.now();
-  const parsed = await resolveQuery(message);
+  
+  let targetQuery = message;
+  const isFollowUp = history.length > 0 && isFollowUpQuery(message, history);
+  if (isFollowUp) {
+    const reformulated = await reformulateSearchQuery(message, history);
+    ctx.reformulatedQuery = reformulated.searchQuery;
+    targetQuery = reformulated.searchQuery;
+  }
+  
+  const parsed = await resolveQuery(targetQuery);
+  
+  const { lastProject, lastPerson } = await extractLastEntityFromHistory(history);
+
+  if (
+    !parsed.personName &&
+    (parsed.kind === "worked_on_list" ||
+      parsed.kind === "activity_summary" ||
+      parsed.kind === "assigned_list" ||
+      parsed.kind === "owner_list" ||
+      parsed.kind === "created_by_list")
+  ) {
+    parsed.personName = resolvedName || lastPerson;
+  }
+
+  if (
+    !parsed.docTitle &&
+    lastProject &&
+    (parsed.kind === "worked_on_list" ||
+      parsed.kind === "activity_summary" ||
+      parsed.kind === "assigned_list" ||
+      parsed.kind === "owner_list" ||
+      parsed.kind === "created_by_list" ||
+      parsed.kind === "project_roster" ||
+      parsed.kind === "project_scope")
+  ) {
+    parsed.docTitle = lastProject;
+  }
+  
   const dResolveQuery = performance.now() - tResolveStart;
 
   console.log("[query_debug]", {
@@ -537,6 +647,9 @@ async function tryRagAnswer(
 
   if (explicitPage && titleBoost) {
     searchQuery = titleBoost;
+  } else if (ctx.reformulatedQuery) {
+    searchQuery = ctx.reformulatedQuery;
+    method = "reformulated";
   } else {
     const tRefStart = performance.now();
     const reformulated = await reformulateSearchQuery(ctx.message, ctx.history);
@@ -558,7 +671,7 @@ async function tryRagAnswer(
   }
 
   // Follow-up context resolution from history
-  const { lastProject, lastPerson } = extractLastEntityFromHistory(ctx.history);
+  const { lastProject, lastPerson } = await extractLastEntityFromHistory(ctx.history);
 
   const isVagueFollowUp =
     !parsed.docTitle &&

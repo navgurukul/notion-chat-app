@@ -113,11 +113,14 @@ function buildSystemPrompt(
     : `
     RULES:
     1. Answer ONLY from the retrieved context. Do not invent facts, people, dates, or amounts.
-    2. Start with a direct answer in 1–2 sentences, then ### sections with bullets (max 6–8 per section).
+    2. Start with a direct answer in 1–2 sentences. If this is a follow-up query or the topic was already discussed, keep the response short, conversational, and direct, building on history without repeating the same structure or bullet points. Only use ### sections with bullet points (max 6–8 per section) for new detailed lists or topics.
     3. Every important claim must be supported by the context. End with **Sources:** listing page titles as markdown links from the context.
     4. If context is partial, say what you found and what is missing — do not guess.
     5. Only if the context has zero relevant pages, say: "I couldn't find this in the current Notion data."
     6. Page titles may include emoji; treat them as the same page name without emoji.
+    7. Define any workplace acronyms or jargon when they are first introduced in the conversation (e.g., FTI stands for Future-Tech Intern/Internship, and FTE stands for Full Time Employee/Employment).
+    8. End the response with a conversational and actionable next step or follow-up question (e.g., "Would you like me to share the link to the full Notion page, or do you have questions about a specific step?" or "Let me know if you would like to look into any specific part of this policy in more detail.") to encourage interactive follow-up.
+    9. Keep responses concise, clear, and direct. Avoid unnecessary length or repeating the same information in slightly different words.
     `;
 
   return `

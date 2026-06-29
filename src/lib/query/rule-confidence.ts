@@ -16,6 +16,31 @@ const HIGH_PRECISION_KINDS = new Set<QueryKind>([
   "team_roster",
 ]);
 
+const NEEDS_PERSON = new Set<QueryKind>([
+  "owner_list",
+  "created_by_list",
+  "assigned_list",
+  "worked_on_list",
+  "activity_summary",
+]);
+
+const NEEDS_TITLE = new Set<QueryKind>([
+  "owner_of",
+  "created_by_of",
+  "assigned_to_of",
+  "project_manager_of",
+  "topic_list",
+  "type_of",
+  "status_of",
+  "page_about",
+  "project_summary",
+  "team_activity",
+  "team_roster",
+  "blocker_list",
+  "project_eta",
+  "risks_for",
+]);
+
 const NOISY_ENTITY = /^(is|was|are|were|only|one|what|who|which|task|tasks|project|projects|work|manager|lead)$/i;
 
 function entityQuality(parsed: Omit<ParsedQuery, "confidence" | "source">) {
@@ -37,6 +62,13 @@ export function scoreRegexParse(
   parsed: Omit<ParsedQuery, "confidence" | "source">,
 ): number {
   if (parsed.kind === "semantic") return 0.15;
+
+  if (NEEDS_PERSON.has(parsed.kind) && !parsed.personName?.trim()) {
+    return 0.05;
+  }
+  if (NEEDS_TITLE.has(parsed.kind) && !parsed.docTitle?.trim()) {
+    return 0.05;
+  }
 
   const entity = entityQuality(parsed);
   if (entity < 0.6) return 0.35;

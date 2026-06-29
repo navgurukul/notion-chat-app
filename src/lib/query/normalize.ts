@@ -151,10 +151,56 @@ export function looksLikeSinglePageTitle(title: string): boolean {
   return true;
 }
 
+const NOISE_WORDS = new Set([
+  // Question / Relative
+  "which", "what", "who", "whom", "whose", "where", "when", "why", "how",
+  // Verbs / Auxiliaries
+  "did", "does", "do", "has", "have", "had", "is", "are", "was", "were", "be", "been", "can", "could", "will", "would", "should",
+  // Articles / Determiners / Pronouns
+  "the", "a", "an", "this", "that", "these", "those", "my", "your", "his", "her", "their", "our", "me", "i", "you", "he", "she", "it", "we", "they", "him", "them", "us",
+  // Quantifiers
+  "all", "every", "each", "some", "any", "no", "none", "only", "one",
+  // Prepositions / Conjunctions
+  "for", "in", "on", "at", "by", "with", "about", "to", "from", "of", "and", "or", "but", "as", "than",
+  // Instructions / Actions
+  "list", "show", "give", "find", "get", "tell", "display", "check", "verify", "search", "lookup", "down",
+  // Time references
+  "today", "tonight", "tomorrow", "yesterday", "week", "month", "year", "now", "currently", "lately", "recent", "recently"
+]);
+
 export function isNoiseTopic(topic?: string): boolean {
   if (!topic?.trim()) return true;
-  const t = topic.trim().toLowerCase();
-  return ["which", "what", "who", "whom", "whose", "did", "does", "do", "has", "have", "had", "the", "a", "an"].includes(t);
+  const normalized = topic.trim().toLowerCase();
+  
+  // Direct check for exact phrase or single word match
+  if (NOISE_WORDS.has(normalized)) return true;
+  
+  // Common multi-word noise phrases
+  const noisePhrases = [
+    "list down",
+    "give me",
+    "tell me",
+    "today or this week",
+    "today or next week",
+    "this week",
+    "next week",
+    "last week",
+    "this month",
+    "next month",
+    "last month",
+    "this year",
+    "next year",
+    "last year"
+  ];
+  if (noisePhrases.includes(normalized)) return true;
+
+  // If every word in the topic is a noise word or if it consists only of noise words
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length > 0 && words.every(word => NOISE_WORDS.has(word))) {
+    return true;
+  }
+
+  return false;
 }
 
 export function isWorkspaceScope(scope?: string): boolean {

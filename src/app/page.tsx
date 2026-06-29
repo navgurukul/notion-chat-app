@@ -21,12 +21,12 @@ interface Message {
 }
 
 const emotionConfig: Record<string, { label: string; adjective: string; emoji: string; classes: string }> = {
-  funny: { label: "Playful", adjective: "Playfully", emoji: "😜", classes: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
+  funny: { label: "Playful", adjective: "Playfully", emoji: "✨", classes: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
   happy: { label: "Happy", adjective: "Warmly", emoji: "😊", classes: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" },
-  sad: { label: "Gentle", adjective: "Gently", emoji: "😢", classes: "bg-indigo-500/10 text-indigo-400 border-indigo-500/20" },
+  sad: { label: "Gentle", adjective: "Gently", emoji: "🤝", classes: "bg-indigo-500/10 text-indigo-400 border-indigo-500/20" },
   angry: { label: "Patient", adjective: "Patiently", emoji: "😐", classes: "bg-rose-500/10 text-rose-400 border-rose-500/20" },
-  frustrated: { label: "Action-oriented", adjective: "Directly", emoji: "😤", classes: "bg-orange-500/10 text-orange-400 border-orange-500/20" },
-  curious: { label: "Curious", adjective: "Curiously", emoji: "🧐", classes: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" },
+  frustrated: { label: "Action-oriented", adjective: "Directly", emoji: "🛠️", classes: "bg-orange-500/10 text-orange-400 border-orange-500/20" },
+  curious: { label: "Curious", adjective: "Curiously", emoji: "🔍", classes: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" },
   neutral: { label: "Professional", adjective: "Professionally", emoji: "😐", classes: "bg-white/5 text-white/50 border-white/10" },
 };
 

@@ -15,7 +15,7 @@ Rules:
 2. Replace vague references with NavGurukul-specific titles, people, features, or policies from history.
 3. The search_query must make sense without reading the conversation.
 4. Preserve explicit people names and calendar-year constraints.
-5. If the user says "this year", "last year", or a specific year, keep that temporal constraint in the rewritten query.
+5. If the user specifies any temporal constraints (e.g., "today", "yesterday", "this week", "this month", "this year", "last year", or a specific year), make sure to preserve that temporal constraint in the rewritten query.
 6. If the question is already clear, return it cleaned up (same meaning).
 7. Do not answer the question — only produce the search query.
 8. Plain text only (no markdown).

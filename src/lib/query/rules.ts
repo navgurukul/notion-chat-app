@@ -515,6 +515,7 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
 
     const personName = extractAfter(question, [
+      /\b(?:on|about|for|of)\s+([A-Za-z][A-Za-z'.-]*(?:\s+[A-Za-z][A-Za-z'.-]*){0,2})\s+(?:tasks?|projects?|work)\b/i,
       /what\s+(?:tasks?|projects?|work)\s+(.+?)\s+(?:has|have)\s+(?:been\s+)?(?:worked|workd|working|done|doing)(?:\s+on)?/i,
       /what\s+(?:tasks?|projects?|work)\s+(.+?)\s+(?:works|work)\b/i,
       /(?:what|which|show|list|all)\b.*\b(?:tasks?|projects?|work)\b.*\b(?:assigned|assign|given)\b.*\bto\s+(.+)$/i,
