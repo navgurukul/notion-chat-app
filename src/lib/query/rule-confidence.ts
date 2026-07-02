@@ -1,5 +1,11 @@
 import type { ParsedQuery, QueryKind } from "./types";
 
+export enum RuleConfidence {
+  HIGH = 0.90,
+  MEDIUM = 0.60,
+  LOW = 0.45
+}
+
 /** Intents that should stay on regex when extraction looks valid (deterministic SQL). */
 const HIGH_PRECISION_KINDS = new Set<QueryKind>([
   "assigned_to_of",
@@ -14,6 +20,8 @@ const HIGH_PRECISION_KINDS = new Set<QueryKind>([
   "project_eta",
   "team_activity",
   "team_roster",
+  "people_list",
+  "analytics"
 ]);
 
 const NEEDS_PERSON = new Set<QueryKind>([
@@ -56,11 +64,15 @@ function entityQuality(parsed: Omit<ParsedQuery, "confidence" | "source">) {
 
 /**
  * Heuristic confidence for regex routing — used to decide when to call the LLM classifier.
- * High-precision kinds with clean entities → ~0.95; broad catch-alls → lower.
+ * High-precision kinds with clean entities → ~0.90; broad catch-alls → lower.
  */
 export function scoreRegexParse(
   parsed: Omit<ParsedQuery, "confidence" | "source">,
 ): number {
+  if (parsed.parserConfidence !== undefined) {
+    return parsed.parserConfidence;
+  }
+
   if (parsed.kind === "semantic") return 0.15;
 
   if (NEEDS_PERSON.has(parsed.kind) && !parsed.personName?.trim()) {
@@ -86,26 +98,24 @@ export function scoreRegexParse(
       "team_activity",
       "team_roster",
     ].includes(parsed.kind);
-    const needsPerson = false;
     if (needsTitle && !parsed.docTitle?.trim()) return 0.4;
     if (parsed.kind === "compare_pages" && !parsed.compareTitleB?.trim()) return 0.4;
-    if (needsPerson) return 0.4;
-    return 0.95 * entity;
+    return RuleConfidence.HIGH * entity;
   }
 
-  if (parsed.kind === "assigned_list" && parsed.personName) return 0.88 * entity;
-  if (parsed.kind === "activity_summary" && parsed.personName) return 0.82 * entity;
+  if (parsed.kind === "assigned_list" && parsed.personName) return RuleConfidence.HIGH * entity;
+  if (parsed.kind === "activity_summary" && parsed.personName) return RuleConfidence.HIGH * entity;
   if (parsed.kind === "page_about" && parsed.docTitle && parsed.docTitle.length >= 6) {
-    return 0.8 * entity;
+    return RuleConfidence.MEDIUM * entity;
   }
-  if (parsed.kind === "project_summary" && parsed.docTitle) return 0.78 * entity;
-  if (parsed.kind === "risks_for" && parsed.docTitle) return 0.75 * entity;
+  if (parsed.kind === "project_summary" && parsed.docTitle) return RuleConfidence.MEDIUM * entity;
+  if (parsed.kind === "risks_for" && parsed.docTitle) return RuleConfidence.MEDIUM * entity;
 
   if (parsed.kind === "worked_on_list" || parsed.kind === "topic_list") {
-    return 0.55 * entity;
+    return RuleConfidence.LOW * entity;
   }
 
-  return 0.65 * entity;
+  return RuleConfidence.MEDIUM * entity;
 }
 
 export function withRegexScores(

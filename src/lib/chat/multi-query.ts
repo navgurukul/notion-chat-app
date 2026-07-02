@@ -10,12 +10,13 @@ Return JSON only:
 
 Rules:
 1. Produce 2 to 4 short search queries that approach the user's question from different angles (synonyms, related page titles, policy names, acronyms).
-2. Include the main topic in at least one query; use NavGurukul-specific terms from history when relevant.
-3. Preserve explicit people names and years if the primary query includes them.
-4. Each query must stand alone (no pronouns like "it" or "that").
-5. Do not answer the question — only search strings.
-6. Plain text only (no markdown). Max 120 characters per query.
-7. Avoid near-duplicates; each query should retrieve different Notion pages when possible.
+2. For synonyms, encourage generating diverse synonyms (e.g. generate "PTO" and "vacation" for "leave") to cover different possible page titles and contents.
+3. Crucially, avoid minor spelling/suffix duplicates or near-duplicates (e.g. do not generate both "leave policy" and "leave policies" or "work rules" and "working rules"). Each query must target conceptually distinct keywords or synonyms to retrieve different Notion pages.
+4. Include the main topic in at least one query; use NavGurukul-specific terms from history when relevant.
+5. Preserve explicit people names and years if the primary query includes them.
+6. Each query must stand alone (no pronouns like "it" or "that").
+7. Do not answer the question — only search strings.
+8. Plain text only (no markdown). Max 120 characters per query.
 
 Example — user: "How does leave work with comp-off and slack?"
 search_queries: [
@@ -105,17 +106,27 @@ export async function expandSearchQueries(
   message: string,
   history: ChatHistoryItem[],
   primaryQuery: string,
+  intentKind?: string,
 ): Promise<ExpandedSearchQueries> {
   const primary = primaryQuery.trim() || message.trim();
   if (!primary) {
     return { queries: [], method: "primary_only" };
   }
 
-  if (!isMultiQueryRagEnabled()) {
-    return { queries: [primary], method: "disabled" };
+  let targetCount = readQueryCount();
+  if (intentKind) {
+    if (intentKind === "page_about" || intentKind === "status_of" || intentKind === "status" || intentKind === "owner_of" || intentKind === "project_manager_of") {
+      targetCount = 1;
+    } else if (intentKind === "project_summary") {
+      targetCount = 2;
+    } else if (intentKind === "semantic") {
+      targetCount = 4;
+    }
   }
 
-  const targetCount = readQueryCount();
+  if (targetCount <= 1 || !isMultiQueryRagEnabled()) {
+    return { queries: [primary], method: "disabled" };
+  }
 
   try {
     const historyBlock =

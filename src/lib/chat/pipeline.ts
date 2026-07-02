@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import type { Session } from "next-auth";
-import type { ChatHistoryItem } from "@/lib/ai/gemini";
 import {
   addChatMessage,
   ensureSessionBelongsToUser,
@@ -12,7 +11,6 @@ import {
   extractReferencedTitle,
   isNotionLinkRequest,
 } from "@/lib/chat/link-lookup";
-import { expandSearchQueries } from "@/lib/chat/multi-query";
 import { reformulateSearchQuery } from "@/lib/chat/query-reformulation";
 import { streamGeminiAnswer } from "@/lib/chat/stream-response";
 import { resolveQuery } from "@/lib/query/resolve-query";
@@ -20,62 +18,18 @@ import { detectIntent } from "@/lib/query/intent";
 import { analyzeUserEmotion } from "@/lib/chat/emotion";
 import { extractYear } from "@/lib/query/year";
 import type { ParsedQuery } from "@/lib/query/types";
-import { handleMetadataQuery, lookupPageLinkByTitle } from "@/lib/sql/answers";
-import {
-  isSqlMissAnswer,
-  isTeamActivityMetadataGap,
-  shouldFallbackToRag,
-} from "@/lib/chat/answer-quality";
-import {
-  isMetadataOnlyKind,
-  metadataNotFoundAnswer,
-} from "@/lib/chat/routing-policy";
-import {
-  logChatRoute,
-  logRetrievalDiagnostics,
-} from "@/lib/chat/retrieval-diagnostics";
-import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
-import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag/retrieval-confidence";
+import { lookupPageLinkByTitle } from "@/lib/sql/answers";
 import { normalizeLanguage } from "@/lib/chat/normalize-language";
-import { getPeopleDirectory, resolvePersonName } from "@/lib/db/team-members";
-
-function stripTitleEmoji(title: string) {
-  return title
-    .replace(/\p{Extended_Pictographic}/gu, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function resolveRagTitleBoost(parsed: ParsedQuery, message: string) {
-  if (parsed.kind === "team_activity") {
-    const match = message.match(
-      /(?:most|mostly)\s+active\s+(?:team\s+member|person|contributor|member)?\s*(?:in|on|for)\s+([^?.!]+?)(?:\?|$)/i,
-    );
-    const scope = match?.[1]
-      ?.replace(/\b(team|workspace|project|projects)\b/gi, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (scope) return stripTitleEmoji(scope);
-  }
-  return parsed.docTitle ? stripTitleEmoji(parsed.docTitle) : "";
-}
-
-function isExplicitPageQuestion(message: string, docTitle?: string) {
-  if (!docTitle?.trim()) return false;
-  const needle = stripTitleEmoji(docTitle).toLowerCase();
-  if (needle.length < 4) return false;
-  return message
-    .toLowerCase()
-    .includes(needle.slice(0, Math.min(needle.length, 24)));
-}
-
-const SCOPED_RAG_KINDS = new Set<ParsedQuery["kind"]>([
-  "owner_list",
-  "created_by_list",
-  "assigned_list",
-  "worked_on_list",
-  "activity_summary",
-]);
+import {
+  tryFastPathRegexRoute,
+  resolveFirstPerson,
+  isFollowUpQuery,
+  extractLastEntityFromHistory,
+  jsonAnswer,
+} from "./pipeline/router";
+import { trySqlAnswer } from "./pipeline/sql";
+import { tryRagAnswer } from "./pipeline/rag";
+import { PipelineContext, PipelineTrace, LATENCY_BUDGETS } from "./pipeline/timing";
 
 export type ChatRequestBody = {
   message?: unknown;
@@ -83,352 +37,18 @@ export type ChatRequestBody = {
   sessionId?: unknown;
 };
 
-type PipelineContext = {
-  message: string;
-  history: ChatHistoryItem[];
-  sessionId: string | null;
-  reformulatedQuery?: string;
-};
-
-async function resolveFirstPerson(
-  message: string,
-  session: Session,
-): Promise<{ message: string; ambiguous?: string[]; resolvedName?: string }> {
-  const hasPronoun = /\b(me|my|myself|I)\b/i.test(message);
-  if (!hasPronoun) return { message };
-
-  const fullName = session?.user?.name?.trim();
-  if (!fullName) return { message };
-
-  const { exact, candidates } = await resolvePersonName(fullName);
-
-  if (candidates.length > 1) {
-    return { message, ambiguous: candidates };
+export class ChatValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ChatValidationError";
   }
-
-  const resolvedName = exact ?? fullName.split(/\s+/)[0];
-  return {
-    message: message.replace(/\b(me|my|myself|I)\b/gi, resolvedName),
-    resolvedName,
-  };
 }
 
-async function findPersonInText(text: string): Promise<string | null> {
-  try {
-    const dir = await getPeopleDirectory();
-    const lowerText = text.toLowerCase();
-    
-    const sortedDir = [...dir].sort((a, b) => b.normalized.length - a.normalized.length);
-    
-    for (const person of sortedDir) {
-      const escaped = person.normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const regex = new RegExp(`\\b${escaped}\\b`, "i");
-      if (regex.test(lowerText)) {
-        return person.name;
-      }
-    }
-    
-    for (const person of sortedDir) {
-      const firstName = person.normalized.split(/\s+/)[0];
-      if (firstName && firstName.length >= 3) {
-        const escaped = firstName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const regex = new RegExp(`\\b${escaped}\\b`, "i");
-        if (regex.test(lowerText)) {
-          return person.name;
-        }
-      }
-    }
-  } catch (error) {
-    console.warn("[chat] findPersonInText failed:", error);
+export class ChatNotFoundError extends Error {
+  constructor() {
+    super("Chat not found");
+    this.name = "ChatNotFoundError";
   }
-  return null;
-}
-
-function isFollowUpQuery(message: string, history: ChatHistoryItem[]): boolean {
-  if (history.length === 0) return false;
-  
-  const lower = message.toLowerCase().trim();
-  
-  if (/\b(it|this|that|they|them|he|him|she|her|his|its|their|the project|the policy|the page|the document)\b/i.test(lower)) {
-    return true;
-  }
-  
-  if (
-    /^(only\s+)?(today|this\s+week|this\s+month|this\s+year|yesterday|tomorrow|last\s+week|last\s+month|last\s+year)('s)?\s+(task|tasks|project|projects|work|docs|pages)?$/i.test(lower) ||
-    /^(for\s+)?(this\s+month|this\s+year|this\s+week|today|yesterday|last\s+year|last\s+month|20\d{2})$/i.test(lower) ||
-    /^(what\s+about\s+)?(20\d{2}|this\s+year|last\s+year)$/i.test(lower) ||
-    /^(any\s+)?blockers\??$/i.test(lower) ||
-    /^(who\s+is\s+)?(owner|assignee|manager|lead)\??$/i.test(lower) ||
-    /^(status|progress|eta)\??$/i.test(lower)
-  ) {
-    return true;
-  }
-  
-  if (lower.split(/\s+/).length <= 4) {
-    return true;
-  }
-
-  return false;
-}
-
-async function extractLastEntityFromHistory(history: ChatHistoryItem[]): Promise<{
-  lastProject?: string;
-  lastPerson?: string;
-}> {
-  const recentHistory = [...history].reverse().slice(0, 6);
-
-  let lastProject: string | undefined;
-  let lastPerson: string | undefined;
-
-  for (const item of recentHistory) {
-    const content = item.content;
-
-    const boldMatches = [...content.matchAll(/\*\*([^*]{2,60})\*\*/g)];
-    const backtickMatches = [...content.matchAll(/`([^`]{2,60})`/g)];
-    const linkMatches = [...content.matchAll(/\[([^\]]{2,80})\]\([^)]+\)/g)];
-
-    const titlePrefixMatch = content.match(/^Title:\s*(.+)$/m);
-    const titlePrefixCandidate = titlePrefixMatch?.[1] ?? null;
-
-    const allCandidateSources: Array<[RegExpMatchArray | null, string]> = [];
-    for (const m of boldMatches) allCandidateSources.push([m, m[1]]);
-    for (const m of backtickMatches) allCandidateSources.push([m, m[1]]);
-    for (const m of linkMatches) allCandidateSources.push([m, m[1]]);
-    if (titlePrefixCandidate) allCandidateSources.push([null, titlePrefixCandidate]);
-
-    const assignedToMatch = content.match(
-      /\*\*[""]?([^*"]{4,60})[""]?\*\*\s+is assigned to/i,
-    );
-    if (assignedToMatch?.[1] && !lastProject) {
-      lastProject = assignedToMatch[1].trim();
-    }
-
-    const aboutMatch = content.match(
-      /(?:about|objective of|overview of|summary of)\s+(?:the\s+)?\*\*([^*]{4,60})\*\*/i,
-    );
-    if (aboutMatch?.[1] && !lastProject) {
-      lastProject = aboutMatch[1].trim();
-    }
-
-    for (const [, rawCandidate] of allCandidateSources) {
-      const candidate = rawCandidate.trim();
-      if (!candidate) continue;
-
-      if (
-        /^(status|owner|done|backlog|unknown|open|closed|in progress|testing|blocked|not started|sync changes)$/i.test(
-          candidate,
-        )
-      )
-        continue;
-      if (candidate.split(/\s+/).length > 6) continue;
-      if (candidate.length < 3) continue;
-
-      const idx = content.indexOf(rawCandidate);
-      const surrounding = content.slice(
-        Math.max(0, (idx ?? 0) - 50),
-        Math.min(content.length, (idx ?? 0) + 100),
-      );
-
-      if (
-        /project|status|working|owner|summary|about|assigned|scope|objective|maintaining|backlog|development/i.test(
-          surrounding,
-        )
-      ) {
-        if (!lastProject) {
-          lastProject = candidate;
-        }
-      }
-    }
-
-    for (const [, rawCandidate] of allCandidateSources) {
-      const candidate = rawCandidate.trim();
-      if (!candidate) continue;
-
-      const idx = content.indexOf(rawCandidate);
-      const surrounding = content.slice(
-        Math.max(0, (idx ?? 0) - 40),
-        Math.min(content.length, (idx ?? 0) + 80),
-      );
-
-      if (/\b(owner|assignee|created by|assigned to|working on)\b/i.test(surrounding)) {
-        if (candidate.split(/\s+/).length <= 3 && candidate.length >= 3) {
-          if (!lastPerson) {
-            lastPerson = candidate;
-          }
-        }
-      }
-    }
-
-    if (!lastPerson) {
-      const detectedPerson = await findPersonInText(content);
-      if (detectedPerson) {
-        lastPerson = detectedPerson;
-      }
-    }
-
-    if (lastProject || lastPerson) {
-      break;
-    }
-  }
-
-  return { lastProject, lastPerson };
-}
-
-export async function runChatPipeline(
-  session: Session,
-  body: ChatRequestBody,
-  signal?: AbortSignal,
-) {
-  const tStart = performance.now();
-
-  const rawMessage = validateMessage(body.message);
-  const history = sanitizeChatHistory(body.history);
-
-  // 1. Analyze emotion!
-  const emotionAnalysis = await analyzeUserEmotion(rawMessage, history);
-  const userEmotion = emotionAnalysis.emotion;
-
-  const sessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion);
-
-  const tNormStart = performance.now();
-  const normalized = await normalizeLanguage(rawMessage);
-  const { message, ambiguous, resolvedName } = await resolveFirstPerson(normalized, session);
-  const dNormalization = performance.now() - tNormStart;
-
-  if (ambiguous?.length) {
-    return jsonAnswer(
-      sessionId,
-      `Multiple people named **${session.user?.name}** found in Notion:\n${ambiguous
-        .map((n) => `- ${n}`)
-        .join("\n")}\n\nWhich one did you mean?`,
-      undefined,
-      signal,
-    );
-  }
-
-  const ctx: PipelineContext = { message, history, sessionId };
-
-  const linkResponse = await tryNotionLinkAnswer(ctx, userEmotion, signal);
-  if (linkResponse) return linkResponse;
-
-  const tResolveStart = performance.now();
-  
-  let targetQuery = message;
-  const isFollowUp = history.length > 0 && isFollowUpQuery(message, history);
-  if (isFollowUp) {
-    const reformulated = await reformulateSearchQuery(message, history);
-    ctx.reformulatedQuery = reformulated.searchQuery;
-    targetQuery = reformulated.searchQuery;
-  }
-  
-  const parsed = await resolveQuery(targetQuery);
-  
-  const { lastProject, lastPerson } = await extractLastEntityFromHistory(history);
-
-  if (
-    !parsed.personName &&
-    (parsed.kind === "worked_on_list" ||
-      parsed.kind === "activity_summary" ||
-      parsed.kind === "assigned_list" ||
-      parsed.kind === "owner_list" ||
-      parsed.kind === "created_by_list")
-  ) {
-    parsed.personName = resolvedName || lastPerson;
-  }
-
-  if (
-    !parsed.docTitle &&
-    lastProject &&
-    (parsed.kind === "worked_on_list" ||
-      parsed.kind === "activity_summary" ||
-      parsed.kind === "assigned_list" ||
-      parsed.kind === "owner_list" ||
-      parsed.kind === "created_by_list" ||
-      parsed.kind === "project_roster" ||
-      parsed.kind === "project_scope")
-  ) {
-    parsed.docTitle = lastProject;
-  }
-  
-  const dResolveQuery = performance.now() - tResolveStart;
-
-  console.log("[query_debug]", {
-    query: message,
-    intent: detectIntent(message),
-    year: extractYear(message),
-    resolvedPerson: parsed.personName ?? null,
-    resolvedProject: parsed.docTitle ?? null,
-  });
-  logParsedQuery(parsed);
-
-  if (parsed.kind === "smalltalk") {
-    return streamGeminiAnswer(
-      ctx.message,
-      "",
-      ctx.history,
-      ctx.sessionId,
-      parsed.kind,
-      signal,
-      {
-        tStart,
-        normalization: Math.round(dNormalization),
-        intentClassification: Math.round(dResolveQuery),
-        sqlAnswerAttempt: 0,
-        queryReformulation: 0,
-        queryExpansion: 0,
-        retrieval: 0,
-        expandedQueryCount: 0,
-        contextChars: 0,
-        topScore: 0,
-        avgScore: 0,
-        confidenceOk: true,
-        historyEntityUsed: false,
-      },
-      userEmotion,
-    );
-  }
-
-  const tSqlStart = performance.now();
-  const sqlResponse = await trySqlAnswer(parsed, ctx, userEmotion, signal, {
-    tStart,
-    dNormalization,
-    dResolveQuery,
-  });
-  const dSqlAnswer = performance.now() - tSqlStart;
-
-  if (sqlResponse) {
-    console.log(
-      "[telemetry]",
-      JSON.stringify({
-        kind: parsed.kind,
-        sqlHit: true,
-        durations: {
-          normalization: Math.round(dNormalization),
-          intentClassification: Math.round(dResolveQuery),
-          sqlAnswerAttempt: Math.round(dSqlAnswer),
-          total: Math.round(performance.now() - tStart),
-        },
-        ts: Date.now(),
-      }),
-    );
-    return sqlResponse;
-  }
-
-  if (isNotionLinkRequest(message)) {
-    return jsonAnswer(
-      sessionId,
-      "Ask for a Notion link using the page title, e.g. **link for Employee Onboarding Hub**.",
-      userEmotion,
-      signal,
-    );
-  }
-
-  return tryRagAnswer(parsed, ctx, session, {
-    tStart,
-    dNormalization,
-    dResolveQuery,
-    dSqlAnswer,
-  }, signal, userEmotion);
 }
 
 function validateMessage(raw: unknown) {
@@ -436,13 +56,6 @@ function validateMessage(raw: unknown) {
     throw new ChatValidationError("Message is required");
   }
   return raw.trim().slice(0, MAX_MESSAGE_LENGTH);
-}
-
-export class ChatValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ChatValidationError";
-  }
 }
 
 async function attachSession(
@@ -459,21 +72,6 @@ async function attachSession(
 
   await addChatMessage(rawSessionId, "user", message, userEmotion);
   return rawSessionId;
-}
-
-export class ChatNotFoundError extends Error {
-  constructor() {
-    super("Chat not found");
-    this.name = "ChatNotFoundError";
-  }
-}
-
-async function jsonAnswer(sessionId: string | null, answer: string, emotion?: string, signal?: AbortSignal) {
-  if (signal?.aborted) {
-    return new Response(null, { status: 499 });
-  }
-  if (sessionId) await addChatMessage(sessionId, "bot", answer, emotion);
-  return NextResponse.json({ answer, emotion });
 }
 
 async function tryNotionLinkAnswer(ctx: PipelineContext, emotion?: string, signal?: AbortSignal) {
@@ -502,299 +100,193 @@ async function tryNotionLinkAnswer(ctx: PipelineContext, emotion?: string, signa
   return null;
 }
 
-function logParsedQuery(parsed: ParsedQuery) {
-  if (process.env.NODE_ENV === "production") return;
-  console.log("[chat] parsed_query=", {
-    kind: parsed.kind,
-    confidence: parsed.confidence,
-    source: parsed.source,
-    personName: parsed.personName,
-    docTitle: parsed.docTitle,
-  });
+function logPipelineTelemetry(trace: PipelineTrace) {
+  const now = Date.now();
+  trace.durations.total_ms = Math.round(now - new Date(trace.timestamp).getTime());
+  
+  // Flag budget violations
+  const budgetWarnings: string[] = [];
+  for (const [stage, budget] of Object.entries(LATENCY_BUDGETS)) {
+    const elapsed = trace.durations[stage as keyof typeof trace.durations];
+    if (elapsed !== undefined && elapsed > budget) {
+      budgetWarnings.push(`${stage} exceeded budget (${elapsed}ms > ${budget}ms)`);
+    }
+  }
+
+  const logPayload = {
+    ...trace,
+    budgetWarnings: budgetWarnings.length ? budgetWarnings : undefined
+  };
+
+  // Structured JSON Log
+  console.log("[pipeline-telemetry]", JSON.stringify(logPayload));
+
+  // Pretty-print in development
+  if (process.env.NODE_ENV !== "production") {
+    console.log("\n================ PIPELINE TRACE ================");
+    console.log(`Request ID: ${trace.requestId}`);
+    console.log(`Query: ${trace.originalQuery}`);
+    console.log(`Intent: ${trace.intentRoute?.kind} (conf: ${trace.intentRoute?.confidence}, src: ${trace.intentRoute?.source})`);
+    console.log(`Execution Path: ${trace.executionPath}`);
+    console.log("Durations (ms):", trace.durations);
+    if (budgetWarnings.length) {
+      console.warn("⚠️ Latency Warnings:", budgetWarnings);
+    }
+    console.log("================================================\n");
+  }
 }
 
-function isSynthesisRequest(message: string): boolean {
-  if (/\b(role|job|responsibilit|position|designation|title|summariz|summary|overview|analy[sz]|explain|opinion|think)\b/i.test(message)) {
-    return true;
-  }
-  if (/\bwhat\s+(?:do|does|did)\s+.*\b(do|handle|manage)\b/i.test(message)) {
-    return true;
-  }
-  return false;
-}
-
-async function trySqlAnswer(
-  parsed: ParsedQuery,
-  ctx: PipelineContext,
-  emotion?: string,
+export async function runChatPipeline(
+  session: Session,
+  body: ChatRequestBody,
   signal?: AbortSignal,
-  timings?: {
-    tStart: number;
-    dNormalization: number;
-    dResolveQuery: number;
-  },
 ) {
-  if (parsed.kind === "semantic" || parsed.kind === "smalltalk") return null;
+  const tStart = performance.now();
 
-  const metadataOnly = isMetadataOnlyKind(parsed.kind);
-  const directAnswer = await handleMetadataQuery(parsed);
+  const rawMessage = validateMessage(body.message);
+  const history = sanitizeChatHistory(body.history);
 
-  if (signal?.aborted) return null;
+  const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const sessionId = typeof body.sessionId === "string" && body.sessionId.trim() ? body.sessionId.trim() : null;
 
-  console.log("[trySqlAnswer] debug", {
-    kind: parsed.kind,
-    metadataOnly,
-    directAnswerLength: directAnswer?.length ?? null,
-    directAnswerPreview: directAnswer?.slice(0, 80) ?? null,
-    isMiss: directAnswer ? isSqlMissAnswer(directAnswer) : "no answer",
-  });
+  const trace: PipelineTrace = {
+    requestId,
+    sessionId,
+    timestamp: new Date().toISOString(),
+    originalQuery: rawMessage,
+    durations: {}
+  };
 
-  if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer)) {
-    const isSynthesis = isSynthesisRequest(ctx.message);
-    if (isSynthesis) {
-      logChatRoute("sql_synthesis_stream", parsed, { answer_chars: directAnswer.length });
-      return streamGeminiAnswer(
+  let response: any = null;
+
+  try {
+    // 1. Fast-path regex routing
+    const fastPath = tryFastPathRegexRoute(rawMessage);
+    if (fastPath) {
+      trace.executionPath = "Smalltalk/Fastpath";
+      trace.intentRoute = { kind: "smalltalk", confidence: 1.0, source: "regex" };
+      
+      if (sessionId) {
+        const user = await getOrCreateUser(session);
+        const ownsSession = await ensureSessionBelongsToUser(sessionId, user.id);
+        if (ownsSession) {
+          await addChatMessage(sessionId, "user", rawMessage, "neutral");
+          await addChatMessage(sessionId, "bot", fastPath.answer, "neutral");
+        }
+      }
+      response = NextResponse.json({ answer: fastPath.answer, emotion: "neutral", sessionId });
+      return response;
+    }
+
+    // 2. Parallel Preprocessing
+    const lastEntities = await extractLastEntityFromHistory(history);
+    const [emotionAnalysis] = await Promise.all([
+      analyzeUserEmotion(rawMessage, history),
+    ]);
+    const userEmotion = emotionAnalysis.emotion;
+
+    const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion);
+
+    // 3. Intent Classification (runs first, on the raw query)
+    const tIntentStart = performance.now();
+    let parsed = await resolveQuery(rawMessage, history, session.user?.name || undefined, lastEntities);
+    const dIntentClassify = performance.now() - tIntentStart;
+    trace.intentRoute = { kind: parsed.kind, confidence: parsed.confidence, source: parsed.source };
+    trace.durations.intent_classifier_ms = Math.round(dIntentClassify);
+
+    // 4. Construct Context
+    const ctx: PipelineContext = {
+      message: rawMessage,
+      history,
+      sessionId: attachedSessionId,
+      lastProject: lastEntities.lastProject,
+      lastPerson: lastEntities.lastPerson,
+      sessionName: session.user?.name || undefined,
+      reformulatedQuery: parsed.reformulatedQuery,
+      trace
+    };
+
+    // 6. Try Notion Link Answer
+    const linkResponse = await tryNotionLinkAnswer(ctx, userEmotion, signal);
+    if (linkResponse) {
+      trace.executionPath = "Notion Link";
+      response = linkResponse;
+      return response;
+    }
+
+    // 7. Smalltalk (non-fastpath)
+    if (parsed.kind === "smalltalk") {
+      trace.executionPath = "Smalltalk/Fastpath";
+      response = await streamGeminiAnswer(
         ctx.message,
-        directAnswer,
+        "",
         ctx.history,
         ctx.sessionId,
         parsed.kind,
         signal,
-        timings
-          ? {
-              tStart: timings.tStart,
-              normalization: Math.round(timings.dNormalization),
-              intentClassification: Math.round(timings.dResolveQuery),
-              sqlAnswerAttempt: Math.round(performance.now() - timings.tStart),
-              queryReformulation: 0,
-              queryExpansion: 0,
-              retrieval: 0,
-              expandedQueryCount: 1,
-              contextChars: directAnswer.length,
-              topScore: 1.0,
-              avgScore: 1.0,
-              confidenceOk: true,
-              historyEntityUsed: false,
-            }
-          : undefined,
-        emotion,
+        {
+          tStart,
+          normalization: 0,
+          intentClassification: Math.round(dIntentClassify),
+          sqlAnswerAttempt: 0,
+          queryReformulation: 0,
+          queryExpansion: 0,
+          retrieval: 0,
+          expandedQueryCount: 0,
+          contextChars: 0,
+          topScore: 0,
+          avgScore: 0,
+          confidenceOk: true,
+          historyEntityUsed: false,
+        },
+        userEmotion
       );
+      return response;
     }
-  }
 
-  if (metadataOnly) {
-    if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer)) {
-      logChatRoute("sql_hit", parsed, { answer_chars: directAnswer.length });
-      return jsonAnswer(ctx.sessionId, directAnswer, emotion, signal);
-    }
-    if (
-      parsed.kind === "team_activity" &&
-      isTeamActivityMetadataGap(directAnswer)
-    ) {
-      logChatRoute("sql_weak_rag", parsed, {
-        team_activity_metadata_gap: true,
-      });
-      return null;
-    }
-    logChatRoute("sql_miss_metadata", parsed, {
-      had_sql: Boolean(directAnswer),
+    // 8. SQL Metadata lane
+    const tSqlStart = performance.now();
+    const sqlResponse = await trySqlAnswer(parsed, ctx, userEmotion, signal, {
+      tStart,
+      dNormalization: 0,
+      dResolveQuery: dIntentClassify,
     });
-    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed), emotion, signal);
-  }
+    const dSqlAnswer = performance.now() - tSqlStart;
+    trace.durations.sql_ms = Math.round(dSqlAnswer);
 
-  if (directAnswer && !shouldFallbackToRag(parsed, directAnswer)) {
-    logChatRoute("sql_hit", parsed, { answer_chars: directAnswer.length });
-    return jsonAnswer(ctx.sessionId, directAnswer, emotion, signal);
-  }
-
-  if (directAnswer) {
-    logChatRoute("sql_weak_rag", parsed, { answer_chars: directAnswer.length });
-  } else {
-    logChatRoute("sql_weak_rag", parsed, { sql_empty: true });
-  }
-
-  return null;
-}
-
-async function tryRagAnswer(
-  parsed: ParsedQuery,
-  ctx: PipelineContext,
-  session: Session,
-  timings: {
-    tStart: number;
-    dNormalization: number;
-    dResolveQuery: number;
-    dSqlAnswer: number;
-  },
-  signal?: AbortSignal,
-  userEmotion?: string,
-) {
-  if (signal?.aborted) {
-    return new Response(null, { status: 499 });
-  }
-
-  if (isMetadataOnlyKind(parsed.kind) && parsed.kind !== "team_activity") {
-    logChatRoute("sql_miss_metadata", parsed, { blocked_rag: true });
-    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(parsed), userEmotion, signal);
-  }
-
-  const titleBoost = resolveRagTitleBoost(parsed, ctx.message);
-  const explicitPage = isExplicitPageQuestion(ctx.message, parsed.docTitle);
-
-  let searchQuery: string;
-  let method = "original";
-  let dReformulate = 0;
-
-  if (explicitPage && titleBoost) {
-    searchQuery = titleBoost;
-  } else if (ctx.reformulatedQuery) {
-    searchQuery = ctx.reformulatedQuery;
-    method = "reformulated";
-  } else {
-    const tRefStart = performance.now();
-    const reformulated = await reformulateSearchQuery(ctx.message, ctx.history);
-    dReformulate = performance.now() - tRefStart;
-    searchQuery = reformulated.searchQuery;
-    method = reformulated.method;
-  }
-
-  const hints: string[] = [];
-  if (titleBoost && !explicitPage) hints.push(titleBoost);
-  if (parsed.personName?.trim()) hints.push(parsed.personName.trim());
-  if (parsed.year) hints.push(String(parsed.year));
-  if (hints.length && !explicitPage) {
-    const hintBlock = hints.join(" ");
-    const lower = searchQuery.toLowerCase();
-    if (!hints.every((h) => lower.includes(h.toLowerCase()))) {
-      searchQuery = `${hintBlock} ${searchQuery}`;
+    if (sqlResponse) {
+      trace.executionPath = "SQL Hit";
+      response = sqlResponse;
+      return response;
     }
-  }
 
-  // Follow-up context resolution from history
-  const { lastProject, lastPerson } = await extractLastEntityFromHistory(ctx.history);
-
-  const isVagueFollowUp =
-    !parsed.docTitle &&
-    !parsed.personName &&
-    /\b(this|that|it|more|explain|project|core|detail|in depth|elaborate|tell me more|what about|only for|for \d{4}|in \d{4}|more information|more about|about it)\b/i.test(
-      ctx.message,
-    ) &&
-    ctx.message.trim().split(/\s+/).length < 20;
-
-  if (isVagueFollowUp) {
-    if (lastProject && !titleBoost) {
-      searchQuery = `${lastProject} ${searchQuery}`.trim();
-      method = "history_entity";
-    } else if (lastPerson && !parsed.personName) {
-      searchQuery = `${lastPerson} ${searchQuery}`.trim();
-      method = "history_entity";
+    if (isNotionLinkRequest(rawMessage)) {
+      trace.executionPath = "Notion Link";
+      response = jsonAnswer(
+        attachedSessionId,
+        "Ask for a Notion link using the page title, e.g. **link for Employee Onboarding Hub**.",
+        userEmotion,
+        signal,
+      );
+      return response;
     }
+
+    // 9. RAG lane
+    const tRagStart = performance.now();
+    const ragResponse = await tryRagAnswer(parsed, ctx, session, {
+      tStart,
+      dNormalization: 0,
+      dResolveQuery: dIntentClassify,
+      dReformulate: 0,
+      dSqlAnswer,
+    }, signal, userEmotion);
+    const dRagAnswer = performance.now() - tRagStart;
+    trace.durations.rag_ms = Math.round(dRagAnswer);
+    trace.executionPath = "RAG Fallback";
+
+    response = ragResponse;
+    return response;
+  } finally {
+    logPipelineTelemetry(trace);
   }
-
-  const tExpStart = performance.now();
-  const searchQueries = SCOPED_RAG_KINDS.has(parsed.kind)
-    ? [searchQuery]
-    : (await expandSearchQueries(ctx.message, ctx.history, searchQuery))
-        .queries;
-  const dExpand = SCOPED_RAG_KINDS.has(parsed.kind) ? 0 : performance.now() - tExpStart;
-  const multiQueryMethod = SCOPED_RAG_KINDS.has(parsed.kind)
-    ? "primary_only"
-    : "llm";
-
-  logChatRoute("semantic_rag", parsed, {
-    reformulation: method,
-    multi_query: multiQueryMethod,
-    search_queries: searchQueries,
-    history_entity: isVagueFollowUp ? { lastProject, lastPerson } : undefined,
-  });
-
-  const tRetStart = performance.now();
-  const {
-    context: notionContext,
-    confidence,
-    chunkHits,
-  } = await buildNotionContextWithConfidence(searchQueries, {
-    titleBoost: titleBoost || undefined,
-    year: parsed.year,
-  });
-  const dRetrieval = performance.now() - tRetStart;
-
-  logRetrievalDiagnostics(parsed, searchQueries, confidence, chunkHits);
-
-  if (!notionContext.trim()) {
-    console.log(
-      "[telemetry]",
-      JSON.stringify({
-        kind: parsed.kind,
-        confidenceOk: false,
-        reason: "empty_context",
-        durations: {
-          normalization: Math.round(timings.dNormalization),
-          intentClassification: Math.round(timings.dResolveQuery),
-          sqlAnswerAttempt: Math.round(timings.dSqlAnswer),
-          queryReformulation: Math.round(dReformulate),
-          queryExpansion: Math.round(dExpand),
-          retrieval: Math.round(dRetrieval),
-          total: Math.round(performance.now() - timings.tStart),
-        },
-        ts: Date.now(),
-      }),
-    );
-    return jsonAnswer(
-      ctx.sessionId,
-      "I couldn't find matching pages in the synced Notion database. Try **Sync changes** in the sidebar, or rephrase with a project/person/page name from Notion.",
-      userEmotion,
-      signal,
-    );
-  }
-
-  if (!confidence.ok) {
-    console.log(
-      "[telemetry]",
-      JSON.stringify({
-        kind: parsed.kind,
-        confidenceOk: false,
-        reason: confidence.reason,
-        durations: {
-          normalization: Math.round(timings.dNormalization),
-          intentClassification: Math.round(timings.dResolveQuery),
-          sqlAnswerAttempt: Math.round(timings.dSqlAnswer),
-          queryReformulation: Math.round(dReformulate),
-          queryExpansion: Math.round(dExpand),
-          retrieval: Math.round(dRetrieval),
-          total: Math.round(performance.now() - timings.tStart),
-        },
-        ts: Date.now(),
-      }),
-    );
-    return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE, userEmotion, signal);
-  }
-
-  return streamGeminiAnswer(
-    ctx.message,
-    notionContext,
-    ctx.history,
-    ctx.sessionId,
-    parsed.kind,
-    signal,
-    {
-      tStart: timings.tStart,
-      normalization: Math.round(timings.dNormalization),
-      intentClassification: Math.round(timings.dResolveQuery),
-      sqlAnswerAttempt: Math.round(timings.dSqlAnswer),
-      queryReformulation: Math.round(dReformulate),
-      queryExpansion: Math.round(dExpand),
-      retrieval: Math.round(dRetrieval),
-      expandedQueryCount: searchQueries.length,
-      contextChars: notionContext.length,
-      topScore: confidence.topScore,
-      avgScore: confidence.avgScore,
-      confidenceOk: confidence.ok,
-      historyEntityUsed: isVagueFollowUp && (!!lastProject || !!lastPerson),
-    },
-    userEmotion,
-  );
 }
-
-
-

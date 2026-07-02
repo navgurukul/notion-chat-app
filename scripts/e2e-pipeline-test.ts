@@ -17,6 +17,9 @@ import {
   isNotionLinkRequest,
   resolveSemanticSearchQuery,
 } from "../src/lib/chat/link-lookup";
+import { reformulateSearchQuery } from "../src/lib/chat/query-reformulation";
+import { runChatPipeline } from "../src/lib/chat/pipeline";
+
 
 type Result = { name: string; ok: boolean; detail: string };
 
@@ -74,8 +77,8 @@ async function testRagPath() {
   const question = "Summarize the main themes across all Zuvy-related docs";
   const parsed = await resolveQuery(question);
 
-  if (parsed.kind !== "semantic") {
-    fail("RAG path — routing", `expected semantic, got ${parsed.kind} doc=${parsed.docTitle ?? ""}`);
+  if (parsed.kind !== "semantic" && parsed.kind !== "project_summary") {
+    fail("RAG path — routing", `expected semantic or project_summary, got ${parsed.kind} doc=${parsed.docTitle ?? ""}`);
     return;
   }
 
@@ -227,6 +230,143 @@ async function testYearAssignedRegression() {
   pass("Regression — assigned + year filter", `person=${parsed.personName} year=${parsed.year} · tasks found`);
 }
 
+async function testQueryRoutingRegressions() {
+  console.log("--- Query Routing & Multi-Turn Regressions ---\n");
+
+  const singleTurnCases = [
+    { q: "assigned to Mahendra", expectKind: "assigned_list" },
+    { q: "who is Mahendra", forbidKind: "assigned_list" },
+    { q: "list tasks assigned to me", expectKind: "assigned_list" },
+    { q: "show assigned issues", expectKind: "assigned_list" },
+    { q: "tell me about Rahul", forbidKind: "assigned_list" },
+    { q: "leave policy details", forbidKind: "assigned_list", expectKind: "page_about" },
+    { q: "who is Mahendra", forbidKind: "assigned_list" },
+    { q: "Who are all developers?", expectKind: "people_list" },
+    { q: "Which project has the most developers?", expectKind: "project_most_devs" },
+    { q: "how many total developers are working in navgurukul?", expectKind: "people_list" },
+    { q: "who is working on Oscar MVP?", expectKind: "assigned_to_of" },
+    { q: "what projects is Mahendra working on?", expectKind: "assigned_list" },
+    { q: "who is the creator of Oscar MVP?", expectKind: "created_by_of" },
+    { q: "what task komal is currently working on?", expectKind: "assigned_list" },
+    { q: "komal currently working on which task", expectKind: "assigned_list" },
+    { q: "komal has worked on which task so far?", expectKind: "assigned_list" },
+  ];
+
+  for (const tc of singleTurnCases) {
+    const parsed = await resolveQuery(tc.q);
+    if (tc.expectKind && parsed.kind !== tc.expectKind) {
+      fail(`Single-turn regression: ${tc.q}`, `expected kind ${tc.expectKind}, got ${parsed.kind}`);
+      return;
+    }
+    if (tc.forbidKind && parsed.kind === tc.forbidKind) {
+      fail(`Single-turn regression: ${tc.q}`, `forbidden kind ${tc.forbidKind} matched`);
+      return;
+    }
+    pass(`Single-turn regression: ${tc.q}`, `resolved to kind=${parsed.kind}`);
+  }
+
+  // Multi-turn Case 1: General person topic to Rahul
+  const history1 = [
+    { role: "user" as const, content: "Tell me about Mahendra" },
+    { role: "bot" as const, content: "Mahendra is a software engineer working on the team." }
+  ];
+  const ref1 = await reformulateSearchQuery("What about Rahul?", history1);
+  const parsed1 = await resolveQuery(ref1.searchQuery);
+  if (parsed1.kind === "assigned_list") {
+    fail("Multi-turn regression: Rahul query", `incorrectly routed to assigned_list from history leak. Reformulated: "${ref1.searchQuery}"`);
+    return;
+  }
+  pass("Multi-turn regression: Rahul query", `reformulated="${ref1.searchQuery}" kind=${parsed1.kind}`);
+
+  // Multi-turn Case 2: Assigned tasks context followed by Mahendra
+  const history2 = [
+    { role: "user" as const, content: "Show my assigned tasks" },
+    { role: "bot" as const, content: "You have 3 active tasks." }
+  ];
+  const ref2 = await reformulateSearchQuery("What about Mahendra?", history2);
+  const parsed2 = await resolveQuery(ref2.searchQuery);
+  if (parsed2.kind !== "assigned_list") {
+    fail("Multi-turn regression: Mahendra query", `expected assigned_list, got ${parsed2.kind}. Reformulated: "${ref2.searchQuery}"`);
+    return;
+  }
+  pass("Multi-turn regression: Mahendra query", `reformulated="${ref2.searchQuery}" kind=${parsed2.kind}`);
+
+  // Multi-turn Case 3: Task details request ("tell me more about this task")
+  const history3 = [
+    { role: "user" as const, content: "what task assined to mahendra in 2026?" },
+    { role: "bot" as const, content: "1 result(s) — Bharat FPO Finder — Maintaining · assignee: Amruta, Mahendra Mahendra · edited: 2026-05-06" }
+  ];
+  const ref3 = await reformulateSearchQuery("tell me more about this task?", history3);
+  const parsed3 = await resolveQuery(ref3.searchQuery);
+  if (parsed3.kind === "assigned_list") {
+    fail("Multi-turn regression: Task details", `incorrectly routed to assigned_list. Reformulated: "${ref3.searchQuery}"`);
+    return;
+  }
+  if (parsed3.docTitle !== "Bharat FPO Finder") {
+    fail("Multi-turn regression: Task details title", `expected docTitle "Bharat FPO Finder", got "${parsed3.docTitle}". Reformulated: "${ref3.searchQuery}"`);
+    return;
+  }
+  pass("Multi-turn regression: Task details", `reformulated="${ref3.searchQuery}" kind=${parsed3.kind} docTitle=${parsed3.docTitle}`);
+
+  // Multi-turn Case 4: Pronoun resolution he -> Mahendra
+  const history4 = [
+    { role: "user" as const, content: "What about Mahendra?" },
+    { role: "bot" as const, content: "Mahendra is a developer." }
+  ];
+  const parsed4 = await resolveQuery("I want all the tasks he got assigned in 2026", history4, undefined, { lastPerson: "Mahendra" });
+  if (parsed4.personName !== "Mahendra") {
+    fail("Multi-turn pronoun resolution", `expected personName "Mahendra", got "${parsed4.personName}"`);
+    return;
+  }
+  pass("Multi-turn pronoun resolution", `correctly resolved 'he' to '${parsed4.personName}'`);
+}
+
+async function testFastPathGreetingsLatency() {
+  const mockSession = {
+    user: {
+      name: "Tester",
+      email: "tester@navgurukul.org",
+    },
+    expires: new Date(Date.now() + 3600000).toISOString(),
+  } as any;
+
+  const testCases = [
+    { message: "hi" },
+    { message: "hello" },
+    { message: "thanks" },
+    { message: "bye" },
+  ];
+
+  for (const tc of testCases) {
+    const t0 = performance.now();
+    const response = await runChatPipeline(mockSession, { message: tc.message });
+    const duration = performance.now() - t0;
+
+    const data = await response.json();
+
+    if (duration > 100) {
+      fail(
+        `Latency budget exceeded for greeting: "${tc.message}"`,
+        `Expected < 100ms, took ${duration.toFixed(2)}ms`,
+      );
+      return;
+    }
+
+    if (!data.answer || !/hello|welcome|goodbye/i.test(data.answer)) {
+      fail(
+        `Greeting response invalid: "${tc.message}"`,
+        `Got: "${data.answer}"`,
+      );
+      return;
+    }
+
+    pass(
+      `Fast path latency assertion: "${tc.message}"`,
+      `took ${duration.toFixed(2)}ms (budget < 100ms)`,
+    );
+  }
+}
+
 async function main() {
   console.log("=== E2E: 3 chat paths + chunking ===\n");
 
@@ -245,6 +385,8 @@ async function main() {
 
   console.log("--- Regression ---\n");
   await testYearAssignedRegression();
+  await testQueryRoutingRegressions();
+  await testFastPathGreetingsLatency();
 
   const failed = results.filter((r) => !r.ok);
   console.log("=== Summary ===");

@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { normalizationCache } from "./cache";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
@@ -16,6 +17,12 @@ Rules:
 export async function normalizeLanguage(message: string): Promise<string> {
   // Skip normalization for very short or already clean messages
   if (message.length < 8) return message;
+
+  const cacheKey = message.trim().toLowerCase();
+  const cached = normalizationCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
 
   try {
     const model = genAI.getGenerativeModel({
@@ -35,12 +42,15 @@ export async function normalizeLanguage(message: string): Promise<string> {
 
     // Safety check: if AI returns something wildly different in length, skip it
     if (normalized && normalized.length < message.length * 3) {
+      normalizationCache.set(cacheKey, normalized);
       return normalized;
     }
 
+    normalizationCache.set(cacheKey, message);
     return message;
   } catch {
     // Never block the pipeline — fall back to original
+    normalizationCache.set(cacheKey, message);
     return message;
   }
 }

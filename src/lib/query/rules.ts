@@ -58,17 +58,47 @@ function cleanComparePageTitle(value: string) {
     .trim();
 }
 
+const TRAILING_META_WORDS = /\s+(?:details?|info|information|about|spec|specs|specification|requirements?|prd)$/i;
+
+export function cleanExtractedTitle(title: string): string {
+  let cleaned = title.trim();
+
+  // Normalize punctuation and extra spaces
+  cleaned = cleaned.replace(/[?!.,;]+/g, "").replace(/\s+/g, " ").trim();
+
+  // Safeguard canonical page titles:
+  const canonicalPatterns = [
+    /\bemployee\s+information\s+policy$/i,
+    /\binformation\s+policy$/i,
+    /\bproduct\s+requirements\s+document$/i,
+    /\brequirements\s+document$/i,
+    /\bprd\s+template$/i,
+    /\bapi\s+specification$/i,
+    /\bsecurity\s+requirements$/i,
+  ];
+
+  const isProtected = canonicalPatterns.some((pattern) => pattern.test(cleaned));
+
+  if (!isProtected) {
+    // Remove trailing conversational meta suffixes
+    cleaned = cleaned.replace(TRAILING_META_WORDS, "").trim();
+  }
+
+  return cleaned;
+}
+
 function stripDocWords(value: string) {
-  return value
+  const step1 = value
     .replace(
       /\b(page|doc|document|docs|pages|project|projects|task|tasks|work|worked|assigned|assign|assignee|given|got|to|the|a|an|all|every|some|any|only|one|feature|features)\b/gi,
       "",
     )
     .replace(/^(what|which|who|where|when|why|how|was|is)\s+/i, "")
-    .replace(/[?!.,;]/g, "")
     .replace(/'s\b/gi, "")
     .replace(/\s+/g, " ")
     .trim();
+
+  return cleanExtractedTitle(step1);
 }
 
 function cleanPersonName(value: string | null) {
@@ -76,7 +106,7 @@ function cleanPersonName(value: string | null) {
   const cleaned = stripYearSuffixFromPerson(
     stripDocWords(value)
       .replace(/\s+(?:is|are|was|were|has|have|had)\s*$/i, "")
-      .replace(/^(?:did|does|do)\s+/i, ""),
+      .replace(/^(?:did|does|do|is|are|was|were|has|have|had)\s+/i, ""),
   ).trim();
   if (!cleaned) return null;
   if (/^(what|which|who|when|where|why|how|is|was|are|were|task|tasks|project|projects|work|manager|lead|only|one)$/i.test(cleaned)) {
@@ -158,7 +188,7 @@ function parseActivityQuery(question: string, q: string): RulesQuery | null {
   if (tasksWorkedMatch?.[1]) {
     const person = cleanPersonName(tasksWorkedMatch[1]);
     if (person) {
-      return { kind: "worked_on_list", personName: person, raw: question };
+      return withYear(question, { kind: "worked_on_list", personName: person });
     }
   }
 
@@ -333,6 +363,19 @@ export function parseQueryByRules(question: string): RulesQuery {
   const qn = preprocessQuestion(question);
   const q = normalize(qn);
 
+  if (
+    /who\s+are\s+all\s+(?:the\s+)?(?:developers|devs|people|team\s+members)\b/i.test(q) ||
+    /^(?:list|show)\s+(?:all\s+)?(?:developers|devs|people|team\s+members)\??$/i.test(q) ||
+    /how\s+many\s+(?:total\s+)?(?:developers|devs|people|team\s+members|engineers|users)\b/i.test(q) ||
+    /total\s+(?:number\s+of\s+)?(?:developers|devs|people|team\s+members|engineers|users)\b/i.test(q)
+  ) {
+    return { kind: "people_list", raw: question, parserConfidence: 0.95 };
+  }
+
+  if (/\bwhich\s+project\s+has\s+the\s+most\s+developers\b/i.test(q) || /\bprojects?\s+with\s+(?:the\s+)?most\s+devs\b/i.test(q)) {
+    return { kind: "project_most_devs", raw: question, parserConfidence: 0.95 };
+  }
+
   if (/\bwho\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm|owner)\s+(?:of|for|on)\b/i.test(q)) {
     const docTitle = extractAfter(question, [
       /who\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm|owner)\s+(?:of|for|on)\s+(.+?)(?:\?|$)/i,
@@ -340,28 +383,41 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "project_manager_of", docTitle: docTitle ?? undefined, raw: question };
   }
 
+  // Implicit assigned list matching: "show assigned issues", "assigned tickets", "list assigned tasks", etc.
+  if (
+    /^(?:show|list|get|display|what are the)\s+assigned\s+(?:tasks?|issues?|tickets?|bugs?|work\s+items?)(?:\?|$)/i.test(q) ||
+    /\bassigned\s+(?:tasks?|issues?|tickets?|bugs?|work\s+items?)(?:\?|$)/i.test(q)
+  ) {
+    return {
+      kind: "assigned_list",
+      raw: question,
+      parserConfidence: 0.95,
+    };
+  }
+
   // "What tasks are assigned to X in Y project?" — person + project scoped
   // Must run BEFORE the year-only variant to capture the project in docTitle.
   const tasksAssignedToPersonInProjectMatch = question.match(
-    /\b(?:which|what)\s+tasks?\s+(?:are\s+)?assigned\s+to\s+(.+?)\s+in\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
+    /\b(?:which|what)\s+(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:are\s+)?assigned\s+to\s+(.+?)\s+in\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
   );
   if (tasksAssignedToPersonInProjectMatch?.[1] && tasksAssignedToPersonInProjectMatch?.[2]) {
     const person = cleanPersonName(tasksAssignedToPersonInProjectMatch[1]);
     const project = stripDocWords(tasksAssignedToPersonInProjectMatch[2]);
     // Only use as person+project if the second group is not a year
-    if (person && project && !/^20\d{2}$/.test(project.trim())) {
+    if (person && project && !/^(?:the\s+)?(?:year\s+)?20\d{2}$/i.test(project.trim())) {
       return {
         kind: "assigned_list",
         personName: person,
         docTitle: project,
         raw: question,
+        parserConfidence: 0.90,
       };
     }
   }
 
   // "What tasks assigned to X (in 2024)?" — person only, optional year
   const tasksAssignedToYearMatch = question.match(
-    /\b(?:which|what)\s+tasks?\s+(?:are\s+)?assigned\s+to\s+(.+?)(?:\s+in\s+(?:the\s+)?(?:year\s+)?(20\d{2}))?(?:\?|$)/i,
+    /\b(?:which|what)\s+(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:are\s+)?assigned\s+to\s+(.+?)(?:\s+in\s+(?:the\s+)?(?:year\s+)?(20\d{2}))?(?:\?|$)/i,
   );
   if (tasksAssignedToYearMatch?.[1]) {
     const person = cleanPersonName(tasksAssignedToYearMatch[1]);
@@ -373,19 +429,100 @@ export function parseQueryByRules(question: string): RulesQuery {
       return withYear(question, {
         kind: "assigned_list",
         personName: person,
+        parserConfidence: 0.90,
         ...(year ? { year } : {}),
       });
     }
   }
 
-  // "Who is assigned to ReportList?" — before broad assigned_list patterns
-  if (/\bwho\s+(?:is\s+)?assigned\s+to\b/i.test(q) || /\bassignee\s+of\b/i.test(q)) {
+  // "assigned to X" shortcut
+  const assignedToDirectMatch = question.match(
+    /^(?:show\s+)?assigned\s+to\s+([A-Za-z][A-Za-z'.-]*(?:\s+[A-Za-z][A-Za-z'.-]*){0,2})(?:\?|$)/i
+  );
+  if (assignedToDirectMatch?.[1]) {
+    const person = cleanPersonName(assignedToDirectMatch[1]);
+    if (person) {
+      return {
+        kind: "assigned_list",
+        personName: person,
+        raw: question,
+        parserConfidence: 0.95,
+      };
+    }
+  }
+
+  // "show/list assigned tasks for/to X"
+  const showTasksMatch = q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:assigned\s+)?(?:to|for|of)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i)
+    ?? q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:the\s+)?([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})'s\s+(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)/i);
+  if (showTasksMatch) {
+    const person = cleanPersonName(showTasksMatch[1]);
+    if (person) {
+      return {
+        kind: "assigned_list",
+        personName: person,
+        raw: question,
+        parserConfidence: 0.95,
+      };
+    }
+  }
+
+  // "what is/are X working on?" / "what project(s) is/are X working on?" / "projects worked on by X"
+  // "what is/are X working on?" / "what project(s) is/are X working on?" / "what task X is working on" / "X working on which task" / "X has worked on which task so far"
+  const workingOnMatch = q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)?\s*([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on|worked\s+on)\b/i)
+    ?? q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)?\s*(?:is|are|has|have)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on|worked\s+on)\b/i)
+    ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)?\s*(?:currently\s+)?(?:working\s+on|assigned\s+to|works?\s+on|worked\s+on)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
+    ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:has|have|had)\s+(?:been\s+)?(?:working\s+on|worked\s+on|done|doing)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
+    ?? q.match(/\b(?:projects?|tasks?|work)\s+(?:worked\s+on|assigned\s+to)\s+by\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i);
+  if (workingOnMatch?.[1]) {
+    const person = cleanPersonName(workingOnMatch[1]);
+    if (person) {
+      return {
+        kind: "assigned_list",
+        personName: person,
+        raw: question,
+        parserConfidence: 0.70,
+      };
+    }
+  }
+
+  // Plan queries, e.g. "Mahendra's weekly plan", "plan for Mahendra", "what is Mahendra's monthly plan"
+  const planMatch = question.match(
+    /\b(?:weekly|monthly|today|yesterday|daily)?\s*plans?\s+(?:for|of)\s+([A-Za-z][A-Za-z'.-]*(?:\s+[A-Za-z][A-Za-z'.-]*){0,2})(?:\?|$)/i
+  ) ?? question.match(
+    /\b([A-Za-z][A-Za-z'.-]*(?:\s+[A-Za-z][A-Za-z'.-]*){0,2})'s\s+(?:weekly|monthly|today|yesterday|daily)?\s*plans?(?:\?|$)/i
+  ) ?? question.match(
+    /\b(?:what|which|show|list)\b.*\bplans?\b.*\b(?:for|of)?\s+([A-Za-z][A-Za-z'.-]*(?:\s+[A-Za-z][A-Za-z'.-]*){0,2})(?:\?|$)/i
+  );
+  if (planMatch?.[1]) {
+    const person = cleanPersonName(planMatch[1]);
+    if (person) {
+      return withYear(question, {
+        kind: "assigned_list",
+        personName: person,
+        parserConfidence: 0.90,
+      });
+    }
+  }
+
+  // "Who is assigned to / working on ReportList?" — before broad assigned_list patterns
+  if (
+    /\bwho\s+(?:is\s+)?assigned\s+to\b/i.test(q) ||
+    /\bwho\s+(?:is\s+)?working\s+on\b/i.test(q) ||
+    /\bwho\s+works\s+on\b/i.test(q) ||
+    /\bwho\s+are\s+all\s+(?:the\s+)?(?:developers|devs|people|team\s+members)\s+(?:on|working\s+on|assigned\s+to)\b/i.test(q) ||
+    /\b(?:developers|devs|people|team\s+members)\s+(?:on|working\s+on|assigned\s+to)\b/i.test(q) ||
+    /\bassignee\s+of\b/i.test(q)
+  ) {
     const docTitle = extractAfter(question, [
       /who\s+(?:is\s+)?assigned\s+to\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+      /who\s+(?:is\s+)?working\s+on\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+      /who\s+works\s+on\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+      /who\s+are\s+all\s+(?:the\s+)?(?:developers|devs|people|team\s+members)\s+(?:on|working\s+on|assigned\s+to)\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+      /(?:developers|devs|people|team\s+members)\s+(?:on|working\s+on|assigned\s+to)\s+(?:the\s+)?(.+?)(?:\?|$)/i,
       /assignee\s+of\s+(?:the\s+)?(.+?)(?:\?|$)/i,
     ]);
     if (docTitle) {
-      return { kind: "assigned_to_of", docTitle: stripDocWords(docTitle), raw: question };
+      return { kind: "assigned_to_of", docTitle: stripDocWords(docTitle), raw: question, parserConfidence: 0.95 };
     }
   }
 
@@ -396,18 +533,19 @@ export function parseQueryByRules(question: string): RulesQuery {
   if (personAssignedTopicMatch?.[1] && personAssignedTopicMatch?.[2]) {
     const person = cleanPersonName(personAssignedTopicMatch[1]);
     const project = stripDocWords(personAssignedTopicMatch[2]);
-    if (person && project) {
+    if (person && project && !/^(?:the\s+)?(?:year\s+)?20\d{2}$/i.test(project.trim())) {
       return {
         kind: "assigned_list",
         personName: person,
         docTitle: project,
         raw: question,
+        parserConfidence: 0.70,
       };
     }
   }
 
   const topicAssignedToPersonMatch = question.match(
-    /^(?!who\s+(?:is\s+)?assigned\s+to)(?!what\s+tasks?\s+(?:are\s+)?assigned\s+to)(?!which\s+project\s+.+\s+is\s+assigned)(?!what\s+project\s+.+\s+is\s+assigned)(?:only\s+one\s+|one\s+|single\s+)?(?:tasks?|projects?|work|data|docs?|documents?|pages?)?\s*(?:of|for|in|on|about|related to)?\s*(.+?)\s+(?:assigned|assign|given)\s+to\s+(.+?)(?:\?|$)/i,
+    /^(?!who\s+(?:is\s+)?assigned\s+to)(?!what\s+(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:are\s+)?assigned\s+to)(?!which\s+project\s+.+\s+is\s+assigned)(?!what\s+project\s+.+\s+is\s+assigned)(?:only\s+one\s+|one\s+|single\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|work|data|docs?|documents?|pages?)?\s*(?:of|for|in|on|about|related to)?\s*(.+?)\s+(?:assigned|assign|given)\s+to\s+(.+?)(?:\?|$)/i,
   );
   if (topicAssignedToPersonMatch?.[1] && topicAssignedToPersonMatch?.[2]) {
     return {
@@ -415,6 +553,8 @@ export function parseQueryByRules(question: string): RulesQuery {
       docTitle: stripDocWords(topicAssignedToPersonMatch[1]),
       personName: cleanPersonName(topicAssignedToPersonMatch[2]) ?? undefined,
       raw: question,
+      parserConfidence: 0.55,
+      requiresLlmVerification: true,
     };
   }
 
@@ -456,7 +596,7 @@ export function parseQueryByRules(question: string): RulesQuery {
     if (assignedPersonMatch?.[1]) {
       const person = cleanPersonName(assignedPersonMatch[1]);
       if (person) {
-        return { kind: "assigned_list", personName: person, raw: question };
+        return { kind: "assigned_list", personName: person, raw: question, parserConfidence: 0.90 };
       }
     }
   }
@@ -482,36 +622,33 @@ export function parseQueryByRules(question: string): RulesQuery {
       /^(?:what\s+(?:was|is)\s+)?(.+?)\s+(?:tasks?|projects?|work)\s+(.+?)\s+(?:has\s+been\s+|have\s+been\s+|is\s+|are\s+)?(?:worked|workd|working|works|work)(?:\s+on)?/i,
     );
     if (topicTaskPersonMatch?.[1] && topicTaskPersonMatch?.[2]) {
-      return {
+      return withYear(question, {
         kind: "worked_on_list",
         docTitle: stripDocWords(topicTaskPersonMatch[1]),
         personName: cleanPersonName(topicTaskPersonMatch[2]) ?? undefined,
-        raw: question,
-      };
+      });
     }
 
     const possessiveWorkedOnMatch = question.match(
       /(?:give me|show|list|provide)?\s*(?:\b(?:data|docs?|tasks?|projects?)\b)?\s*(?:of|about)?\s*(.+?)'s\s+(?:worked|workd|working|work|works)\s+(?:on\s+)?(.+?)(?:\?|$)/i,
     );
     if (possessiveWorkedOnMatch?.[1] && possessiveWorkedOnMatch?.[2]) {
-      return {
+      return withYear(question, {
         kind: "worked_on_list",
         personName: cleanPersonName(possessiveWorkedOnMatch[1]) ?? undefined,
         docTitle: stripDocWords(possessiveWorkedOnMatch[2]),
-        raw: question,
-      };
+      });
     }
 
     const topicPersonMatch = question.match(
       /^(?:give me|show|list|provide)?\s*(?:\b(?:data|docs?|tasks?|projects?)\b)?\s*(?:of|about|related to)?\s*(.+?)\s+that\s+(.+?)\s+(?:has\s+been\s+|have\s+been\s+|is\s+|are\s+)?(?:worked|workd|working|works|work)(?:\s+on)?/i,
     );
     if (topicPersonMatch?.[1] && topicPersonMatch?.[2]) {
-      return {
+      return withYear(question, {
         kind: "worked_on_list",
         docTitle: stripDocWords(topicPersonMatch[1]),
         personName: cleanPersonName(topicPersonMatch[2]) ?? undefined,
-        raw: question,
-      };
+      });
     }
 
     const personName = extractAfter(question, [
@@ -533,7 +670,7 @@ export function parseQueryByRules(question: string): RulesQuery {
       /worked\s+on\s+by\s+(.+)$/i,
       /\btasks?\s+(?:by|of|for)\s+(.+)$/i,
     ]);
-    return { kind: "worked_on_list", personName: cleanPersonName(personName) ?? undefined, raw: question };
+    return withYear(question, { kind: "worked_on_list", personName: cleanPersonName(personName) ?? undefined });
   }
 
   // "Which project does Souvik own?" / "what projects does X own?"
@@ -582,9 +719,13 @@ export function parseQueryByRules(question: string): RulesQuery {
   }
 
   // created-by of
-  if (/\bwho\s+created\b/i.test(q)) {
-    const docTitle = extractAfter(question, [/who\s+created\s+(?:the\s+)?(.+)$/i]);
-    return { kind: "created_by_of", docTitle: docTitle ?? undefined, raw: question };
+  if (/\bwho\s+created\b/i.test(q) || /\bcreator\s+of\b/i.test(q) || /\bwho\s+(?:made|wrote|authored)\b/i.test(q)) {
+    const docTitle = extractAfter(question, [
+      /who\s+created\s+(?:the\s+)?(.+)$/i,
+      /creator\s+of\s+(?:the\s+)?(.+)$/i,
+      /who\s+(?:made|wrote|authored)\s+(?:the\s+)?(.+)$/i,
+    ]);
+    return { kind: "created_by_of", docTitle: docTitle ?? undefined, raw: question, parserConfidence: 0.95 };
   }
 
   // type of
@@ -763,6 +904,15 @@ export function parseQueryByRules(question: string): RulesQuery {
     const topic = hubMatch?.[1] ? stripDocWords(hubMatch[1]) || hubMatch[1].trim() : "";
     if (topic.length >= 8) {
       return { kind: "semantic", docTitle: topic, raw: question };
+    }
+  }
+
+  // page details shortcut
+  if (/\b(?:details|info|information)\s+(?:of|about|for|on)\s+(.+?)(?:\?|$)/i.test(q) || /^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i.test(q)) {
+    const match = question.match(/\b(?:details|info|information)\s+(?:of|about|for|on)\s+(.+?)(?:\?|$)/i) ?? question.match(/^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i);
+    const doc = stripDocWords(match?.[1] || "");
+    if (doc) {
+      return { kind: "page_about", docTitle: doc, raw: question, parserConfidence: 0.95 };
     }
   }
 

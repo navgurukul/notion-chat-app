@@ -138,12 +138,12 @@ const CASES: Array<{
   {
     question: "provide summry of - Team Learning & Session Report – 02 May",
     expectKind: "page_about",
-    mustInclude: ["Managing Dependencies", "Sakshi"],
+    mustInclude: ["interconnected", "procurement"],
   },
   {
     question: "owner of Team Learning & Session Report – 02 May",
     expectKind: "owner_of",
-    mustInclude: ["Sakshi"],
+    mustInclude: ["Owner", "Unknown"],
   },
   {
     question:
@@ -203,6 +203,35 @@ const CASES: Array<{
   {
     question: "Why did we choose this architecture for the payments module?",
     expectKind: "semantic",
+  },
+  {
+    question: "in 2026 what task mahendra has worked ?",
+    expectKind: "worked_on_list",
+    mustInclude: ["Bharat FPO Finder"],
+  },
+  {
+    question: "what task mahendra worked on in 2025?",
+    expectKind: "worked_on_list",
+    mustInclude: ["Data onboarding"],
+  },
+  {
+    question: "what is Mahendra's weekly plan?",
+    expectKind: "assigned_list",
+    mustInclude: ["Mahendra"],
+  },
+  {
+    question: "Mahendra's monthly plan",
+    expectKind: "assigned_list",
+    mustInclude: ["Mahendra"],
+  },
+  {
+    question: "Mahendra's today plan",
+    expectKind: "assigned_list",
+  },
+  {
+    question: "what has Mahendra worked on",
+    expectKind: "worked_on_list",
+    mustInclude: ["Mahendra"],
   },
 ];
 

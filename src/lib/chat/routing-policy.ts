@@ -22,6 +22,8 @@ export const METADATA_ONLY_KINDS = new Set<QueryKind>([
   "team_roster",
   "onboarding_tasks",
   "risks_for",
+  "people_list",
+  "project_most_devs",
 ]);
 
 export function isMetadataOnlyKind(kind: QueryKind): boolean {

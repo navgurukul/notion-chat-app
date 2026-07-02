@@ -8,7 +8,7 @@ export type PersonRecord = {
 
 let _directory: PersonRecord[] | null = null;
 let _lastFetched = 0;
-const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_TTL_MS = 60 * 60 * 1000;
 
 export async function getPeopleDirectory(): Promise<PersonRecord[]> {
   const now = Date.now();

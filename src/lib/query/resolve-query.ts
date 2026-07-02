@@ -1,10 +1,13 @@
 import { parseQueryByRules } from "@/lib/query/rules";
 import { classifyQueryIntent } from "./intent-classifier";
 import { detectIntent } from "./intent";
-import { resolveEntities } from "./entity-resolution";
 import { logQueryRouting } from "./telemetry";
 import type { ParsedQuery } from "./types";
 import { withRegexScores } from "./rule-confidence";
+import type { ChatHistoryItem } from "@/lib/ai/gemini";
+import { tryFastPathRegexRoute } from "@/lib/chat/pipeline/router";
+import { isNotionLinkRequest } from "@/lib/chat/link-lookup";
+import { shouldReformulate, reformulateSearchQuery } from "@/lib/chat/query-reformulation";
 
 const INTENT_KIND_HINTS: Record<string, Set<ParsedQuery["kind"]>> = {
   PERSON_ACTIVITY: new Set(["activity_summary", "worked_on_list", "assigned_list"]),
@@ -25,10 +28,8 @@ const INTENT_CONFIDENCE_FLOORS: Record<string, number> = {
 };
 
 const LLM_ENABLED = process.env.AI_INTENT_CLASSIFIER !== "false";
-/** Regex wins above this when entities look valid */
-const REGEX_OVERRIDE = 0.9;
-/** Use LLM when regex confidence is below this */
-const LLM_THRESHOLD = 0.78;
+export const HIGH_CONFIDENCE = 0.90;
+export const PARSER_CONFIDENCE_THRESHOLD = 0.75;
 
 function hasBrokenEntities(parsed: ParsedQuery) {
   const noisy = /^(is|was|are|were|only|one|what|who|which)$/i;
@@ -41,8 +42,10 @@ function hasBrokenEntities(parsed: ParsedQuery) {
 function shouldUseLlm(rules: ParsedQuery): boolean {
   if (!LLM_ENABLED) return false;
   if (rules.kind === "semantic") return true;
+  if (rules.requiresLlmVerification) return true;
   if (hasBrokenEntities(rules)) return true;
-  if (rules.confidence < LLM_THRESHOLD) return true;
+  if (rules.parserConfidence !== undefined && rules.parserConfidence < PARSER_CONFIDENCE_THRESHOLD) return true;
+  if (rules.confidence < PARSER_CONFIDENCE_THRESHOLD) return true;
   return false;
 }
 
@@ -61,51 +64,106 @@ function applyIntentHint(question: string, rules: ParsedQuery): ParsedQuery {
 }
 
 function mergeRulesAndLlm(rules: ParsedQuery, llm: ParsedQuery): ParsedQuery {
-  if (rules.confidence >= REGEX_OVERRIDE && !hasBrokenEntities(rules)) {
-    return { ...rules, source: "merged", confidence: Math.max(rules.confidence, llm.confidence * 0.5) };
+  if (rules.confidence >= HIGH_CONFIDENCE && !hasBrokenEntities(rules)) {
+    return { 
+      ...rules, 
+      source: "merged", 
+      confidence: Math.max(rules.confidence, llm.confidence * 0.5) 
+    };
   }
 
-  if (llm.confidence >= 0.72) {
-    return llm;
-  }
-
-  if (rules.kind !== "semantic" && rules.confidence >= llm.confidence) {
-    return rules;
-  }
+  const mergedKind = (llm.confidence >= 0.72) ? llm.kind : rules.kind;
+  const confidence = Math.max(llm.confidence, rules.confidence);
 
   return {
-    ...llm,
+    kind: mergedKind,
+    confidence,
     source: "merged",
-    confidence: Math.max(llm.confidence, rules.confidence),
+    personName: rules.personName,
+    docTitle: rules.docTitle,
+    compareTitleB: rules.compareTitleB,
+    year: rules.year,
+    dateRange: rules.dateRange,
+    raw: rules.raw
   };
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn(`[resolveQuery] Intent classifier timeout after ${timeoutMs}ms. Falling back.`);
+      resolve(fallback);
+    }, timeoutMs);
+    promise.then((res) => {
+      clearTimeout(timer);
+      resolve(res);
+    }).catch(() => {
+      clearTimeout(timer);
+      resolve(fallback);
+    });
+  });
+}
+
 /**
- * Hybrid router: deterministic regex first, LLM intent when confidence is low or semantic.
- * This is the single entry point the chat API should use.
+ * Hybrid router: runs fast deterministic checks first (greeting/thanks/link),
+ * then regex rules on raw query, and calls LLM classifier with a 1500ms timeout
+ * only when confidence is low. Does not perform DB entity resolution upfront.
  */
-export async function resolveQuery(question: string): Promise<ParsedQuery> {
-  const rules = applyIntentHint(question, withRegexScores(parseQueryByRules(question)));
+export async function resolveQuery(
+  question: string,
+  history: ChatHistoryItem[] = [],
+  sessionName?: string,
+  lastEntities?: { lastPerson?: string; lastProject?: string }
+): Promise<ParsedQuery> {
+  // 1. Fast-path regex checks (greetings/thanks/bye/link)
+  const fastPath = tryFastPathRegexRoute(question);
+  if (fastPath) {
+    return { kind: "smalltalk", confidence: 1.0, source: "regex", raw: question };
+  }
+  if (isNotionLinkRequest(question)) {
+    return { kind: "semantic", confidence: 1.0, source: "regex", raw: question };
+  }
 
+  // 1.5 Early Query Reformulation for follow-up turns
+  let processedQuestion = question;
+  let reformulatedQueryText: string | undefined;
+  if (shouldReformulate(question, history)) {
+    const reformulated = await reformulateSearchQuery(question, history);
+    processedQuestion = reformulated.searchQuery;
+    reformulatedQueryText = reformulated.searchQuery;
+  }
+
+  // 2. Regex rules parsing on the processed question
+  const rules = applyIntentHint(processedQuestion, withRegexScores(parseQueryByRules(processedQuestion)));
+
+  let parsed: ParsedQuery;
+  let usedLlm = false;
+
+  // 3. Skip LLM if rules are confident
   if (!shouldUseLlm(rules)) {
-    return finalizeQuery(question, rules, rules, false);
+    parsed = rules;
+  } else {
+    usedLlm = true;
+    const llmPromise = classifyQueryIntent(processedQuestion);
+    const timeoutLimit = process.env.IS_EVALUATION === "true" ? 6000 : 2500;
+    const llm = await withTimeout(llmPromise, timeoutLimit, null);
+    if (!llm) {
+      parsed = rules;
+    } else {
+      parsed = mergeRulesAndLlm(rules, llm);
+    }
   }
 
-  const llm = await classifyQueryIntent(question);
-  if (!llm) {
-    return finalizeQuery(question, rules, rules, true);
-  }
+  const finalParsed: ParsedQuery = {
+    ...parsed,
+    raw: question,
+    reformulatedQuery: reformulatedQueryText
+  };
 
-  return finalizeQuery(question, mergeRulesAndLlm(rules, llm), rules, true);
+  logQueryRouting(question, rules, finalParsed, usedLlm);
+  return finalParsed;
 }
 
-async function finalizeQuery(question: string, parsed: ParsedQuery, rules: ParsedQuery, usedLlm: boolean) {
-  const withEntities = await resolveEntities(parsed);
-  logQueryRouting(question, rules, withEntities, usedLlm);
-  return withEntities;
-}
-
-/** Sync regex-only parse (tests, offline scripts). Skips LLM and entity resolution. */
 export function resolveQueryRulesOnly(question: string): ParsedQuery {
   return withRegexScores(parseQueryByRules(question));
 }

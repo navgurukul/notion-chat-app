@@ -4,6 +4,7 @@
  * No Gemini here. If this returns null, the chat pipeline falls back to RAG.
  */
 import { escapeLike, query } from "@/lib/db";
+import { getPeopleDirectory } from "@/lib/db/team-members";
 import type {
   ActivityRow,
   NotionPageRow,
@@ -69,7 +70,7 @@ function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd
   const q = rawQuery.toLowerCase();
   const now = new Date();
 
-  if (/\btoday\b/i.test(q)) {
+  if (/\btoday\b/i.test(q) || /\bdaily\b/i.test(q)) {
     const start = new Date(now);
     start.setHours(0, 0, 0, 0);
     const end = new Date(start);
@@ -86,7 +87,7 @@ function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
   }
 
-  if (/\bthis\s+week\b/i.test(q)) {
+  if (/\bthis\s+week\b/i.test(q) || /\bweekly\b/i.test(q)) {
     const start = new Date(now);
     start.setHours(0, 0, 0, 0);
     const day = start.getDay();
@@ -108,7 +109,7 @@ function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
   }
 
-  if (/\bthis\s+month\b/i.test(q)) {
+  if (/\bthis\s+month\b/i.test(q) || /\bmonthly\b/i.test(q)) {
     const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
     const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
@@ -1366,9 +1367,73 @@ async function lookupByTitle(title: string, includeContent = false) {
   return ranked.map((item) => item.row);
 }
 
+import { sqlMetadataCache } from "@/lib/chat/cache";
+
 export async function handleMetadataQuery(
   parsed: ParsedQuery,
 ): Promise<string | null> {
+  const cacheKey = JSON.stringify({
+    kind: parsed.kind,
+    personName: parsed.personName,
+    docTitle: parsed.docTitle,
+    compareTitleB: parsed.compareTitleB,
+    year: parsed.year,
+  });
+  const cached = sqlMetadataCache.get(cacheKey);
+  if (cached !== undefined) {
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[sqlMetadataCache] hit for key:", cacheKey);
+    }
+    return cached === "__NULL__" ? null : cached;
+  }
+
+  const result = await handleMetadataQueryInner(parsed);
+  sqlMetadataCache.set(cacheKey, result === null ? "__NULL__" : result);
+  return result;
+}
+
+async function handlePeopleList(): Promise<string> {
+  const dir = await getPeopleDirectory();
+  if (dir.length === 0) {
+    return "No team members found in the synced Notion data.";
+  }
+  const list = dir.map((p) => `- **${p.name}**`).join("\n");
+  return `## Team Members (${dir.length})\n\nHere are all team members found in the synced Notion data:\n${list}`;
+}
+
+async function handleProjectMostDevs(): Promise<string> {
+  const rows = await query<{ title: string; dev_count: number }>(`
+    SELECT coalesce(title, 'Untitled') as title, count(DISTINCT dev) as dev_count
+    FROM (
+      SELECT title, trim(unnest(string_to_array(owner, ','))) as dev
+      FROM notion_pages
+      WHERE owner IS NOT NULL AND trim(owner) <> ''
+    ) AS devs
+    WHERE dev <> '' AND lower(dev) NOT IN ('unknown', 'n/a', 'none', 'tbd', 'unassigned')
+    GROUP BY title
+    ORDER BY dev_count DESC, title ASC
+    LIMIT 5
+  `);
+
+  if (rows.length === 0) {
+    return "No active projects with developers found in synced Notion data.";
+  }
+
+  const topProject = rows[0];
+  const list = rows.map((r, idx) => `${idx + 1}. **${r.title}** (${r.dev_count} developer(s))`).join("\n");
+  return `The project with the most developers is **${topProject.title}** with **${topProject.dev_count}** developers.\n\n### Top Projects by Developer Count:\n${list}`;
+}
+
+async function handleMetadataQueryInner(
+  parsed: ParsedQuery,
+): Promise<string | null> {
+  if (parsed.kind === "people_list") {
+    return handlePeopleList();
+  }
+  if (parsed.kind === "project_most_devs") {
+    return handleProjectMostDevs();
+  }
+
   const personRaw = parsed.personName?.trim();
   const person = personRaw ? normalizePersonNameForMatch(personRaw) : undefined;
   const docTitle = parsed.docTitle?.trim();
@@ -1537,11 +1602,11 @@ export async function handleMetadataQuery(
     );
 
     let dateNote = "";
-    if (/\btoday\b/i.test(parsed.raw)) dateNote = " for today";
+    if (/\btoday\b/i.test(parsed.raw) || /\bdaily\b/i.test(parsed.raw)) dateNote = " for today";
     else if (/\byesterday\b/i.test(parsed.raw)) dateNote = " for yesterday";
-    else if (/\bthis\s+week\b/i.test(parsed.raw)) dateNote = " for this week";
+    else if (/\bthis\s+week\b/i.test(parsed.raw) || /\bweekly\b/i.test(parsed.raw)) dateNote = " for this week";
     else if (/\blast\s+week\b/i.test(parsed.raw)) dateNote = " for last week";
-    else if (/\bthis\s+month\b/i.test(parsed.raw)) dateNote = " for this month";
+    else if (/\bthis\s+month\b/i.test(parsed.raw) || /\bmonthly\b/i.test(parsed.raw)) dateNote = " for this month";
     else if (/\blast\s+month\b/i.test(parsed.raw)) dateNote = " for last month";
     else if (/\bthis\s+year\b/i.test(parsed.raw)) dateNote = " for this year";
     else if (/\blast\s+year\b/i.test(parsed.raw)) dateNote = " for last year";
@@ -1603,6 +1668,11 @@ export async function handleMetadataQuery(
       ? `%${escapeLike(normalizedTopic)}%`
       : null;
     const taskListQuery = /\b(?:which|what)\s+tasks?\b/i.test(parsed.raw);
+
+    const { dateStart, dateEnd } = resolveDateRange(parsed.raw);
+    const year = parsed.year;
+    const yearStart = dateStart ?? (year ? `${year}-01-01` : null);
+    const yearEnd = dateEnd ?? (year ? `${year + 1}-01-01` : null);
 
     const personPropertyInContentSql = `
       (
@@ -1671,6 +1741,14 @@ export async function handleMetadataQuery(
         OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
         OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
       )
+      AND (
+        $4::text IS NULL
+        OR (
+          notion_edited_at IS NOT NULL
+          AND notion_edited_at >= $4::timestamptz
+          AND notion_edited_at < $5::timestamptz
+        )
+      )
       ORDER BY
         CASE
           WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\' THEN 1
@@ -1682,13 +1760,26 @@ export async function handleMetadataQuery(
         title ASC
       LIMIT ${SQL_RESULT_LIMIT}
       `,
-      [personTerm, fuzzyPersonTerm, topicTerm],
+      [personTerm, fuzzyPersonTerm, topicTerm, yearStart, yearEnd],
     );
     if (!rows.length) return null;
 
+    let dateNote = "";
+    if (/\btoday\b/i.test(parsed.raw) || /\bdaily\b/i.test(parsed.raw)) dateNote = " for today";
+    else if (/\byesterday\b/i.test(parsed.raw)) dateNote = " for yesterday";
+    else if (/\bthis\s+week\b/i.test(parsed.raw) || /\bweekly\b/i.test(parsed.raw)) dateNote = " for this week";
+    else if (/\blast\s+week\b/i.test(parsed.raw)) dateNote = " for last week";
+    else if (/\bthis\s+month\b/i.test(parsed.raw) || /\bmonthly\b/i.test(parsed.raw)) dateNote = " for this month";
+    else if (/\blast\s+month\b/i.test(parsed.raw)) dateNote = " for last month";
+    else if (/\bthis\s+year\b/i.test(parsed.raw)) dateNote = " for this year";
+    else if (/\blast\s+year\b/i.test(parsed.raw)) dateNote = " for last year";
+    else if (year) dateNote = ` in ${year}`;
+
+    const yearNote = dateNote;
+
     const label = taskListQuery
-      ? `${person} worked on`
-      : `associated with ${person}${effectiveTopic ? ` and matching "${effectiveTopic}"` : ""}`;
+      ? `${person} worked on${yearNote}`
+      : `associated with ${person}${effectiveTopic ? ` and matching "${effectiveTopic}"` : ""}${yearNote}`;
 
     return `${formatListHeader(rows.length, label)}\n\n${formatRows(
       rows,
@@ -2094,7 +2185,11 @@ export async function handleMetadataQuery(
       ]
         .filter(Boolean)
         .join(" · ");
-       if (parsed.kind === "activity_summary" && person) {
+      return `**${formatLink(row.title || "Untitled", row.url)}** — ${meta}`;
+    })}`;
+  }
+
+  if (parsed.kind === "activity_summary" && person) {
     const personTerm = `%${escapeLike(person)}%`;
     const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
     const isWorkspace = docTitle ? isWorkspaceScope(docTitle) : true;
@@ -2212,6 +2307,7 @@ export async function handleMetadataQuery(
         `No Notion pages found for **${person}**${docTitle ? ` matching "${docTitle}"` : ""} in synced Notion.\n\n` +
         `_Try **Sync changes** if assignments were updated recently._`
       );
+    }
     const topicNote = docTitle ? ` (filtered by "${docTitle}")` : "";
     const activeRows = rows.filter((row) => isActiveStatus(row.status));
     const top = (workingOnQuery && activeRows.length ? activeRows : rows)[0];

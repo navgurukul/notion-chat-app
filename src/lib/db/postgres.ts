@@ -1,4 +1,23 @@
+import dns from "dns";
 import { Pool, type PoolClient } from "pg";
+
+// Hook DNS lookup to force IPv4 (family: 4) specifically for Neon database hosts.
+// This prevents connection timeouts caused by Node's parallel IPv6/IPv4 lookup 
+// implementation (autoSelectFamily) on networks where IPv6 is present but blocked.
+const originalLookup = dns.lookup;
+// @ts-ignore
+dns.lookup = function (hostname: string, options: any, callback: any) {
+  if (typeof options === "function") {
+    callback = options;
+    options = {};
+  }
+  options = options || {};
+  if (hostname && hostname.includes("neon.tech")) {
+    options.family = 4;
+    options.hints = (options.hints || 0) & ~dns.ADDRCONFIG;
+  }
+  return originalLookup(hostname, options, callback);
+};
 
 const databaseUrl = process.env.DATABASE_URL;
 

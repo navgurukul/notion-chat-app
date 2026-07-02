@@ -235,3 +235,27 @@ export async function getEmptyChatSession(userId: string) {
   return rows[0] ?? null;
 }
 
+export type ConversationState = {
+  lastProject?: string;
+  lastPerson?: string;
+  lastIntent?: string;
+  lastYear?: number;
+  lastPage?: string;
+};
+
+export async function getSessionState(sessionId: string): Promise<ConversationState | null> {
+  const rows = await query<{ state: ConversationState | null }>(
+    "SELECT state FROM chat_sessions WHERE id = $1 LIMIT 1",
+    [sessionId],
+  );
+  return rows[0]?.state ?? null;
+}
+
+export async function updateSessionState(sessionId: string, state: ConversationState): Promise<void> {
+  await query(
+    "UPDATE chat_sessions SET state = $2, updated_at = now() WHERE id = $1",
+    [sessionId, JSON.stringify(state)],
+  );
+}
+
+

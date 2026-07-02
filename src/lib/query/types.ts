@@ -20,6 +20,9 @@ export type QueryKind =
   | "compare_pages"
   | "risks_for"
   | "onboarding_tasks"
+  | "people_list"
+  | "project_most_devs"
+  | "analytics"
   | "semantic"
   | "smalltalk";
 
@@ -35,6 +38,11 @@ export type ParsedQuery = {
   confidence: number;
   source: QuerySource;
   raw: string;
+  parserConfidence?: number;
+  requiresLlmVerification?: boolean;
+  dateRange?: { dateStart: string | null; dateEnd: string | null };
+  resolvedEntities?: any;
+  reformulatedQuery?: string;
 };
 
 export type ClassifiedIntent = {
