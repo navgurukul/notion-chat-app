@@ -1398,7 +1398,7 @@ async function handlePeopleList(): Promise<string> {
     return "No team members found in the synced Notion data.";
   }
   const list = dir.map((p) => `- **${p.name}**`).join("\n");
-  return `## Team Members (${dir.length})\n\nHere are all team members found in the synced Notion data:\n${list}`;
+  return `## Team Members (${dir.length})\n\nHere are all team members found in the synced Notion data:\n${list}\n\n*Note: This list represents all members who own, create, or edit tasks and pages in the synced Notion workspace (including program managers, People & Culture/HR, and other coordinators in addition to developers).*`;
 }
 
 async function handleProjectMostDevs(): Promise<string> {
@@ -1875,7 +1875,7 @@ async function handleMetadataQueryInner(
   if (parsed.kind === "team_roster" && docTitle) {
     const scopeTopic = extractProjectScopeTopic(parsed.raw, docTitle);
     const pages = await fetchProjectPages(scopeTopic);
-    const members = aggregatePeopleOnProject(pages);
+    const members = await aggregatePeopleOnProject(pages);
 
     if (!members.length) {
       return [
@@ -1887,19 +1887,24 @@ async function handleMetadataQueryInner(
       ].join("\n");
     }
 
+    const tableHeader = [
+      "| Team Member | Related Pages | Roster Roles / Context |",
+      "| :--- | :---: | :--- |"
+    ];
+    const tableRows = members.map((member) => {
+      const roles = member.roles.length
+        ? member.roles.join(", ")
+        : "mentioned";
+      return `| **${member.name}** | ${member.pageCount} | _${roles}_ |`;
+    });
+    const tableMarkdown = [...tableHeader, ...tableRows].join("\n");
+
     return [
       `### Who is working on **${scopeTopic}**`,
       "",
       `Found **${members.length}** people across **${pages.length}** related page(s) in Notion (owner, assignee, captain, team roster, editor — not only formal Owner):`,
       "",
-      members
-        .map((member, i) => {
-          const roles = member.roles.length
-            ? member.roles.join(", ")
-            : "mentioned";
-          return `${i + 1}. **${member.name}** — ${member.pageCount} page(s) — _${roles}_`;
-        })
-        .join("\n"),
+      tableMarkdown,
       "",
       `_Re-sync if someone is missing. Ask **"Who is the most active team member in ${scopeTopic}?"** for a ranked view._`,
     ].join("\n");
@@ -1911,7 +1916,7 @@ async function handleMetadataQueryInner(
       parsed.raw,
     );
     const pages = await fetchProjectPages(scopeTopic);
-    const members = aggregatePeopleOnProject(pages);
+    const members = await aggregatePeopleOnProject(pages);
     const ranked = isLeastActive ? [...members].reverse() : members;
 
     if (!ranked.length) {
@@ -1925,18 +1930,22 @@ async function handleMetadataQueryInner(
     }
 
     const top = ranked[0];
+    const tableHeader = [
+      "| Team Member | Related Pages | Key Roles |",
+      "| :--- | :---: | :--- |"
+    ];
+    const tableRows = ranked.slice(0, 15).map((member) => {
+      const roles = member.roles.slice(0, 3).join(", ") || "mentioned";
+      return `| **${member.name}** | ${member.pageCount} | _${roles}_ |`;
+    });
+    const tableMarkdown = [...tableHeader, ...tableRows].join("\n");
+
     return [
       `### ${isLeastActive ? "Least active" : "Most active"} in **${scopeTopic}** (by related Notion pages)`,
       "",
       `**${isLeastActive ? "Least active match" : "Top match"}:** **${top.name}** — ${top.pageCount} related page(s).`,
       "",
-      ranked
-        .slice(0, 15)
-        .map((member, i) => {
-          const roles = member.roles.slice(0, 3).join(", ");
-          return `${i + 1}. **${member.name}** — ${member.pageCount} page(s)${roles ? ` _(${roles})_` : ""}`;
-        })
-        .join("\n"),
+      tableMarkdown,
       "",
       `_Counts owner, assignee, captain, team roster, and editor signals on pages matching **${scopeTopic}**. Re-sync if data looks stale._`,
     ].join("\n");

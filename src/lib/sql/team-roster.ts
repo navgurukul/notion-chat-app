@@ -1,5 +1,5 @@
 import { escapeLike, query } from "@/lib/db";
-import { TEAM_MEMBER_WHITELIST } from "@/lib/db/team-members";
+import { TEAM_MEMBER_WHITELIST, getPeopleDirectory } from "@/lib/db/team-members";
 import { normalizePersonNameForMatch } from "@/lib/query/normalize";
 
 type ProjectPageRow = {
@@ -23,7 +23,7 @@ const PERSON_FIELD_NOISE =
   /^(unknown|n\/a|none|navgurukul|notion|unassigned|tbd|me|team|project|-+)$/i;
 
 const MENTION_NOISE =
-  /^(untitled|backend|datapivots|navgurkul|design|scope|item|user|admin|qa|dev|pm|billing|rate|total|due|gmail|please)$/i;
+  /^(untitled|backend|datapivots|navgurkul|design|scope|item|user|admin|qa|dev|pm|billing|rate|total|due|gmail|please|cost|price|rs|invoice|sow|proposal|value|fee|fees|charges|usd|inr|pay|payment)$/i;
 
 function personDedupeKey(name: string) {
   return normalizePersonNameForMatch(name);
@@ -95,6 +95,7 @@ function looksLikePersonName(value: string) {
   if (words.length > 4) return false; // Increased from 3 to 4 to allow for longer names
 
   for (const word of words) {
+    if (MENTION_NOISE.test(word)) return false;
     if (!/^[A-Za-z][A-Za-z'.-]*$/.test(word)) return false;
   }
 
@@ -213,7 +214,47 @@ export async function fetchProjectPages(scopeTopic: string): Promise<ProjectPage
   );
 }
 
-export function aggregatePeopleOnProject(pages: ProjectPageRow[]): ProjectMember[] {
+function findCanonicalName(input: string, directory: Array<{ name: string; normalized: string }>): string {
+  const q = input.trim().toLowerCase();
+  if (!q) return input;
+
+  // 1. Exact match
+  const exact = directory.find((p) => p.normalized === q);
+  if (exact) return exact.name;
+
+  // 2. First name match: if input is a single word and matches the first name of a person in directory
+  const words = q.split(/\s+/);
+  if (words.length === 1) {
+    const firstNameMatches = directory.filter((p) => {
+      const firstName = p.normalized.split(/\s+/)[0];
+      return firstName === q;
+    });
+    if (firstNameMatches.length === 1) {
+      return firstNameMatches[0].name;
+    }
+  }
+
+  // 3. If a person record in the directory has a first name that matches the input's first name exactly
+  const inputFirstName = words[0];
+  const firstNameMatches = directory.filter((p) => {
+    const firstName = p.normalized.split(/\s+/)[0];
+    return firstName === inputFirstName;
+  });
+  if (firstNameMatches.length === 1) {
+    return firstNameMatches[0].name;
+  }
+
+  // 4. Partial match
+  const partialMatches = directory.filter((p) => p.normalized.includes(q));
+  if (partialMatches.length === 1) {
+    return partialMatches[0].name;
+  }
+
+  return input;
+}
+
+export async function aggregatePeopleOnProject(pages: ProjectPageRow[]): Promise<ProjectMember[]> {
+  const directory = await getPeopleDirectory();
   const byKey = new Map<
     string,
     { name: string; score: number; roles: Set<string>; pages: Set<string> }
@@ -232,14 +273,15 @@ export function aggregatePeopleOnProject(pages: ProjectPageRow[]): ProjectMember
   };
 
   function addPerson(name: string, role: string, pageId: string) {
-    const key = personDedupeKey(name);
-    if (!TEAM_MEMBER_WHITELIST.has(key) && !looksLikePersonName(name)) {
+    const canonicalName = findCanonicalName(name, directory);
+    const key = personDedupeKey(canonicalName);
+    if (!TEAM_MEMBER_WHITELIST.has(key) && !looksLikePersonName(canonicalName)) {
       return;
     }
 
     const entry =
-      byKey.get(key) ?? { name, score: 0, roles: new Set<string>(), pages: new Set<string>() };
-    entry.name = pickLongerName(entry.name, name);
+      byKey.get(key) ?? { name: canonicalName, score: 0, roles: new Set<string>(), pages: new Set<string>() };
+    entry.name = pickLongerName(entry.name, canonicalName);
     entry.score += roleWeights[role] ?? 1;
     entry.roles.add(role);
     entry.pages.add(pageId);
@@ -250,7 +292,8 @@ export function aggregatePeopleOnProject(pages: ProjectPageRow[]): ProjectMember
     const pageRoles = new Set<string>();
 
     const processPerson = (name: string, role: string) => {
-      const roleKey = `${personDedupeKey(name)}:${role}`;
+      const canonicalName = findCanonicalName(name, directory);
+      const roleKey = `${personDedupeKey(canonicalName)}:${role}`;
       if (!pageRoles.has(roleKey)) {
         addPerson(name, role, page.id);
         pageRoles.add(roleKey);

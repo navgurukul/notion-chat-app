@@ -10,6 +10,30 @@ let _directory: PersonRecord[] | null = null;
 let _lastFetched = 0;
 const CACHE_TTL_MS = 60 * 60 * 1000;
 
+function cleanAndNormalizeName(name: string): string | null {
+  const trimmed = name.trim();
+
+  // 1. Filter out UUIDs
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (uuidRegex.test(trimmed)) {
+    return null;
+  }
+
+  // 2. Title case/capitalize the name (proper capitalization)
+  let capitalized = trimmed
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+
+  // 3. Deduplicate repeated names like "Mahendra Mahendra" -> "Mahendra" or "Ujala Ujala" -> "Ujala"
+  const parts = capitalized.split(" ");
+  if (parts.length === 2 && parts[0] === parts[1]) {
+    capitalized = parts[0];
+  }
+
+  return capitalized;
+}
+
 export async function getPeopleDirectory(): Promise<PersonRecord[]> {
   const now = Date.now();
   if (_directory && now - _lastFetched < CACHE_TTL_MS) return _directory;
@@ -26,11 +50,23 @@ export async function getPeopleDirectory(): Promise<PersonRecord[]> {
     ORDER BY name
   `);
 
-  _directory = rows
-    .map((r) => r.name.trim())
-    .filter(Boolean)
-    .map((name) => ({ name, normalized: name.toLowerCase() }));
+  const uniqueNames = new Set<string>();
+  const dir: PersonRecord[] = [];
 
+  for (const r of rows) {
+    const cleaned = cleanAndNormalizeName(r.name);
+    if (!cleaned) continue;
+
+    const normalized = cleaned.toLowerCase();
+    if (!uniqueNames.has(normalized)) {
+      uniqueNames.add(normalized);
+      dir.push({ name: cleaned, normalized });
+    }
+  }
+
+  dir.sort((a, b) => a.name.localeCompare(b.name));
+
+  _directory = dir;
   _lastFetched = now;
   return _directory;
 }
