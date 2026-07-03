@@ -163,7 +163,7 @@ export async function extractLastEntityFromHistory(history: ChatHistoryItem[]): 
       if (!candidate) continue;
 
       if (
-        /^(status|owner|done|backlog|unknown|open|closed|in progress|testing|blocked|not started|sync changes)$/i.test(
+        /^(status|owner|done|backlog|unknown|open|closed|in progress|in development|testing|blocked|not started|on hold|scoping|completed|prod ready|sync changes)$/i.test(
           candidate,
         )
       )
@@ -201,7 +201,10 @@ export async function extractLastEntityFromHistory(history: ChatHistoryItem[]): 
       if (/\b(owner|assignee|created by|assigned to|working on)\b/i.test(surrounding)) {
         if (candidate.split(/\s+/).length <= 3 && candidate.length >= 3) {
           if (!lastPerson) {
-            lastPerson = candidate;
+            const resolved = await resolvePersonName(candidate);
+            if (resolved.exact) {
+              lastPerson = resolved.exact;
+            }
           }
         }
       }

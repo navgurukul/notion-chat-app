@@ -1,4 +1,5 @@
 import "dotenv/config";
+import "../src/lib/dns-hook";
 process.env.IS_EVALUATION = "true";
 import { resolveQuery } from "../src/lib/query/resolve-query";
 import { handleMetadataQuery } from "../src/lib/sql/answers";

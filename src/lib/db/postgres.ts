@@ -1,23 +1,5 @@
-import dns from "dns";
+import "@/lib/dns-hook";
 import { Pool, type PoolClient } from "pg";
-
-// Hook DNS lookup to force IPv4 (family: 4) specifically for Neon database hosts.
-// This prevents connection timeouts caused by Node's parallel IPv6/IPv4 lookup 
-// implementation (autoSelectFamily) on networks where IPv6 is present but blocked.
-const originalLookup = dns.lookup;
-// @ts-ignore
-dns.lookup = function (hostname: string, options: any, callback: any) {
-  if (typeof options === "function") {
-    callback = options;
-    options = {};
-  }
-  options = options || {};
-  if (hostname && hostname.includes("neon.tech")) {
-    options.family = 4;
-    options.hints = (options.hints || 0) & ~dns.ADDRCONFIG;
-  }
-  return originalLookup(hostname, options, callback);
-};
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -258,6 +240,8 @@ async function runColumnMigrations(
   }
 }
 
+const CURRENT_SCHEMA_HASH = "v4_automatic_schema_recovery_guard";
+
 export async function ensureSchema() {
   if (schemaReady) return;
 
@@ -267,6 +251,29 @@ export async function ensureSchema() {
   }
 
   schemaPromise = (async () => {
+    // 1. Try fast-path schema check first without acquiring advisory lock
+    try {
+      const client = await pool.connect();
+      try {
+        const res = await client.query(
+          "SELECT value FROM sync_metadata WHERE key = $1 LIMIT 1",
+          ["schema_version_hash"],
+        );
+        if (res.rows.length > 0 && res.rows[0].value === CURRENT_SCHEMA_HASH) {
+          schemaReady = true;
+          globalForPostgres.schemaReady = true;
+          return;
+        }
+      } finally {
+        client.release();
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[ensureSchema] Fast path check bypassed or failed. Running migrations...");
+      }
+    }
+
+    // 2. Full migration / table creation flow (guarded by lock)
     const client = await pool.connect();
 
     try {
@@ -390,6 +397,16 @@ export async function ensureSchema() {
       `,
       );
 
+      // Write current schema version hash to metadata
+      await client.query(
+        `
+        INSERT INTO sync_metadata (key, value, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+        `,
+        ["schema_version_hash", CURRENT_SCHEMA_HASH],
+      );
+
       schemaReady = true;
       globalForPostgres.schemaReady = true;
     } finally {
@@ -411,19 +428,6 @@ export async function ensureSchema() {
 /**
  * Get a dedicated pool client for multi-statement transactions.
  * Caller must call client.release() in a finally block.
- *
- * Usage:
- *   const client = await getClient();
- *   try {
- *     await client.query("BEGIN");
- *     ...
- *     await client.query("COMMIT");
- *   } catch (err) {
- *     await client.query("ROLLBACK").catch(() => undefined);
- *     throw err;
- *   } finally {
- *     client.release();
- *   }
  */
 export async function getClient() {
   await ensureSchema();
@@ -436,7 +440,25 @@ export async function query<T = unknown>(
 ): Promise<T[]> {
   await ensureSchema();
 
-  const result = await pool.query(text, params);
-
-  return result.rows as T[];
+  try {
+    const result = await pool.query(text, params);
+    return result.rows as T[];
+  } catch (error) {
+    const pgError = error as { code?: string };
+    // 42P01: undefined_table, 42703: undefined_column
+    if (pgError.code === "42P01" || pgError.code === "42703") {
+      console.warn(`[postgres] Schema error detected (${pgError.code}). Resetting cache and retrying...`);
+      
+      schemaReady = false;
+      globalForPostgres.schemaReady = false;
+      schemaPromise = null;
+      globalForPostgres.schemaPromise = null;
+      
+      await ensureSchema();
+      
+      const retryResult = await pool.query(text, params);
+      return retryResult.rows as T[];
+    }
+    throw error;
+  }
 }

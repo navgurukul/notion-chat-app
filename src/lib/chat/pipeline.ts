@@ -19,7 +19,6 @@ import { analyzeUserEmotion } from "@/lib/chat/emotion";
 import { extractYear } from "@/lib/query/year";
 import type { ParsedQuery } from "@/lib/query/types";
 import { lookupPageLinkByTitle } from "@/lib/sql/answers";
-import { normalizeLanguage } from "@/lib/chat/normalize-language";
 import {
   tryFastPathRegexRoute,
   resolveFirstPerson,
