@@ -374,6 +374,20 @@ export function parseQueryByRules(question: string): RulesQuery {
   const activityQuery = parseActivityQuery(qn, q);
   if (activityQuery) return activityQuery;
 
+  const possessiveTasksRegex = /^(?:what\s+about\s+)?([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})'s\s+(?:tasks?|work|projects?)(?:\?|$)/i;
+  const possessiveTasksMatch = question.match(possessiveTasksRegex);
+  if (possessiveTasksMatch) {
+    const person = cleanPersonName(possessiveTasksMatch[1]);
+    if (person) {
+      return {
+        kind: "assigned_list",
+        personName: person,
+        raw: question,
+        parserConfidence: 0.95,
+      };
+    }
+  }
+
   const membershipRegex = /^(?:is|does|are)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:working\s+on|work\s+on|part\s+of|contributing\s+to|associated\s+with)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i;
   const membershipRegex2 = /^(?:is|are)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:on|in)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i;
   const membershipRegex3 = /^(?:is|does|are)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:the\s+)?(?:owner|manager|pm|lead)\s+(?:of|for|on)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i;
