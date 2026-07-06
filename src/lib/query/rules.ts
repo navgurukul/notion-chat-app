@@ -219,10 +219,10 @@ function parseActivityQuery(question: string, q: string): RulesQuery | null {
 
   const whichPersonWorkingMatch =
     question.match(
-      /which\s+projects?\s+(.+?)\s+is\s+(?:working|work)(?:\s+on)?(?:\s+currently|\s+now)?/i,
+      /which\s+projects?\s+(.+?)\s+is\s+(?:working|work)(?:\s+on)?\s+(?:currently|now)\b/i,
     ) ??
     question.match(
-      /which\s+projects?\s+(?:is\s+)?(.+?)\s+(?:working|work)\s+on(?:\s+currently|\s+now)?/i,
+      /which\s+projects?\s+(?:is\s+)?(.+?)\s+(?:working|work)\s+on\s+(?:currently|now)\b/i,
     );
   if (whichPersonWorkingMatch?.[1]) {
     const person = cleanPersonName(whichPersonWorkingMatch[1]);
@@ -233,10 +233,10 @@ function parseActivityQuery(question: string, q: string): RulesQuery | null {
 
   const whatPersonWorkingMatch =
     question.match(
-      /what\s+projects?\s+(.+?)\s+is\s+(?:working|work)(?:\s+on)?(?:\s+currently|\s+now)?/i,
+      /what\s+projects?\s+(.+?)\s+is\s+(?:working|work)(?:\s+on)?\s+(?:currently|now)\b/i,
     ) ??
     question.match(
-      /what\s+projects?\s+(?:is\s+)?(.+?)\s+(?:working|work)\s+on(?:\s+currently|\s+now)?/i,
+      /what\s+projects?\s+(?:is\s+)?(.+?)\s+(?:working|work)\s+on\s+(?:currently|now)\b/i,
     );
   if (whatPersonWorkingMatch?.[1]) {
     const person = cleanPersonName(whatPersonWorkingMatch[1]);
@@ -466,12 +466,15 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
+  const activityQuery = parseActivityQuery(qn, q);
+  if (activityQuery) return activityQuery;
+
   // "what is/are X working on?" / "what project(s) is/are X working on?" / "projects worked on by X"
   // "what is/are X working on?" / "what project(s) is/are X working on?" / "what task X is working on" / "X working on which task" / "X has worked on which task so far"
-  const workingOnMatch = q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)?\s*([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on|worked\s+on)\b/i)
-    ?? q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)?\s*(?:is|are|has|have)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on|worked\s+on)\b/i)
-    ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)?\s*(?:currently\s+)?(?:working\s+on|assigned\s+to|works?\s+on|worked\s+on)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
-    ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:has|have|had)\s+(?:been\s+)?(?:working\s+on|worked\s+on|done|doing)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
+  const workingOnMatch = q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\b/i)
+    ?? q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)\s+(?:is|are|has|have)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\b/i)
+    ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)?\s*(?:currently\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
+    ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:has|have|had)\s+(?:been\s+)?(?:working\s+on|done|doing)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
     ?? q.match(/\b(?:projects?|tasks?|work)\s+(?:worked\s+on|assigned\s+to)\s+by\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i);
   if (workingOnMatch?.[1]) {
     const person = cleanPersonName(workingOnMatch[1]);
@@ -480,7 +483,7 @@ export function parseQueryByRules(question: string): RulesQuery {
         kind: "assigned_list",
         personName: person,
         raw: question,
-        parserConfidence: 0.70,
+        parserConfidence: 0.95,
       };
     }
   }
@@ -582,8 +585,7 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "created_by_list", personName: personName ?? undefined, raw: question };
   }
 
-  const activityQuery = parseActivityQuery(qn, q);
-  if (activityQuery) return activityQuery;
+
 
   if (
     /\b(?:what|which)\s+projects?\s+(?:is|are)\s+(.+?)\s+assigned\b/i.test(q) ||
