@@ -5,7 +5,7 @@ import { logQueryRouting } from "./telemetry";
 import type { ParsedQuery } from "./types";
 import { withRegexScores } from "./rule-confidence";
 import type { ChatHistoryItem } from "@/lib/ai/gemini";
-import { tryFastPathRegexRoute } from "@/lib/chat/pipeline/router";
+import { tryFastPathRegexRoute, isAmbiguousQuery } from "@/lib/chat/pipeline/router";
 import { isNotionLinkRequest } from "@/lib/chat/link-lookup";
 import { shouldReformulate, reformulateSearchQuery } from "@/lib/chat/query-reformulation";
 
@@ -118,6 +118,9 @@ export async function resolveQuery(
   // 1. Fast-path regex checks (greetings/thanks/bye/link)
   const fastPath = tryFastPathRegexRoute(question);
   if (fastPath) {
+    return { kind: "smalltalk", confidence: 1.0, source: "regex", raw: question };
+  }
+  if (isAmbiguousQuery(question, history)) {
     return { kind: "smalltalk", confidence: 1.0, source: "regex", raw: question };
   }
   if (isNotionLinkRequest(question)) {

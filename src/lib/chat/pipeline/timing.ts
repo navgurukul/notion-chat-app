@@ -6,6 +6,7 @@ export type ResolvedEntityTrace = {
   ambiguous?: boolean;
   candidates?: string[];
   url?: string | null;
+  confidence?: number;
 };
 
 export type PipelineTrace = {
@@ -28,6 +29,7 @@ export type PipelineTrace = {
     dateRange?: ResolvedEntityTrace;
   };
   executionPath?: "SQL Hit" | "RAG Fallback" | "Notion Link" | "Smalltalk/Fastpath";
+  llmCalls: number;
   durations: {
     entity_resolve_ms?: number;
     intent_classifier_ms?: number;
@@ -52,6 +54,7 @@ export type PipelineContext = {
   lastPerson?: string;
   sessionName?: string;
   trace?: PipelineTrace;
+  telemetry?: any;
 };
 
 export type PipelineTimings = {

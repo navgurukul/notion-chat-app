@@ -38,6 +38,34 @@ export function tryFastPathRegexRoute(message: string): { answer: string; kind: 
   return null;
 }
 
+export function isAmbiguousQuery(message: string, history: ChatHistoryItem[] = []): boolean {
+  if (history && history.length > 0) {
+    return false;
+  }
+
+  const normalized = message.trim().toLowerCase().replace(/[?!.,;]/g, "");
+  const words = normalized.split(/\s+/).filter(Boolean);
+
+  // 1. Single word queries
+  if (words.length === 1) {
+    return true;
+  }
+
+  // 2. Short vague phrases with no specific entity
+  const vaguePatterns = [
+    /^(show|list|get|what\s+is|who\s+is)?\s*(owner|manager|pm|lead|status|eta|creator|type)$/i,
+    /^who\s+owns?\s+(it|this|that|them)$/i,
+    /^(what\s+about|tell\s+me\s+more\s+about|show\s+details\s+for)\s+(it|this|that)$/i,
+    /^is\s+there\s+any\s+task$/i
+  ];
+
+  if (vaguePatterns.some(pattern => pattern.test(normalized))) {
+    return true;
+  }
+
+  return false;
+}
+
 export async function resolveFirstPerson(
   message: string,
   session: Session,
@@ -232,6 +260,9 @@ export async function jsonAnswer(sessionId: string | null, answer: string, emoti
   if (signal?.aborted) {
     return new Response(null, { status: 499 });
   }
-  if (sessionId) await addChatMessage(sessionId, "bot", answer, emotion);
+  if (sessionId) {
+    addChatMessage(sessionId, "bot", answer, emotion)
+      .catch(err => console.error("[Background DB Write Error] Failed to save bot message:", err));
+  }
   return NextResponse.json({ answer, emotion });
 }

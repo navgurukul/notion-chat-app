@@ -70,17 +70,24 @@ export async function tryRagAnswer(
   }
 
   // Lazily resolve RAG entities
-  const tEntStart = performance.now();
+  if (ctx.telemetry) {
+    ctx.telemetry.startStep("entity_resolve_ms");
+  }
   const finalParsed = await lazyResolveRagEntities(
     parsed,
     ctx.history,
     { lastPerson: ctx.lastPerson, lastProject: ctx.lastProject }
   );
-  const dEntityResolve = performance.now() - tEntStart;
-  if (ctx.trace && !ctx.trace.durations.entity_resolve_ms) {
-    ctx.trace.durations.entity_resolve_ms = Math.round(dEntityResolve);
-    ctx.trace.entities = finalParsed.resolvedEntities;
-    ctx.trace.pronounResolvedQuery = finalParsed.raw;
+  if (ctx.telemetry) {
+    ctx.telemetry.endStep("entity_resolve_ms");
+    if (finalParsed.resolvedEntities?.person) {
+      const p = finalParsed.resolvedEntities.person;
+      ctx.telemetry.logEntity("person", p.value, p.quality, p.confidence, p.ambiguous, p.candidates);
+    }
+    if (finalParsed.resolvedEntities?.page) {
+      const p = finalParsed.resolvedEntities.page;
+      ctx.telemetry.logEntity("page", p.value, p.quality, undefined, undefined, undefined, p.url);
+    }
   }
 
   if (isMetadataOnlyKind(finalParsed.kind) && finalParsed.kind !== "team_activity") {
@@ -101,9 +108,15 @@ export async function tryRagAnswer(
     searchQuery = ctx.reformulatedQuery;
     method = "reformulated";
   } else if (shouldReformulate(ctx.message, ctx.history)) {
-    const tRefStart = performance.now();
+    if (ctx.telemetry) {
+      ctx.telemetry.startStep("reformulation_ms");
+      ctx.telemetry.incrementLlmCalls();
+    }
     const reformulated = await reformulateSearchQuery(ctx.message, ctx.history, finalParsed.kind);
-    dReformulate = performance.now() - tRefStart;
+    if (ctx.telemetry) {
+      ctx.telemetry.endStep("reformulation_ms");
+      ctx.telemetry.setReformulatedQuery(reformulated.searchQuery);
+    }
     searchQuery = reformulated.searchQuery;
     method = reformulated.method;
   } else {
@@ -133,11 +146,16 @@ export async function tryRagAnswer(
   }
 
   const shouldExpand = BROAD_RAG_KINDS.has(finalParsed.kind);
-  const tExpStart = performance.now();
+  if (ctx.telemetry && shouldExpand) {
+    ctx.telemetry.startStep("expansion_ms");
+    ctx.telemetry.incrementLlmCalls();
+  }
   let searchQueries = shouldExpand
     ? (await expandSearchQueries(ctx.message, ctx.history, searchQuery)).queries
     : [searchQuery];
-  const dExpand = shouldExpand ? performance.now() - tExpStart : 0;
+  if (ctx.telemetry && shouldExpand) {
+    ctx.telemetry.endStep("expansion_ms");
+  }
   const multiQueryMethod = shouldExpand ? "llm" : "primary_only";
 
   const hints: string[] = [];
@@ -156,7 +174,9 @@ export async function tryRagAnswer(
     history_entity: isVagueFollowUp ? { lastProject, lastPerson } : undefined,
   });
 
-  const tRetStart = performance.now();
+  if (ctx.telemetry) {
+    ctx.telemetry.startStep("retrieval_ms");
+  }
   let {
     context: notionContext,
     confidence,
@@ -194,29 +214,16 @@ export async function tryRagAnswer(
       }
     }
   }
-  const dRetrieval = performance.now() - tRetStart;
+  if (ctx.telemetry) {
+    ctx.telemetry.endStep("retrieval_ms");
+    const vectorHits = chunkHits.filter(h => h.sem_score > 0).length;
+    const ftsHits = chunkHits.filter(h => h.kw_score > 0).length;
+    ctx.telemetry.logRetrieval(vectorHits, ftsHits, chunkHits.length, chunkHits.length, chunkHits.length);
+  }
 
   logRetrievalDiagnostics(finalParsed, searchQueries, confidence, chunkHits);
 
   if (!notionContext.trim()) {
-    console.log(
-      "[telemetry]",
-      JSON.stringify({
-        kind: finalParsed.kind,
-        confidenceOk: false,
-        reason: "empty_context",
-        durations: {
-          normalization: Math.round(timings.dNormalization),
-          intentClassification: Math.round(timings.dResolveQuery),
-          sqlAnswerAttempt: Math.round(timings.dSqlAnswer),
-          queryReformulation: Math.round(dReformulate),
-          queryExpansion: Math.round(dExpand),
-          retrieval: Math.round(dRetrieval),
-          total: Math.round(performance.now() - timings.tStart),
-        },
-        ts: Date.now(),
-      }),
-    );
     return jsonAnswer(
       ctx.sessionId,
       "I couldn't find matching pages in the synced Notion database. Try **Sync changes** in the sidebar, or rephrase with a project/person/page name from Notion.",
@@ -226,27 +233,12 @@ export async function tryRagAnswer(
   }
 
   if (!confidence.ok) {
-    console.log(
-      "[telemetry]",
-      JSON.stringify({
-        kind: finalParsed.kind,
-        confidenceOk: false,
-        reason: confidence.reason,
-        durations: {
-          normalization: Math.round(timings.dNormalization),
-          intentClassification: Math.round(timings.dResolveQuery),
-          sqlAnswerAttempt: Math.round(timings.dSqlAnswer),
-          queryReformulation: Math.round(dReformulate),
-          queryExpansion: Math.round(dExpand),
-          retrieval: Math.round(dRetrieval),
-          total: Math.round(performance.now() - timings.tStart),
-        },
-        ts: Date.now(),
-      }),
-    );
     return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE, userEmotion, signal);
   }
 
+  if (ctx.telemetry) {
+    ctx.telemetry.incrementLlmCalls();
+  }
   return streamGeminiAnswer(
     ctx.message,
     notionContext,
@@ -259,9 +251,9 @@ export async function tryRagAnswer(
       normalization: Math.round(timings.dNormalization),
       intentClassification: Math.round(timings.dResolveQuery),
       sqlAnswerAttempt: Math.round(timings.dSqlAnswer),
-      queryReformulation: Math.round(dReformulate),
-      queryExpansion: Math.round(dExpand),
-      retrieval: Math.round(dRetrieval),
+      queryReformulation: 0,
+      queryExpansion: 0,
+      retrieval: 0,
       expandedQueryCount: searchQueries.length,
       contextChars: notionContext.length,
       topScore: confidence.topScore,

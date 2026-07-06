@@ -24,7 +24,8 @@ export type QueryKind =
   | "project_most_devs"
   | "analytics"
   | "semantic"
-  | "smalltalk";
+  | "smalltalk"
+  | "person_project_membership";
 
 export type QuerySource = "regex" | "llm" | "merged";
 

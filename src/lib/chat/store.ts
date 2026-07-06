@@ -235,7 +235,16 @@ export async function getEmptyChatSession(userId: string) {
   return rows[0] ?? null;
 }
 
+export interface ActiveEntity {
+  id: string;
+  name: string;
+  confidence: number;
+  source: "rules" | "retrieval" | "llm";
+}
+
 export type ConversationState = {
+  activeProject?: ActiveEntity;
+  activePerson?: ActiveEntity;
   lastProject?: string;
   lastPerson?: string;
   lastIntent?: string;

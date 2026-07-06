@@ -109,7 +109,7 @@ function cleanPersonName(value: string | null) {
       .replace(/^(?:did|does|do|is|are|was|were|has|have|had)\s+/i, ""),
   ).trim();
   if (!cleaned) return null;
-  if (/^(what|which|who|when|where|why|how|is|was|are|were|task|tasks|project|projects|work|manager|lead|only|one)$/i.test(cleaned)) {
+  if (/^(what|which|who|when|where|why|how|is|was|are|were|task|tasks|project|projects|work|manager|lead|only|one|there|here|any|some|me|my|he|him|she|her|they|them|its|their|someone|anyone|no\s+one|nobody|everyone|everybody)$/i.test(cleaned)) {
     return null;
   }
   return normalizePersonNameForMatch(cleaned);
@@ -144,13 +144,21 @@ function parseActivityQuery(question: string, q: string): RulesQuery | null {
     ) ??
     question.match(
       /\b(?:who\s+all|which\s+people|list\s+(?:all\s+)?(?:people|members|team))\b[\s\S]*?\b(?:working|work(?:ing)?)\s+(?:on\s+)?(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
+    ) ??
+    question.match(
+      /\b(?:how\s+many|number\s+of)\s+(?:people|members|team\s+members|devs|developers|engineers)\s+(?:are\s+)?(?:working|work(?:ing)?)\s+(?:on\s+)?(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
     );
   if (teamRosterMatch?.[1]) {
-    return {
-      kind: "team_roster",
-      docTitle: stripDocWords(teamRosterMatch[1]),
-      raw: question,
-    };
+    const docTitle = stripDocWords(teamRosterMatch[1]);
+    const lowerDoc = docTitle.toLowerCase();
+    const isSinglePage = /\b(mvp|app|page|list|prd|spec|sow|proposal|design|dashboard|task|issue|ticket|bug|screen|login|signup|ui|ux|frontend|backend|widget|widgets)\b/i.test(lowerDoc);
+    if (!isSinglePage) {
+      return {
+        kind: "team_roster",
+        docTitle,
+        raw: question,
+      };
+    }
   }
 
   const projectWorkedInYearMatch =
@@ -363,6 +371,28 @@ export function parseQueryByRules(question: string): RulesQuery {
   const qn = preprocessQuestion(question);
   const q = normalize(qn);
 
+  const activityQuery = parseActivityQuery(qn, q);
+  if (activityQuery) return activityQuery;
+
+  const membershipRegex = /^(?:is|does|are)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:working\s+on|work\s+on|part\s+of|contributing\s+to|associated\s+with)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i;
+  const membershipRegex2 = /^(?:is|are)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:on|in)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i;
+  const membershipRegex3 = /^(?:is|does|are)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:the\s+)?(?:owner|manager|pm|lead)\s+(?:of|for|on)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i;
+
+  const membershipMatch = question.match(membershipRegex) ?? question.match(membershipRegex2) ?? question.match(membershipRegex3);
+  if (membershipMatch) {
+    const person = cleanPersonName(membershipMatch[1]);
+    const project = stripDocWords(membershipMatch[2]);
+    if (person && project) {
+      return {
+        kind: "person_project_membership",
+        personName: person,
+        docTitle: project,
+        raw: question,
+        parserConfidence: 0.95,
+      };
+    }
+  }
+
   if (
     /who\s+are\s+all\s+(?:the\s+)?(?:developers|devs|people|team\s+members)\b/i.test(q) ||
     /^(?:list|show)\s+(?:all\s+)?(?:developers|devs|people|team\s+members)\??$/i.test(q) ||
@@ -466,15 +496,14 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  const activityQuery = parseActivityQuery(qn, q);
-  if (activityQuery) return activityQuery;
+
 
   // "what is/are X working on?" / "what project(s) is/are X working on?" / "projects worked on by X"
   // "what is/are X working on?" / "what project(s) is/are X working on?" / "what task X is working on" / "X working on which task" / "X has worked on which task so far"
   const workingOnMatch = q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\b/i)
     ?? q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)\s+(?:is|are|has|have)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\b/i)
     ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)?\s*(?:currently\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
-    ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:has|have|had)\s+(?:been\s+)?(?:working\s+on|done|doing)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
+    ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:has|have|had)\s+(?:been\s+)?(?:working\s+on|worked\s+on|worked|done|doing)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
     ?? q.match(/\b(?:projects?|tasks?|work)\s+(?:worked\s+on|assigned\s+to)\s+by\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i);
   if (workingOnMatch?.[1]) {
     const person = cleanPersonName(workingOnMatch[1]);
@@ -514,7 +543,8 @@ export function parseQueryByRules(question: string): RulesQuery {
     /\bwho\s+works\s+on\b/i.test(q) ||
     /\bwho\s+are\s+all\s+(?:the\s+)?(?:developers|devs|people|team\s+members)\s+(?:on|working\s+on|assigned\s+to)\b/i.test(q) ||
     /\b(?:developers|devs|people|team\s+members)\s+(?:on|working\s+on|assigned\s+to)\b/i.test(q) ||
-    /\bassignee\s+of\b/i.test(q)
+    /\bassignee\s+of\b/i.test(q) ||
+    /\b(?:how\s+many|number\s+of)\s+(?:people|members|team\s+members|devs|developers|engineers)\s+(?:are\s+)?(?:working|work(?:ing)?)\s+(?:on\s+)?(?:the\s+)?(?:project\s+)?/i.test(q)
   ) {
     const docTitle = extractAfter(question, [
       /who\s+(?:is\s+)?assigned\s+to\s+(?:the\s+)?(.+?)(?:\?|$)/i,
@@ -523,6 +553,7 @@ export function parseQueryByRules(question: string): RulesQuery {
       /who\s+are\s+all\s+(?:the\s+)?(?:developers|devs|people|team\s+members)\s+(?:on|working\s+on|assigned\s+to)\s+(?:the\s+)?(.+?)(?:\?|$)/i,
       /(?:developers|devs|people|team\s+members)\s+(?:on|working\s+on|assigned\s+to)\s+(?:the\s+)?(.+?)(?:\?|$)/i,
       /assignee\s+of\s+(?:the\s+)?(.+?)(?:\?|$)/i,
+      /(?:how\s+many|number\s+of)\s+(?:people|members|team\s+members|devs|developers|engineers)\s+(?:are\s+)?(?:working|work(?:ing)?)\s+(?:on\s+)?(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
     ]);
     if (docTitle) {
       return { kind: "assigned_to_of", docTitle: stripDocWords(docTitle), raw: question, parserConfidence: 0.95 };
@@ -548,7 +579,7 @@ export function parseQueryByRules(question: string): RulesQuery {
   }
 
   const topicAssignedToPersonMatch = question.match(
-    /^(?!who\s+(?:is\s+)?assigned\s+to)(?!what\s+(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:are\s+)?assigned\s+to)(?!which\s+project\s+.+\s+is\s+assigned)(?!what\s+project\s+.+\s+is\s+assigned)(?:only\s+one\s+|one\s+|single\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|work|data|docs?|documents?|pages?)?\s*(?:of|for|in|on|about|related to)?\s*(.+?)\s+(?:assigned|assign|given)\s+to\s+(.+?)(?:\?|$)/i,
+    /^(?!who\s+(?:is\s+)?assigned\s+to)(?!what\s+(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:are\s+)?assigned\s+to)(?!which\s+project\s+.+\s+is\s+assigned)(?!what\s+project\s+.+\s+is\s+assigned)(?:only\s+one\s+|one\s+|single\s+)?(?:(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|work|data|docs?|documents?|pages?)\b)?\s*(?:of|for|in|on|about|related to)?\s*(.+?)\s+(?:assigned|assign|given)\s+to\s+(.+?)(?:\?|$)/i,
   );
   if (topicAssignedToPersonMatch?.[1] && topicAssignedToPersonMatch?.[2]) {
     return {

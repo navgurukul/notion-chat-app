@@ -56,6 +56,20 @@ Rules:
 
 `.trimStart();
 
+const BOOLEAN_DIRECTIVE = `
+## Boolean Questions
+The user is asking a yes/no or boolean question.
+Rules:
+- You MUST begin your answer with a direct and clear **Yes** or **No** (or **Unknown** if you cannot find enough information).
+- Explain the reason for your answer concisely, referring to the context.
+
+`.trimStart();
+
+function isBooleanQuestion(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return /^(is|does|are|was|were|has|have|had|can|should|will|do|did)\b/i.test(normalized);
+}
+
 function buildEnrichedContext(
   notionContext: string,
   queryKind: QueryKind | null,
@@ -69,6 +83,10 @@ function buildEnrichedContext(
     directive = `${SQL_SYNTHESIS_DIRECTIVE}${directive}`;
   } else if (queryKind && STATUS_KINDS.has(queryKind)) {
     directive = `${STATUS_SYNTHESIS_DIRECTIVE}${directive}`;
+  }
+
+  if (isBooleanQuestion(message)) {
+    directive = `${BOOLEAN_DIRECTIVE}${directive}`;
   }
   
   return `${directive}${notionContext}`;
@@ -108,7 +126,10 @@ export async function streamGeminiAnswer(
     stream = await getChatStream(message, enrichedContext, chatHistory, userEmotion, queryKind);
   } catch (error) {
     if (isGeminiQuotaError(error)) {
-      if (sessionId) await addChatMessage(sessionId, "bot", GEMINI_QUOTA_USER_MESSAGE);
+      if (sessionId) {
+        addChatMessage(sessionId, "bot", GEMINI_QUOTA_USER_MESSAGE)
+          .catch(error => console.error("[Background DB Write Error] Failed to persist bot message:", error));
+      }
       return new Response(GEMINI_QUOTA_USER_MESSAGE, {
         status: 429,
         headers: { "Content-Type": "text/plain; charset=utf-8" },
@@ -187,11 +208,8 @@ export async function streamGeminiAnswer(
 
         const answerForStorage = extractFinalAnswer(rawAnswer);
         if (sessionId && answerForStorage && !signal?.aborted) {
-          try {
-            await addChatMessage(sessionId, "bot", answerForStorage, userEmotion);
-          } catch (error) {
-            console.error("Failed to persist bot message:", error);
-          }
+          addChatMessage(sessionId, "bot", answerForStorage, userEmotion)
+            .catch(error => console.error("[Background DB Write Error] Failed to persist bot message:", error));
         }
         controller.close();
       }

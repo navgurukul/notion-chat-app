@@ -26,6 +26,7 @@ const ALL_KINDS: QueryKind[] = [
   "analytics",
   "semantic",
   "smalltalk",
+  "person_project_membership",
 ];
 
 const KIND_SET = new Set<QueryKind>(ALL_KINDS);
@@ -78,6 +79,7 @@ Intent guide:
 - team_roster: who is working on a project (all contributors, not only owner)
 - people_list: directory lists, listing all developers, listing all team members ("Who are all developers?", "List team members")
 - analytics: statistical aggregation queries ("Which project has the most developers?", "project with most assignees")
+- person_project_membership: whether a person is working on or associated with a project/topic (e.g., "Is Tamanna working on Oscar?", "Does Rahul work on DataPivots?", "Is Amruta part of NavTrack?")
 - semantic: open-ended why/how, synthesis, or unclear factual inquiries
 - smalltalk: greetings (hi, hello), feedback/comments (thanks, nice, great), casual banter, jokes, playful remarks, laughing (hahaha), statements about feelings/moods, or generic chatbot chit-chat that doesn't seek factual information from Notion.
 

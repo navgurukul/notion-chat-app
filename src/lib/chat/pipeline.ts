@@ -4,6 +4,8 @@ import {
   addChatMessage,
   ensureSessionBelongsToUser,
   getOrCreateUser,
+  getSessionState,
+  updateSessionState,
 } from "@/lib/chat/store";
 import { MAX_MESSAGE_LENGTH } from "@/lib/chat/constants";
 import { sanitizeChatHistory } from "@/lib/chat/history";
@@ -29,6 +31,7 @@ import {
 import { trySqlAnswer } from "./pipeline/sql";
 import { tryRagAnswer } from "./pipeline/rag";
 import { PipelineContext, PipelineTrace, LATENCY_BUDGETS } from "./pipeline/timing";
+import { PipelineTelemetry } from "./pipeline/telemetry";
 
 export type ChatRequestBody = {
   message?: unknown;
@@ -69,7 +72,8 @@ async function attachSession(
   const ownsSession = await ensureSessionBelongsToUser(rawSessionId, user.id);
   if (!ownsSession) throw new ChatNotFoundError();
 
-  await addChatMessage(rawSessionId, "user", message, userEmotion);
+  addChatMessage(rawSessionId, "user", message, userEmotion)
+    .catch(err => console.error("[Background DB Write Error] Failed to save user message:", err));
   return rawSessionId;
 }
 
@@ -99,41 +103,7 @@ async function tryNotionLinkAnswer(ctx: PipelineContext, emotion?: string, signa
   return null;
 }
 
-function logPipelineTelemetry(trace: PipelineTrace) {
-  const now = Date.now();
-  trace.durations.total_ms = Math.round(now - new Date(trace.timestamp).getTime());
-  
-  // Flag budget violations
-  const budgetWarnings: string[] = [];
-  for (const [stage, budget] of Object.entries(LATENCY_BUDGETS)) {
-    const elapsed = trace.durations[stage as keyof typeof trace.durations];
-    if (elapsed !== undefined && elapsed > budget) {
-      budgetWarnings.push(`${stage} exceeded budget (${elapsed}ms > ${budget}ms)`);
-    }
-  }
-
-  const logPayload = {
-    ...trace,
-    budgetWarnings: budgetWarnings.length ? budgetWarnings : undefined
-  };
-
-  // Structured JSON Log
-  console.log("[pipeline-telemetry]", JSON.stringify(logPayload));
-
-  // Pretty-print in development
-  if (process.env.NODE_ENV !== "production") {
-    console.log("\n================ PIPELINE TRACE ================");
-    console.log(`Request ID: ${trace.requestId}`);
-    console.log(`Query: ${trace.originalQuery}`);
-    console.log(`Intent: ${trace.intentRoute?.kind} (conf: ${trace.intentRoute?.confidence}, src: ${trace.intentRoute?.source})`);
-    console.log(`Execution Path: ${trace.executionPath}`);
-    console.log("Durations (ms):", trace.durations);
-    if (budgetWarnings.length) {
-      console.warn("⚠️ Latency Warnings:", budgetWarnings);
-    }
-    console.log("================================================\n");
-  }
-}
+// logPipelineTelemetry is now handled via the PipelineTelemetry helper class.
 
 export async function runChatPipeline(
   session: Session,
@@ -148,74 +118,134 @@ export async function runChatPipeline(
   const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   const sessionId = typeof body.sessionId === "string" && body.sessionId.trim() ? body.sessionId.trim() : null;
 
-  const trace: PipelineTrace = {
-    requestId,
-    sessionId,
-    timestamp: new Date().toISOString(),
-    originalQuery: rawMessage,
-    durations: {}
-  };
-
+  const telemetry = new PipelineTelemetry(requestId, sessionId, rawMessage);
   let response: any = null;
 
   try {
     // 1. Fast-path regex routing
     const fastPath = tryFastPathRegexRoute(rawMessage);
     if (fastPath) {
-      trace.executionPath = "Smalltalk/Fastpath";
-      trace.intentRoute = { kind: "smalltalk", confidence: 1.0, source: "regex" };
+      telemetry.setExecutionPath("Smalltalk/Fastpath");
+      telemetry.setIntent("smalltalk", 1.0, "regex");
       
       if (sessionId) {
-        const user = await getOrCreateUser(session);
-        const ownsSession = await ensureSessionBelongsToUser(sessionId, user.id);
-        if (ownsSession) {
-          await addChatMessage(sessionId, "user", rawMessage, "neutral");
-          await addChatMessage(sessionId, "bot", fastPath.answer, "neutral");
-        }
+        getOrCreateUser(session)
+          .then(user => ensureSessionBelongsToUser(sessionId, user.id))
+          .then(ownsSession => {
+            if (ownsSession) {
+              addChatMessage(sessionId, "user", rawMessage, "neutral")
+                .catch(err => console.error("[Background DB Write Error] Failed to save user message:", err));
+              addChatMessage(sessionId, "bot", fastPath.answer, "neutral")
+                .catch(err => console.error("[Background DB Write Error] Failed to save bot message:", err));
+            }
+          })
+          .catch(err => console.error("[Background DB Write Error] Failed during session validation:", err));
       }
       response = NextResponse.json({ answer: fastPath.answer, emotion: "neutral", sessionId });
       return response;
     }
 
     // 2. Parallel Preprocessing
+    telemetry.startStep("emotion_analysis_ms");
     const lastEntities = await extractLastEntityFromHistory(history);
     const [emotionAnalysis] = await Promise.all([
       analyzeUserEmotion(rawMessage, history),
     ]);
     const userEmotion = emotionAnalysis.emotion;
+    telemetry.endStep("emotion_analysis_ms");
+    telemetry.incrementLlmCalls();
 
     const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion);
 
+    // Merge DB active state if available
+    let dbStateProject: string | undefined;
+    let dbStatePerson: string | undefined;
+    if (attachedSessionId) {
+      const dbState = await getSessionState(attachedSessionId);
+      if (dbState) {
+        if (dbState.activeProject?.name) {
+          dbStateProject = dbState.activeProject.name;
+        }
+        if (dbState.activePerson?.name) {
+          dbStatePerson = dbState.activePerson.name;
+        }
+      }
+    }
+
+    const mergedEntities = {
+      lastProject: dbStateProject || lastEntities.lastProject,
+      lastPerson: dbStatePerson || lastEntities.lastPerson,
+    };
+
+    // Helper to asynchronously save state
+    const saveState = async () => {
+      if (attachedSessionId) {
+        const resolvedEntities = telemetry.getTrace().entities;
+        if (resolvedEntities) {
+          const currentState = await getSessionState(attachedSessionId) || {};
+          let changed = false;
+
+          if (resolvedEntities.person?.value && resolvedEntities.person.confidence && resolvedEntities.person.confidence >= 0.7) {
+            currentState.activePerson = {
+              id: resolvedEntities.person.value,
+              name: resolvedEntities.person.value,
+              confidence: resolvedEntities.person.confidence,
+              source: "retrieval"
+            };
+            currentState.lastPerson = resolvedEntities.person.value;
+            changed = true;
+          }
+          if (resolvedEntities.page?.value) {
+            currentState.activeProject = {
+              id: resolvedEntities.page.value,
+              name: resolvedEntities.page.value,
+              confidence: resolvedEntities.page.quality === "EXACT" ? 1.0 : 0.85,
+              source: "retrieval"
+            };
+            currentState.lastProject = resolvedEntities.page.value;
+            changed = true;
+          }
+
+          if (changed) {
+            await updateSessionState(attachedSessionId, currentState);
+          }
+        }
+      }
+    };
+
     // 3. Intent Classification (runs first, on the raw query)
-    const tIntentStart = performance.now();
-    let parsed = await resolveQuery(rawMessage, history, session.user?.name || undefined, lastEntities);
-    const dIntentClassify = performance.now() - tIntentStart;
-    trace.intentRoute = { kind: parsed.kind, confidence: parsed.confidence, source: parsed.source };
-    trace.durations.intent_classifier_ms = Math.round(dIntentClassify);
+    telemetry.startStep("intent_classifier_ms");
+    let parsed = await resolveQuery(rawMessage, history, session.user?.name || undefined, mergedEntities);
+    telemetry.endStep("intent_classifier_ms");
+    telemetry.setIntent(parsed.kind, parsed.confidence, parsed.source);
+    if (parsed.source !== "regex") {
+      telemetry.incrementLlmCalls();
+    }
 
     // 4. Construct Context
     const ctx: PipelineContext = {
       message: rawMessage,
       history,
       sessionId: attachedSessionId,
-      lastProject: lastEntities.lastProject,
-      lastPerson: lastEntities.lastPerson,
+      lastProject: mergedEntities.lastProject,
+      lastPerson: mergedEntities.lastPerson,
       sessionName: session.user?.name || undefined,
       reformulatedQuery: parsed.reformulatedQuery,
-      trace
+      telemetry
     };
 
     // 6. Try Notion Link Answer
     const linkResponse = await tryNotionLinkAnswer(ctx, userEmotion, signal);
     if (linkResponse) {
-      trace.executionPath = "Notion Link";
+      telemetry.setExecutionPath("Notion Link");
       response = linkResponse;
       return response;
     }
 
     // 7. Smalltalk (non-fastpath)
     if (parsed.kind === "smalltalk") {
-      trace.executionPath = "Smalltalk/Fastpath";
+      telemetry.setExecutionPath("Smalltalk/Fastpath");
+      telemetry.incrementLlmCalls();
       response = await streamGeminiAnswer(
         ctx.message,
         "",
@@ -226,7 +256,7 @@ export async function runChatPipeline(
         {
           tStart,
           normalization: 0,
-          intentClassification: Math.round(dIntentClassify),
+          intentClassification: 0,
           sqlAnswerAttempt: 0,
           queryReformulation: 0,
           queryExpansion: 0,
@@ -244,23 +274,25 @@ export async function runChatPipeline(
     }
 
     // 8. SQL Metadata lane
-    const tSqlStart = performance.now();
+    telemetry.startStep("sql_ms");
     const sqlResponse = await trySqlAnswer(parsed, ctx, userEmotion, signal, {
       tStart,
       dNormalization: 0,
-      dResolveQuery: dIntentClassify,
+      dResolveQuery: 0,
     });
-    const dSqlAnswer = performance.now() - tSqlStart;
-    trace.durations.sql_ms = Math.round(dSqlAnswer);
+    telemetry.endStep("sql_ms");
 
     if (sqlResponse) {
-      trace.executionPath = "SQL Hit";
+      telemetry.setExecutionPath("SQL Hit");
+      if (attachedSessionId) {
+        saveState().catch(err => console.error("Error saving session state:", err));
+      }
       response = sqlResponse;
       return response;
     }
 
     if (isNotionLinkRequest(rawMessage)) {
-      trace.executionPath = "Notion Link";
+      telemetry.setExecutionPath("Notion Link");
       response = jsonAnswer(
         attachedSessionId,
         "Ask for a Notion link using the page title, e.g. **link for Employee Onboarding Hub**.",
@@ -271,21 +303,23 @@ export async function runChatPipeline(
     }
 
     // 9. RAG lane
-    const tRagStart = performance.now();
+    telemetry.startStep("rag_ms");
     const ragResponse = await tryRagAnswer(parsed, ctx, session, {
       tStart,
       dNormalization: 0,
-      dResolveQuery: dIntentClassify,
+      dResolveQuery: 0,
       dReformulate: 0,
-      dSqlAnswer,
+      dSqlAnswer: 0,
     }, signal, userEmotion);
-    const dRagAnswer = performance.now() - tRagStart;
-    trace.durations.rag_ms = Math.round(dRagAnswer);
-    trace.executionPath = "RAG Fallback";
+    telemetry.endStep("rag_ms");
+    telemetry.setExecutionPath("RAG Fallback");
 
+    if (attachedSessionId) {
+      saveState().catch(err => console.error("Error saving session state:", err));
+    }
     response = ragResponse;
     return response;
   } finally {
-    logPipelineTelemetry(trace);
+    telemetry.finish();
   }
 }

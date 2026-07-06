@@ -24,6 +24,7 @@ export const METADATA_ONLY_KINDS = new Set<QueryKind>([
   "risks_for",
   "people_list",
   "project_most_devs",
+  "person_project_membership",
 ]);
 
 export function isMetadataOnlyKind(kind: QueryKind): boolean {
@@ -42,7 +43,7 @@ export function metadataNotFoundAnswer(parsed: ParsedQuery): string {
     case "owner_of":
       return title
         ? `No synced Notion page matched **${title}** for an owner lookup. Use the exact page title from Notion or **Sync changes**.`
-        : "No page title found for owner lookup.";
+        : "I couldn't find a project or page title to look up.";
     case "assigned_list":
       return person
         ? `No tasks or pages found assigned to **${person}** in synced Notion data. Try **Sync changes** or rephrase with a year, e.g. tasks assigned to Tamanna in 2025.`
@@ -50,7 +51,7 @@ export function metadataNotFoundAnswer(parsed: ParsedQuery): string {
     case "assigned_to_of":
       return title
         ? `No assignee found for **${title}** in synced Notion data. Use **Sync changes** if assignments changed recently.`
-        : "No page title found for assignee lookup.";
+        : "I couldn't find a task or page name to look up.";
     // case "status_of":
     //   return title
     //     ? `No synced Notion pages matched **${title}** for status. Try the exact project/page name or **Sync changes**.`
@@ -71,6 +72,10 @@ export function metadataNotFoundAnswer(parsed: ParsedQuery): string {
       return title
         ? `No team members found for **${title}** in synced Notion (owner, assignee, captain, or team roster lines). Try **Sync changes** or check spelling (e.g. datapivots vs datapivot).`
         : "No project name found — e.g. **Who all are working on datapivots ai?**";
+    case "person_project_membership":
+      return person && title
+        ? `No. I couldn't find **${person}** associated with the **${title}** project in synced Notion data.`
+        : "I couldn't find a person name or project title in the question to check membership.";
     default:
       return title || person
         ? `No matching result for this question in synced Notion data (${[title, person].filter(Boolean).join(" · ")}). Try **Sync changes** or rephrase with an exact page/person name.`

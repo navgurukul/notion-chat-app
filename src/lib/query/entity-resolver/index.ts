@@ -2,6 +2,7 @@ import { ChatHistoryItem } from "@/lib/ai/gemini";
 import { resolvePerson, ResolutionQuality, ResolvedPerson } from "./person";
 import { resolveDocument, ResolvedDocument } from "./document";
 import type { ParsedQuery } from "@/lib/query/types";
+import { getPeopleDirectory } from "@/lib/db/team-members";
 
 export { ResolutionQuality };
 
@@ -11,7 +12,7 @@ export type ResolvedEntity<T> = {
 };
 
 export type ResolvedEntities = {
-  person?: ResolvedEntity<string> & { ambiguous: boolean; candidates: string[] };
+  person?: ResolvedEntity<string> & { ambiguous: boolean; candidates: string[]; confidence: number };
   page?: ResolvedEntity<string> & { url: string | null };
   comparePageB?: ResolvedEntity<string> & { url: string | null };
   year?: ResolvedEntity<number>;
@@ -148,27 +149,58 @@ export function resolvePronouns(
   return { message: text, resolvedPerson, resolvedQuality };
 }
 
-export function extractRawEntities(message: string): { personName?: string; docTitle?: string; compareTitleB?: string } {
+export async function extractRawEntities(message: string): Promise<{ personName?: string; docTitle?: string; compareTitleB?: string }> {
   const words = message.trim().split(/\s+/);
   
   let personName: string | undefined;
   let docTitle: string | undefined;
   let compareTitleB: string | undefined;
 
-  const assignedToMatch = message.match(/\b(?:assigned\s+to|tasks\s+of|by|for)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/);
-  if (assignedToMatch?.[1]) {
-    personName = assignedToMatch[1];
+  // 1. Case-insensitive whitelisted matching from the people directory
+  const dir = await getPeopleDirectory();
+  const sortedDir = [...dir].sort((a, b) => b.normalized.length - a.normalized.length);
+  
+  const lowerMessage = message.toLowerCase();
+  for (const person of sortedDir) {
+    const escaped = person.normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(`\\b${escaped}\\b`, "i");
+    if (regex.test(lowerMessage)) {
+      personName = person.name;
+      break;
+    }
   }
 
-  const docMatch = message.match(/\b(?:about|status\s+of|on|details\s+of|project)\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)?)\b/);
+  // 2. Stop words list to prevent extracting noise words like "there", "is" in fallback
+  const STOP_WORDS = new Set([
+    "there", "here", "is", "are", "was", "were", "the", "a", "an", "for", "any", "some", "only", "one", 
+    "what", "which", "who", "when", "where", "why", "how", "to", "from", "in", "on", "at", "by", "with", 
+    "about", "all", "tasks", "task", "project", "projects", "work", "pages", "page", "docs", "doc", "them", 
+    "they", "him", "her", "his", "their", "me", "my", "your", "us", "our", "you"
+  ]);
+
+  if (!personName) {
+    const assignedToMatch = message.match(/\b(?:assigned\s+to|tasks\s+of|by|for)\s+([a-zA-Z][a-zA-Z'.-]*(?:\s+[a-zA-Z][a-zA-Z'.-]*){0,2})\b/i);
+    if (assignedToMatch?.[1]) {
+      const candidate = assignedToMatch[1].trim();
+      if (!STOP_WORDS.has(candidate.toLowerCase())) {
+        personName = candidate;
+      }
+    }
+  }
+
+  const docMatch = message.match(/\b(?:about|status\s+of|on|details\s+of|project)\s+([a-zA-Z][a-zA-Z0-9]+(?:\s+[a-zA-Z0-9]+)?)\b/i);
   if (docMatch?.[1]) {
     docTitle = docMatch[1];
   }
 
   if (!personName) {
-    const candidates = words.filter((w, idx) => idx > 0 && /^[A-Z][a-z]+$/.test(w.replace(/[^a-zA-Z]/g, "")));
-    if (candidates.length > 0) {
-      personName = candidates[0].replace(/[^a-zA-Z]/g, "");
+    const candidates = words.filter((w, idx) => idx > 0 && /^[a-zA-Z][a-zA-Z'.-]*$/.test(w.replace(/[^a-zA-Z]/g, "")));
+    for (const c of candidates) {
+      const candidateClean = c.replace(/[^a-zA-Z]/g, "");
+      if (candidateClean.length >= 2 && !STOP_WORDS.has(candidateClean.toLowerCase())) {
+        personName = candidateClean;
+        break;
+      }
     }
   }
 
@@ -187,7 +219,7 @@ export async function resolveAllEntities(
   const lastPerson = lastEntities?.lastPerson;
   const { message: pronounResolvedMessage, resolvedPerson, resolvedQuality } = resolvePronouns(message, sessionName, lastPerson);
 
-  const raw = extractRawEntities(pronounResolvedMessage);
+  const raw = await extractRawEntities(pronounResolvedMessage);
   
   let finalPerson = resolvedPerson || raw.personName;
   const entities: ResolvedEntities = {};
@@ -198,6 +230,7 @@ export async function resolveAllEntities(
         entities.person = {
           value: p.value,
           quality: p.quality,
+          confidence: p.confidence,
           ambiguous: p.ambiguous,
           candidates: p.candidates
         };
@@ -205,6 +238,7 @@ export async function resolveAllEntities(
         entities.person = {
           value: "",
           quality: p.quality,
+          confidence: p.confidence,
           ambiguous: p.ambiguous,
           candidates: p.candidates
         };
@@ -251,23 +285,30 @@ export async function lazyResolveSqlEntities(
   const rawMessage = parsed.raw || "";
 
   // 1. Resolve Person for SQL intents that need a person
-  const needsPerson = ["assigned_list", "worked_on_list", "owner_list", "activity_summary"].includes(parsed.kind);
+  const needsPerson = [
+    "assigned_list",
+    "worked_on_list",
+    "owner_list",
+    "activity_summary",
+    "person_project_membership"
+  ].includes(parsed.kind);
   if (needsPerson) {
     let rawPerson = parsed.personName;
-    const pronounInfo = resolvePronouns(rawMessage, sessionName, lastEntities?.lastPerson);
-    
-    if (pronounInfo.resolvedPerson) {
-      rawPerson = pronounInfo.resolvedPerson;
+    if (!rawPerson) {
+      const extracted = await extractRawEntities(rawMessage);
+      rawPerson = extracted.personName;
     }
-    if (!rawPerson && lastEntities?.lastPerson) {
-      rawPerson = lastEntities.lastPerson;
+    if (!rawPerson) {
+      const pronounInfo = resolvePronouns(rawMessage, sessionName, lastEntities?.lastPerson);
+      if (pronounInfo.resolvedPerson) {
+        rawPerson = pronounInfo.resolvedPerson;
+      }
     }
     if (!rawPerson && sessionName && /\b(me|my|myself|i)\b/i.test(rawMessage)) {
       rawPerson = sessionName;
     }
-    if (!rawPerson) {
-      const extracted = extractRawEntities(rawMessage);
-      rawPerson = extracted.personName;
+    if (!rawPerson && lastEntities?.lastPerson) {
+      rawPerson = lastEntities.lastPerson;
     }
 
     if (rawPerson) {
@@ -279,6 +320,7 @@ export async function lazyResolveSqlEntities(
           person: {
             value: resolved.value,
             quality: resolved.quality,
+            confidence: resolved.confidence,
             ambiguous: resolved.ambiguous,
             candidates: resolved.candidates
           }
@@ -290,6 +332,7 @@ export async function lazyResolveSqlEntities(
           person: {
             value: "",
             quality: resolved.quality,
+            confidence: resolved.confidence,
             ambiguous: resolved.ambiguous,
             candidates: resolved.candidates
           }
@@ -301,15 +344,31 @@ export async function lazyResolveSqlEntities(
   }
 
   // 2. Resolve Document for SQL intents that need a document
-  const needsDoc = ["owner_of", "created_by_of", "status_of", "project_eta", "project_manager_of"].includes(parsed.kind);
+  const needsDoc = [
+    "owner_of",
+    "created_by_of",
+    "status_of",
+    "project_eta",
+    "project_manager_of",
+    "assigned_list",
+    "worked_on_list",
+    "activity_summary",
+    "team_activity",
+    "team_roster",
+    "blocker_list",
+    "person_project_membership",
+    "page_about",
+    "project_summary",
+    "risks_for"
+  ].includes(parsed.kind);
   if (needsDoc) {
     let rawDoc = parsed.docTitle;
+    if (!rawDoc) {
+      const extracted = await extractRawEntities(rawMessage);
+      rawDoc = extracted.docTitle;
+    }
     if (!rawDoc && lastEntities?.lastProject) {
       rawDoc = lastEntities.lastProject;
-    }
-    if (!rawDoc) {
-      const extracted = extractRawEntities(rawMessage);
-      rawDoc = extracted.docTitle;
     }
     if (rawDoc) {
       const resolved = await resolveDocument(rawDoc);
@@ -362,7 +421,7 @@ export async function lazyResolveRagEntities(
       rawDoc = lastEntities.lastProject;
     }
     if (!rawDoc) {
-      const extracted = extractRawEntities(rawMessage);
+      const extracted = await extractRawEntities(rawMessage);
       rawDoc = extracted.docTitle;
     }
     if (rawDoc) {

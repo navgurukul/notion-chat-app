@@ -10,6 +10,7 @@ export enum ResolutionQuality {
 export type ResolvedPerson = {
   value: string | null;
   quality: ResolutionQuality;
+  confidence: number;
   ambiguous: boolean;
   candidates: string[];
 };
@@ -17,7 +18,7 @@ export type ResolvedPerson = {
 export async function resolvePerson(input: string): Promise<ResolvedPerson> {
   const name = input.trim();
   if (!name || name.length < 2) {
-    return { value: null, quality: ResolutionQuality.NONE, ambiguous: false, candidates: [] };
+    return { value: null, quality: ResolutionQuality.NONE, confidence: 0.0, ambiguous: false, candidates: [] };
   }
 
   // Force get directory to populate whitelist/cache
@@ -36,6 +37,7 @@ export async function resolvePerson(input: string): Promise<ResolvedPerson> {
       return {
         value: res.exact,
         quality: ResolutionQuality.EXACT,
+        confidence: 1.0,
         ambiguous: false,
         candidates: []
       };
@@ -50,6 +52,7 @@ export async function resolvePerson(input: string): Promise<ResolvedPerson> {
       return {
         value: res.exact,
         quality: ResolutionQuality.FIRST_NAME,
+        confidence: 0.9,
         ambiguous: false,
         candidates: []
       };
@@ -59,6 +62,7 @@ export async function resolvePerson(input: string): Promise<ResolvedPerson> {
     return {
       value: res.exact,
       quality: ResolutionQuality.PARTIAL,
+      confidence: 0.5,
       ambiguous: false,
       candidates: []
     };
@@ -68,6 +72,7 @@ export async function resolvePerson(input: string): Promise<ResolvedPerson> {
     return {
       value: null,
       quality: ResolutionQuality.PARTIAL,
+      confidence: 0.5,
       ambiguous: true,
       candidates: res.candidates
     };
@@ -76,6 +81,7 @@ export async function resolvePerson(input: string): Promise<ResolvedPerson> {
   return {
     value: null,
     quality: ResolutionQuality.NONE,
+    confidence: 0.0,
     ambiguous: false,
     candidates: []
   };

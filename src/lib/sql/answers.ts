@@ -1877,7 +1877,12 @@ async function handleMetadataQueryInner(
     const pages = await fetchProjectPages(scopeTopic);
     const members = await aggregatePeopleOnProject(pages);
 
+    const isCountQuery = /\b(how\s+many|number\s+of|count)\b/i.test(parsed.raw);
+
     if (!members.length) {
+      if (isCountQuery) {
+        return `There are **0** team members working on **${scopeTopic}** in synced Notion data.`;
+      }
       return [
         `### Team on **${scopeTopic}**`,
         "",
@@ -1899,6 +1904,13 @@ async function handleMetadataQueryInner(
     });
     const tableMarkdown = [...tableHeader, ...tableRows].join("\n");
 
+    if (isCountQuery) {
+      const namesList = members.map(m => `**${m.name}**`).join(", ");
+      return `There are **${members.length}** team members working on **${scopeTopic}**: ${namesList}.\n\n` +
+             `Found across **${pages.length}** related page(s) in Notion.\n\n` +
+             tableMarkdown;
+    }
+
     return [
       `### Who is working on **${scopeTopic}**`,
       "",
@@ -1908,6 +1920,29 @@ async function handleMetadataQueryInner(
       "",
       `_Re-sync if someone is missing. Ask **"Who is the most active team member in ${scopeTopic}?"** for a ranked view._`,
     ].join("\n");
+  }
+
+  if (parsed.kind === "person_project_membership" && person && docTitle) {
+    const scopeTopic = extractProjectScopeTopic(parsed.raw, docTitle);
+    const pages = await fetchProjectPages(scopeTopic);
+    const members = await aggregatePeopleOnProject(pages);
+
+    const isOwnerQuery = /\b(owner|manager|pm|lead)\b/i.test(parsed.raw);
+    const targetMember = members.find(m => normalizePersonNameForMatch(m.name) === person);
+
+    if (targetMember) {
+      if (isOwnerQuery) {
+        const isOwnerOrPM = targetMember.roles.some(r => /owner|pm/i.test(r));
+        if (isOwnerOrPM) {
+          return `Yes. **${targetMember.name}** is the owner/manager of the **${scopeTopic}** project (roles: ${targetMember.roles.join(", ")}).`;
+        } else {
+          return `No. While **${targetMember.name}** is working on the **${scopeTopic}** project, they are not listed as the owner/manager (roles: ${targetMember.roles.join(", ")}).`;
+        }
+      }
+      return `Yes. **${targetMember.name}** is working on the **${scopeTopic}** project (roles: ${targetMember.roles.join(", ")} across ${targetMember.pageCount} related page(s)).`;
+    } else {
+      return `No. I couldn't find **${personRaw || person}** associated with the **${scopeTopic}** project in synced Notion data.`;
+    }
   }
 
   if (parsed.kind === "team_activity" && docTitle) {

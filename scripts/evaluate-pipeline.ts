@@ -277,7 +277,8 @@ function getLaneForIntent(intent: string, question: string): "sql" | "rag" | "ch
   const SQL_INTENTS = [
     "people_list", "project_most_devs", "assigned_list", "worked_on_list",
     "owner_list", "owner_of", "created_by_of", "created_by_list",
-    "project_manager_of", "status_of", "project_eta", "analytics"
+    "project_manager_of", "status_of", "project_eta", "analytics",
+    "activity_summary", "team_activity"
   ];
   if (SQL_INTENTS.includes(intent)) return "sql";
   return "rag";

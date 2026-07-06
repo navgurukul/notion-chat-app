@@ -34,17 +34,38 @@ export async function trySqlAnswer(
 
   // Lazily resolve SQL entities
   const tEntStart = performance.now();
+  if (ctx.telemetry) {
+    ctx.telemetry.startStep("entity_resolve_ms");
+  }
   const finalParsed = await lazyResolveSqlEntities(
     parsed,
     ctx.history,
     ctx.sessionName,
     { lastPerson: ctx.lastPerson, lastProject: ctx.lastProject }
   );
-  const dEntityResolve = performance.now() - tEntStart;
-  if (ctx.trace) {
-    ctx.trace.durations.entity_resolve_ms = Math.round(dEntityResolve);
-    ctx.trace.entities = finalParsed.resolvedEntities;
-    ctx.trace.pronounResolvedQuery = finalParsed.raw;
+  if (ctx.telemetry) {
+    ctx.telemetry.endStep("entity_resolve_ms");
+    if (finalParsed.resolvedEntities?.person) {
+      const p = finalParsed.resolvedEntities.person;
+      ctx.telemetry.logEntity("person", p.value, p.quality, p.confidence, p.ambiguous, p.candidates);
+    }
+    if (finalParsed.resolvedEntities?.page) {
+      const p = finalParsed.resolvedEntities.page;
+      ctx.telemetry.logEntity("page", p.value, p.quality, undefined, undefined, undefined, p.url);
+    }
+  }
+
+  const resolvedPerson = finalParsed.resolvedEntities?.person;
+  if (resolvedPerson) {
+    if (resolvedPerson.ambiguous && resolvedPerson.candidates.length > 0) {
+      const candidatesList = resolvedPerson.candidates.map((c: string) => `**${c}**`).join(" or ");
+      const clarAnswer = `I found multiple possible matches for that person. Did you mean ${candidatesList}?`;
+      return jsonAnswer(ctx.sessionId, clarAnswer, emotion, signal);
+    }
+    if (resolvedPerson.confidence < 0.7 && resolvedPerson.value) {
+      const clarAnswer = `I found a partial match for "${parsed.personName || ctx.message}". Did you mean **${resolvedPerson.value}**?`;
+      return jsonAnswer(ctx.sessionId, clarAnswer, emotion, signal);
+    }
   }
 
   const metadataOnly = isMetadataOnlyKind(finalParsed.kind);
