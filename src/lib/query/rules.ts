@@ -398,7 +398,7 @@ export function parseQueryByRules(question: string): RulesQuery {
     const project = stripDocWords(membershipMatch[2]);
     if (person && project) {
       return {
-        kind: "person_project_membership",
+        kind: "assignee_project_check",
         personName: person,
         docTitle: project,
         raw: question,

@@ -291,7 +291,8 @@ export async function lazyResolveSqlEntities(
     "worked_on_list",
     "owner_list",
     "activity_summary",
-    "person_project_membership"
+    "person_project_membership",
+    "assignee_project_check"
   ].includes(parsed.kind);
   if (needsPerson) {
     let rawPerson = parsed.personName;
@@ -360,7 +361,8 @@ export async function lazyResolveSqlEntities(
     "person_project_membership",
     "page_about",
     "project_summary",
-    "risks_for"
+    "risks_for",
+    "assignee_project_check"
   ].includes(parsed.kind);
   if (needsDoc) {
     let rawDoc = parsed.docTitle;

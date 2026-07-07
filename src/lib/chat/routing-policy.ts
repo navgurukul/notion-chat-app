@@ -25,6 +25,7 @@ export const METADATA_ONLY_KINDS = new Set<QueryKind>([
   "people_list",
   "project_most_devs",
   "person_project_membership",
+  "assignee_project_check",
 ]);
 
 export function isMetadataOnlyKind(kind: QueryKind): boolean {
@@ -76,6 +77,10 @@ export function metadataNotFoundAnswer(parsed: ParsedQuery): string {
       return person && title
         ? `No. I couldn't find **${person}** associated with the **${title}** project in synced Notion data.`
         : "I couldn't find a person name or project title in the question to check membership.";
+    case "assignee_project_check":
+      return person && title
+        ? `No. ${person} doesn't appear to work on ${title}.`
+        : "No. they don't appear to work on that project.";
     default:
       return title || person
         ? `No matching result for this question in synced Notion data (${[title, person].filter(Boolean).join(" · ")}). Try **Sync changes** or rephrase with an exact page/person name.`

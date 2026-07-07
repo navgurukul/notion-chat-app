@@ -284,7 +284,7 @@ export async function runChatPipeline(
     if (sqlResponse) {
       telemetry.setExecutionPath("SQL Hit");
       if (attachedSessionId) {
-        saveState().catch(err => console.error("Error saving session state:", err));
+        await saveState().catch(err => console.error("Error saving session state:", err));
       }
       response = sqlResponse;
       return response;
@@ -314,7 +314,7 @@ export async function runChatPipeline(
     telemetry.setExecutionPath("RAG Fallback");
 
     if (attachedSessionId) {
-      saveState().catch(err => console.error("Error saving session state:", err));
+      await saveState().catch(err => console.error("Error saving session state:", err));
     }
     response = ragResponse;
     return response;

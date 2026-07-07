@@ -1922,7 +1922,7 @@ async function handleMetadataQueryInner(
     ].join("\n");
   }
 
-  if (parsed.kind === "person_project_membership" && person && docTitle) {
+  if ((parsed.kind === "person_project_membership" || parsed.kind === "assignee_project_check") && person && docTitle) {
     const scopeTopic = extractProjectScopeTopic(parsed.raw, docTitle);
     const pages = await fetchProjectPages(scopeTopic);
     const members = await aggregatePeopleOnProject(pages);
@@ -1941,6 +1941,9 @@ async function handleMetadataQueryInner(
       }
       return `Yes. **${targetMember.name}** is working on the **${scopeTopic}** project (roles: ${targetMember.roles.join(", ")} across ${targetMember.pageCount} related page(s)).`;
     } else {
+      if (parsed.kind === "assignee_project_check") {
+        return `No. ${personRaw || person} doesn't appear to work on ${scopeTopic}.`;
+      }
       return `No. I couldn't find **${personRaw || person}** associated with the **${scopeTopic}** project in synced Notion data.`;
     }
   }

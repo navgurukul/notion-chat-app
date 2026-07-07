@@ -25,7 +25,8 @@ export type QueryKind =
   | "analytics"
   | "semantic"
   | "smalltalk"
-  | "person_project_membership";
+  | "person_project_membership"
+  | "assignee_project_check";
 
 export type QuerySource = "regex" | "llm" | "merged";
 
