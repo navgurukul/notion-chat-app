@@ -295,32 +295,25 @@ export async function lazyResolveSqlEntities(
   ].includes(parsed.kind);
   if (needsPerson) {
     let rawPerson = parsed.personName;
-    console.log("[DEBUG lazyResolveSqlEntities] parsed.personName:", parsed.personName);
     if (!rawPerson) {
       const extracted = await extractRawEntities(rawMessage);
-      console.log("[DEBUG lazyResolveSqlEntities] extractRawEntities found:", extracted.personName);
       rawPerson = extracted.personName;
     }
     if (!rawPerson) {
       const pronounInfo = resolvePronouns(rawMessage, sessionName, lastEntities?.lastPerson);
-      console.log("[DEBUG lazyResolveSqlEntities] resolvePronouns found:", pronounInfo.resolvedPerson, "for msg:", rawMessage, "lastPerson:", lastEntities?.lastPerson);
       if (pronounInfo.resolvedPerson) {
         rawPerson = pronounInfo.resolvedPerson;
       }
     }
     if (!rawPerson && sessionName && /\b(me|my|myself|i)\b/i.test(rawMessage)) {
-      console.log("[DEBUG lazyResolveSqlEntities] matched 'me/i' with sessionName:", sessionName);
       rawPerson = sessionName;
     }
     if (!rawPerson && lastEntities?.lastPerson) {
-      console.log("[DEBUG lazyResolveSqlEntities] matched lastPerson:", lastEntities.lastPerson);
       rawPerson = lastEntities.lastPerson;
     }
-    console.log("[DEBUG lazyResolveSqlEntities] rawPerson final:", rawPerson);
 
     if (rawPerson) {
       const resolved = await resolvePerson(rawPerson);
-      console.log("[DEBUG lazyResolveSqlEntities] resolvePerson result:", resolved);
       if (resolved.value) {
         finalParsed.personName = resolved.value;
         finalParsed.resolvedEntities = {

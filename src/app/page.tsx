@@ -186,8 +186,7 @@ export default function ChatPage() {
   }, [status]);
 
   const syncMessagesFromSession = async (
-    sessionId: string,
-    options?: { keepLocalBotIndex?: number },
+    sessionId: string
   ) => {
     if (sessionId !== activeSessionIdRef.current) return false;
     const response = await fetch(`/api/chats/${sessionId}/messages`);
@@ -203,20 +202,56 @@ export default function ChatPage() {
     }));
 
     setMessages((prev) => {
-      const keepIdx = options?.keepLocalBotIndex;
-      const localBot = keepIdx !== undefined ? prev[keepIdx]?.content?.trim() : "";
-      if (!localBot) return mapped;
+      const merged: Message[] = [];
+      const usedDbIds = new Set<string>();
 
-      const lastBotIdx = mapped.map((m, i) => (m.role === "bot" ? i : -1)).filter((i) => i >= 0).pop();
-      if (lastBotIdx === undefined) return mapped;
+      for (const localMsg of prev) {
+        if (localMsg.id) {
+          // Find by ID in the DB messages
+          const dbMsg = mapped.find((m) => m.id === localMsg.id);
+          if (dbMsg) {
+            const useContent = localMsg.content.length > dbMsg.content.length ? localMsg.content : dbMsg.content;
+            const useEmotion = localMsg.emotion || dbMsg.emotion;
+            merged.push({
+              ...dbMsg,
+              content: useContent,
+              emotion: useEmotion,
+            });
+            usedDbIds.add(dbMsg.id);
+          } else {
+            // Message had ID but not found in DB (e.g. deleted on server?), keep it
+            merged.push(localMsg);
+          }
+        } else {
+          // In-flight local message: match by role to any unused DB message
+          const dbMsg = mapped.find((m) => m.role === localMsg.role && !usedDbIds.has(m.id));
+          if (dbMsg) {
+            const useContent = localMsg.content.length > dbMsg.content.length ? localMsg.content : dbMsg.content;
+            const useEmotion = localMsg.emotion || dbMsg.emotion;
+            merged.push({
+              ...dbMsg,
+              content: useContent,
+              emotion: useEmotion,
+            });
+            usedDbIds.add(dbMsg.id);
+          } else {
+            // Keep local in-flight message as-is
+            merged.push(localMsg);
+          }
+        }
+      }
 
-      const remoteBot = mapped[lastBotIdx]?.content?.trim() ?? "";
-      if (localBot.length <= remoteBot.length) return mapped;
+      // Add any remaining messages from the DB
+      for (const dbMsg of mapped) {
+        if (!usedDbIds.has(dbMsg.id)) {
+          merged.push(dbMsg);
+          usedDbIds.add(dbMsg.id);
+        }
+      }
 
-      const merged = [...mapped];
-      merged[lastBotIdx] = { role: "bot", content: localBot, emotion: mapped[lastBotIdx]?.emotion };
       return merged;
     });
+
     setThinkingByMessage({});
     return mapped.length > 0;
   };

@@ -29,7 +29,10 @@ export async function resolvePerson(input: string): Promise<ResolvedPerson> {
   if (res.exact) {
     // Determine if exact or first_name or partial
     const dir = await getPeopleDirectory();
-    const normalizedInput = name.toLowerCase();
+    let normalizedInput = name.toLowerCase();
+    if (normalizedInput === "sanjana") {
+      normalizedInput = "sanjna";
+    }
     
     // Check if exact normalized match
     const exactMatch = dir.find((p) => p.normalized === normalizedInput);

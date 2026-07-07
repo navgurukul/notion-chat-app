@@ -132,10 +132,10 @@ export async function listChatMessages(sessionId: string, limit = CHAT_HISTORY_L
       SELECT id, session_id, role, content, emotion, created_at
       FROM chat_messages
       WHERE session_id = $1
-      ORDER BY created_at DESC
+      ORDER BY created_at DESC, role ASC
       LIMIT $2
     ) recent
-    ORDER BY created_at ASC
+    ORDER BY created_at ASC, role DESC
     `,
     [sessionId, limit],
   );

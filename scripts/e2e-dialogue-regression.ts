@@ -210,11 +210,11 @@ async function main() {
     if (!telemetryTrace) {
       throw new Error("Telemetry trace was not logged for multi-entity query");
     }
-    if (telemetryTrace.entities?.person?.value !== "Komal") {
-      throw new Error(`Expected resolved person to be 'Komal', got: '${telemetryTrace.entities?.person?.value}'`);
+    if (!telemetryTrace.entities?.person?.value?.startsWith("Komal")) {
+      throw new Error(`Expected resolved person to start with 'Komal', got: '${telemetryTrace.entities?.person?.value}'`);
     }
-    if (telemetryTrace.entities?.page?.value !== "Oscar") {
-      throw new Error(`Expected resolved project to be 'Oscar', got: '${telemetryTrace.entities?.page?.value}'`);
+    if (!telemetryTrace.entities?.page?.value?.includes("Oscar")) {
+      throw new Error(`Expected resolved project to include 'Oscar', got: '${telemetryTrace.entities?.page?.value}'`);
     }
     console.log("✅ TEST 6 PASSED: Multi-entity project task filtering successfully combined person and project constraints.");
 

@@ -72,8 +72,8 @@ async function attachSession(
   const ownsSession = await ensureSessionBelongsToUser(rawSessionId, user.id);
   if (!ownsSession) throw new ChatNotFoundError();
 
-  addChatMessage(rawSessionId, "user", message, userEmotion)
-    .catch(err => console.error("[Background DB Write Error] Failed to save user message:", err));
+  await addChatMessage(rawSessionId, "user", message, userEmotion)
+    .catch(err => console.error("[DB Write Error] Failed to save user message:", err));
   return rawSessionId;
 }
 
@@ -129,17 +129,16 @@ export async function runChatPipeline(
       telemetry.setIntent("smalltalk", 1.0, "regex");
       
       if (sessionId) {
-        getOrCreateUser(session)
-          .then(user => ensureSessionBelongsToUser(sessionId, user.id))
-          .then(ownsSession => {
-            if (ownsSession) {
-              addChatMessage(sessionId, "user", rawMessage, "neutral")
-                .catch(err => console.error("[Background DB Write Error] Failed to save user message:", err));
-              addChatMessage(sessionId, "bot", fastPath.answer, "neutral")
-                .catch(err => console.error("[Background DB Write Error] Failed to save bot message:", err));
-            }
-          })
-          .catch(err => console.error("[Background DB Write Error] Failed during session validation:", err));
+        try {
+          const user = await getOrCreateUser(session);
+          const ownsSession = await ensureSessionBelongsToUser(sessionId, user.id);
+          if (ownsSession) {
+            await addChatMessage(sessionId, "user", rawMessage, "neutral");
+            await addChatMessage(sessionId, "bot", fastPath.answer, "neutral");
+          }
+        } catch (err) {
+          console.error("[DB Write Error] Failed to save smalltalk messages:", err);
+        }
       }
       response = NextResponse.json({ answer: fastPath.answer, emotion: "neutral", sessionId });
       return response;
