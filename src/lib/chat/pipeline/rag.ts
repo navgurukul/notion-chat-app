@@ -76,6 +76,7 @@ export async function tryRagAnswer(
   const finalParsed = await lazyResolveRagEntities(
     parsed,
     ctx.history,
+    ctx.sessionName,
     { lastPerson: ctx.lastPerson, lastProject: ctx.lastProject }
   );
   if (ctx.telemetry) {
@@ -145,7 +146,7 @@ export async function tryRagAnswer(
     }
   }
 
-  const shouldExpand = BROAD_RAG_KINDS.has(finalParsed.kind);
+  const shouldExpand = BROAD_RAG_KINDS.has(finalParsed.kind) || !!ctx.isWrongAnswerRetry;
   if (ctx.telemetry && shouldExpand) {
     ctx.telemetry.startStep("expansion_ms");
     ctx.telemetry.incrementLlmCalls();
@@ -184,6 +185,7 @@ export async function tryRagAnswer(
   } = await buildNotionContextWithConfidence(searchQueries, {
     titleBoost: titleBoost || undefined,
     year: finalParsed.year,
+    loosenThreshold: !!ctx.isWrongAnswerRetry,
   });
 
   if (!confidence.ok) {
@@ -204,6 +206,7 @@ export async function tryRagAnswer(
       console.log("[retrieval] retrying with broader queries:", broaderQueries);
       const retryResult = await buildNotionContextWithConfidence(broaderQueries, {
         titleBoost: titleBoost || undefined,
+        loosenThreshold: !!ctx.isWrongAnswerRetry,
       });
 
       if (retryResult.confidence.ok || (retryResult.context.trim() && !notionContext.trim())) {

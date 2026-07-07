@@ -381,7 +381,7 @@ export async function buildNotionContextForChat(
 
 export async function buildNotionContextWithConfidence(
   searchQuery: string | string[],
-  options?: { titleBoost?: string; year?: number },
+  options?: { titleBoost?: string; year?: number; loosenThreshold?: boolean },
 ): Promise<ChatContextBuild> {
   const queries = Array.isArray(searchQuery) ? searchQuery : [searchQuery];
   const primary = queries.find((q) => q.trim())?.trim() ?? "";
@@ -411,7 +411,7 @@ export async function buildNotionContextWithConfidence(
     kw_score: row.kw_score,
   }));
 
-  const confidence = assessRetrievalConfidence(chunkHits, prefetch.length);
+  const confidence = assessRetrievalConfidence(chunkHits, prefetch.length, options?.loosenThreshold);
 
   return { context, confidence, chunkHits };
 }

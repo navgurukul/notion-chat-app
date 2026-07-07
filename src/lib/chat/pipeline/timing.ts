@@ -55,6 +55,7 @@ export type PipelineContext = {
   sessionName?: string;
   trace?: PipelineTrace;
   telemetry?: any;
+  isWrongAnswerRetry?: boolean;
 };
 
 export type PipelineTimings = {

@@ -44,6 +44,7 @@ function getMinChunkCount() {
 export function assessRetrievalConfidence(
   hits: ChunkRetrievalHit[],
   prefetchChars: number,
+  loosen?: boolean,
 ): RetrievalConfidenceResult {
   const chunkCount = hits.length;
   const topScore = hits[0]?.final_score ?? 0;
@@ -53,13 +54,14 @@ export function assessRetrievalConfidence(
       : 0;
   const prefetchCharsSafe = Math.max(0, prefetchChars);
 
-  const minTop = getMinTopScore();
-  const minAvg = getMinAvgScore();
-  const strongTop = getStrongTopScore();
-  const minChunks = getMinChunkCount();
+  const minTop = loosen ? getMinTopScore() / 2 : getMinTopScore();
+  const minAvg = loosen ? getMinAvgScore() / 2 : getMinAvgScore();
+  const strongTop = loosen ? getStrongTopScore() / 2 : getStrongTopScore();
+  const minChunks = loosen ? Math.max(1, Math.floor(getMinChunkCount() / 2)) : getMinChunkCount();
+  const minPrefetch = loosen ? 200 : 400;
 
   if (chunkCount === 0) {
-    if (prefetchCharsSafe >= 400) {
+    if (prefetchCharsSafe >= minPrefetch) {
       return { ok: true, topScore: 0, avgScore: 0, chunkCount: 0, prefetchChars: prefetchCharsSafe };
     }
     return {
@@ -80,7 +82,7 @@ export function assessRetrievalConfidence(
     return { ok: true, topScore, avgScore, chunkCount, prefetchChars: prefetchCharsSafe };
   }
 
-  if (topScore >= minTop && prefetchCharsSafe >= 400) {
+  if (topScore >= minTop && prefetchCharsSafe >= minPrefetch) {
     return { ok: true, topScore, avgScore, chunkCount, prefetchChars: prefetchCharsSafe };
   }
 

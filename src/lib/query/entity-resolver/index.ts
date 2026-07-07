@@ -412,11 +412,63 @@ export async function lazyResolveSqlEntities(
 export async function lazyResolveRagEntities(
   parsed: ParsedQuery,
   history: ChatHistoryItem[] = [],
+  sessionName?: string,
   lastEntities?: { lastPerson?: string; lastProject?: string }
 ): Promise<ParsedQuery> {
   const finalParsed = { ...parsed };
   const rawMessage = parsed.raw || "";
 
+  // 1. Resolve Person
+  let rawPerson = parsed.personName;
+  if (!rawPerson) {
+    const extracted = await extractRawEntities(rawMessage);
+    rawPerson = extracted.personName;
+  }
+  if (!rawPerson) {
+    const pronounInfo = resolvePronouns(rawMessage, sessionName, lastEntities?.lastPerson);
+    if (pronounInfo.resolvedPerson) {
+      rawPerson = pronounInfo.resolvedPerson;
+    }
+  }
+  if (!rawPerson && sessionName && /\b(me|my|myself|i)\b/i.test(rawMessage)) {
+    rawPerson = sessionName;
+  }
+  if (!rawPerson && lastEntities?.lastPerson) {
+    rawPerson = lastEntities.lastPerson;
+  }
+
+  if (rawPerson) {
+    const resolved = await resolvePerson(rawPerson);
+    if (resolved.value) {
+      finalParsed.personName = resolved.value;
+      finalParsed.resolvedEntities = {
+        ...finalParsed.resolvedEntities,
+        person: {
+          value: resolved.value,
+          quality: resolved.quality,
+          confidence: resolved.confidence,
+          ambiguous: resolved.ambiguous,
+          candidates: resolved.candidates
+        }
+      };
+    } else if (resolved.ambiguous) {
+      finalParsed.personName = "";
+      finalParsed.resolvedEntities = {
+        ...finalParsed.resolvedEntities,
+        person: {
+          value: "",
+          quality: resolved.quality,
+          confidence: resolved.confidence,
+          ambiguous: resolved.ambiguous,
+          candidates: resolved.candidates
+        }
+      };
+    } else {
+      finalParsed.personName = rawPerson;
+    }
+  }
+
+  // 2. Resolve Document
   const needsDoc = ["page_about", "project_summary", "risks_for", "onboarding_tasks"].includes(parsed.kind);
   if (needsDoc) {
     let rawDoc = parsed.docTitle;
@@ -443,6 +495,7 @@ export async function lazyResolveRagEntities(
     }
   }
 
+  // 3. Resolve Date/Year
   const dateInfo = resolveDates(rawMessage);
   if (dateInfo.year) {
     finalParsed.year = dateInfo.year;

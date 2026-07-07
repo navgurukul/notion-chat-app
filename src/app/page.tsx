@@ -83,7 +83,16 @@ function sleep(ms: number) {
 export default function ChatPage() {
   const LAST_SYNC_STORAGE_KEY = "notion_last_synced_at";
   const LAST_CHAT_SESSION_KEY = "notion_active_chat_session";
-  const { data: session, status } = useSession();
+  const { data: realSession, status: realStatus } = useSession();
+  const mockEnabled = process.env.NEXT_PUBLIC_MOCK_SESSION === "true";
+  const session = mockEnabled ? {
+    user: {
+      name: "Test User",
+      email: "test.user@navgurukul.org",
+      image: null
+    }
+  } : realSession;
+  const status = mockEnabled ? "authenticated" : realStatus;
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);

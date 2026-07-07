@@ -8,6 +8,24 @@ import { resolveQuery } from "../src/lib/query/resolve-query";
 // Timing budget thresholds in ms
 const GREETING_MAX_MS = 2500; 
 
+async function parseResponse(res: Response): Promise<{ answer: string }> {
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return res.json();
+  }
+  const reader = res.body?.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value);
+    }
+  }
+  return { answer: text };
+}
+
 async function main() {
   console.log("=== STARTING E2E DIALOGUE & OBSERVABILITY REGRESSION SUITE ===");
 
@@ -69,7 +87,7 @@ async function main() {
       sessionId
     });
     const duration1 = performance.now() - t0;
-    const body1 = await res1.json();
+    const body1 = await parseResponse(res1);
 
     console.log(`Duration: ${duration1.toFixed(2)}ms`);
     console.log(`Answer: "${body1.answer}"`);
@@ -113,7 +131,7 @@ async function main() {
       message: "Is there any task for Amruta ji?",
       sessionId
     });
-    const body3 = await res3.json();
+    const body3 = await parseResponse(res3);
     console.log(`Answer: "${body3.answer.substring(0, 100)}..."`);
     
     // Wait for async state saver
@@ -131,7 +149,7 @@ async function main() {
       message: "What projects is she working on?",
       sessionId
     });
-    const body4 = await res4.json();
+    const body4 = await parseResponse(res4);
     console.log(`Answer: "${body4.answer.substring(0, 100)}..."`);
     console.log(`Telemetry Trace:`, telemetryTrace);
 
@@ -165,7 +183,7 @@ async function main() {
       message: "what about sanjana's task",
       sessionId
     });
-    const body4Override = await res4Override.json();
+    const body4Override = await parseResponse(res4Override);
     console.log(`Answer: "${body4Override.answer.substring(0, 100)}..."`);
     await new Promise(resolve => setTimeout(resolve, 2000));
     let stateAfter = await getSessionState(sessionId);
@@ -183,7 +201,7 @@ async function main() {
       message: "Is Tamanna working on Oscar?",
       sessionId
     });
-    const body5a = await res5a.json();
+    const body5a = await parseResponse(res5a);
     console.log(`Answer (Tamanna on Oscar): "${body5a.answer}"`);
     if (!body5a.answer.startsWith("No.")) {
       throw new Error(`Expected answer to start with 'No.', got: '${body5a.answer}'`);
@@ -193,7 +211,7 @@ async function main() {
       message: "Is Souvik working on Oscar?",
       sessionId
     });
-    const body5b = await res5b.json();
+    const body5b = await parseResponse(res5b);
     console.log(`Answer (Souvik on Oscar): "${body5b.answer}"`);
     if (!body5b.answer.startsWith("Yes.")) {
       throw new Error(`Expected answer to start with 'Yes.', got: '${body5b.answer}'`);
@@ -209,7 +227,7 @@ async function main() {
       message: "what task Komal is working on in Oscar project",
       sessionId
     });
-    const body6 = await res6.json();
+    const body6 = await parseResponse(res6);
     console.log(`Answer: "${body6.answer.substring(0, 100)}..."`);
     console.log(`Telemetry Trace:`, telemetryTrace);
 
@@ -232,12 +250,145 @@ async function main() {
       message: "How many developers are working on Oscar?",
       sessionId
     });
-    const body7 = await res7.json();
+    const body7 = await parseResponse(res7);
     console.log(`Answer: "${body7.answer}"`);
     if (!body7.answer.startsWith("There are ")) {
       throw new Error(`Expected answer to start with 'There are ', got: '${body7.answer}'`);
     }
     console.log("✅ TEST 7 PASSED: Team roster count query returned direct count summary.");
+
+    // ----------------------------------------------------
+    // TEST 8: Person Swap Correction ("no it was related to sanjana not mahendra")
+    // ----------------------------------------------------
+    console.log("\n--- TEST 8: Person Swap Correction ---");
+    // First establish history with Mahendra
+    await runChatPipeline(mockSession, {
+      message: "What tasks is Mahendra assigned to?",
+      sessionId
+    });
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    telemetryTrace = null;
+    const res8 = await runChatPipeline(mockSession, {
+      message: "no it was related to sanjana not mahendra",
+      sessionId
+    });
+    const body8 = await parseResponse(res8);
+    console.log(`Answer: "${body8.answer.substring(0, 100)}..."`);
+    console.log(`Telemetry Trace:`, telemetryTrace);
+
+    if (!telemetryTrace) {
+      throw new Error("Telemetry trace was not logged for correction query");
+    }
+    // The query should have been rewritten and resolved to Sanjna Panwar
+    if (telemetryTrace.entities?.person?.value !== "Sanjna Panwar") {
+      throw new Error(`Expected resolved person to be 'Sanjna Panwar', got: '${telemetryTrace.entities?.person?.value}'`);
+    }
+    console.log("✅ TEST 8 PASSED: Person swap correction successfully parsed and rerouted.");
+
+    // ----------------------------------------------------
+    // TEST 9: Wrong Answer Feedback ("this is wrong answer")
+    // ----------------------------------------------------
+    console.log("\n--- TEST 9: Wrong Answer Feedback ('this is wrong answer') ---");
+    telemetryTrace = null;
+    const res9 = await runChatPipeline(mockSession, {
+      message: "this is wrong answer",
+      sessionId
+    });
+    const body9 = await parseResponse(res9);
+    console.log(`Answer: "${body9.answer.substring(0, 100)}..."`);
+    console.log(`Telemetry Trace:`, telemetryTrace);
+
+    if (!telemetryTrace) {
+      throw new Error("Telemetry trace was not logged for wrong answer query");
+    }
+    // It should have rerun the previous query (Sanjna Panwar tasks)
+    if (telemetryTrace.entities?.person?.value !== "Sanjna Panwar") {
+      throw new Error(`Expected resolved person to still be 'Sanjna Panwar', got: '${telemetryTrace.entities?.person?.value}'`);
+    }
+    console.log("✅ TEST 9 PASSED: Wrong answer feedback successfully force-refreshed and re-evaluated query.");
+
+    // ----------------------------------------------------
+    // TEST 10: Chained/Double Correction ("no wait, it's Neha not Sanjana")
+    // ----------------------------------------------------
+    console.log("\n--- TEST 10: Chained/Double Correction ('no wait, it's Neha not Sanjana') ---");
+    // Test 10 assumes "Neha" is unambiguous in the test-fixture database (i.e. only one Neha exists in the system).
+    telemetryTrace = null;
+    const res10 = await runChatPipeline(mockSession, {
+      message: "no wait, it's Neha not Sanjana",
+      sessionId
+    });
+    const body10 = await parseResponse(res10);
+    console.log(`Answer: "${body10.answer.substring(0, 100)}..."`);
+    console.log(`Telemetry Trace:`, telemetryTrace);
+
+    if (!telemetryTrace) {
+      throw new Error("Telemetry trace was not logged for chained correction query");
+    }
+    // The query should have been rewritten from Sanjna Panwar tasks to Neha Pandit tasks
+    if (telemetryTrace.entities?.person?.value !== "Neha Pandit") {
+      throw new Error(`Expected resolved person to be 'Neha Pandit', got: '${telemetryTrace.entities?.person?.value}'`);
+    }
+    console.log("✅ TEST 10 PASSED: Chained/double correction successfully processed the cascade.");
+
+    // ----------------------------------------------------
+    // TEST 11: Ambiguous Name Resolution Clarifying Question
+    // ----------------------------------------------------
+    console.log("\n--- TEST 11: Ambiguous Name Resolution Clarifying Question ---");
+    // We correct the query to "anirudh", which matches "Anirudh Bansal" and "Anirudh Kalukula".
+    // Expecting clarifying question.
+    telemetryTrace = null;
+    const res11a = await runChatPipeline(mockSession, {
+      message: "no it was related to anirudh",
+      sessionId
+    });
+    const body11a = await parseResponse(res11a);
+    console.log(`Answer: "${body11a.answer}"`);
+    if (body11a.answer !== "Do you mean Anirudh Bansal or Anirudh Kalukula?") {
+      throw new Error(`Expected clarifying question 'Do you mean Anirudh Bansal or Anirudh Kalukula?', got: '${body11a.answer}'`);
+    }
+    
+    // Now reply to the clarifying question with "Anirudh Bansal".
+    // Expecting to resolve to "Anirudh Bansal" and run the rewritten query.
+    telemetryTrace = null;
+    const res11b = await runChatPipeline(mockSession, {
+      message: "Anirudh Bansal",
+      sessionId
+    });
+    const body11b = await parseResponse(res11b);
+    console.log(`Answer: "${body11b.answer.substring(0, 100)}..."`);
+    console.log(`Telemetry Trace:`, telemetryTrace);
+    
+    if (!telemetryTrace) {
+      throw new Error("Telemetry trace was not logged for clarification reply");
+    }
+    if (telemetryTrace.entities?.person?.value !== "Anirudh Bansal") {
+      throw new Error(`Expected resolved person to be 'Anirudh Bansal', got: '${telemetryTrace.entities?.person?.value}'`);
+    }
+    console.log("✅ TEST 11 PASSED: Ambiguous name resolution returned clarifying question and successfully resolved user reply.");
+
+    // ----------------------------------------------------
+    // TEST 12: Long Message False-Positive Guard
+    // ----------------------------------------------------
+    console.log("\n--- TEST 12: Long Message False-Positive Guard ---");
+    // A long message containing correction keywords but exceeding the length limit should not trigger correction.
+    telemetryTrace = null;
+    const res12 = await runChatPipeline(mockSession, {
+      message: "why today is the incorrect status showing on the main dashboard report details page for Neha",
+      sessionId
+    });
+    const body12 = await parseResponse(res12);
+    console.log(`Answer: "${body12.answer.substring(0, 100)}..."`);
+    console.log(`Telemetry Trace:`, telemetryTrace);
+
+    if (!telemetryTrace) {
+      throw new Error("Telemetry trace was not logged for long query");
+    }
+    // It should have resolved as a normal query (not rewritten), meaning it stays "why today is the incorrect status showing on the main dashboard report details page for Neha"
+    if (telemetryTrace.entities?.person?.value !== "Neha Pandit") {
+      throw new Error(`Expected resolved person to still be 'Neha Pandit', got: '${telemetryTrace.entities?.person?.value}'`);
+    }
+    console.log("✅ TEST 12 PASSED: Long message containing 'incorrect' did not false-trigger correction pipeline.");
 
     console.log("\n=== E2E REGRESSION SUITE COMPLETED SUCCESSFULLY ===");
   } finally {

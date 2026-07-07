@@ -32,6 +32,7 @@ import { trySqlAnswer } from "./pipeline/sql";
 import { tryRagAnswer } from "./pipeline/rag";
 import { PipelineContext, PipelineTrace, LATENCY_BUDGETS } from "./pipeline/timing";
 import { PipelineTelemetry } from "./pipeline/telemetry";
+import { detectAndHandleCorrection, isCorrectionMessage } from "./pipeline/correction";
 
 export type ChatRequestBody = {
   message?: unknown;
@@ -176,14 +177,40 @@ export async function runChatPipeline(
       lastPerson: dbStatePerson || lastEntities.lastPerson,
     };
 
+    // 2.5 Correction / Feedback detection & handling
+    let finalQuery = rawMessage;
+    let isWrongAnswerRetry = false;
+    const correction = await detectAndHandleCorrection(rawMessage, history, attachedSessionId, {
+      lastPerson: mergedEntities.lastPerson,
+      lastProject: mergedEntities.lastProject,
+    });
+    if (correction) {
+      if (correction.clarifyingQuestion) {
+        return jsonAnswer(attachedSessionId, correction.clarifyingQuestion, userEmotion, signal);
+      }
+      if (correction.rewrittenMessage) {
+        console.log(`[Correction Handled] Original: "${rawMessage}" -> Rewritten: "${correction.rewrittenMessage}"`);
+        finalQuery = correction.rewrittenMessage;
+        if (correction.correctedPerson) {
+          mergedEntities.lastPerson = correction.correctedPerson;
+        }
+        if (correction.correctedProject) {
+          mergedEntities.lastProject = correction.correctedProject;
+        }
+      }
+      if (correction.isWrongAnswerRetry) {
+        isWrongAnswerRetry = true;
+      }
+    }
+
     // Helper to asynchronously save state
     const saveState = async () => {
       if (attachedSessionId) {
         const resolvedEntities = telemetry.getTrace().entities;
-        if (resolvedEntities) {
-          const currentState = await getSessionState(attachedSessionId) || {};
-          let changed = false;
+        const currentState = await getSessionState(attachedSessionId) || {};
+        let changed = false;
 
+        if (resolvedEntities) {
           if (resolvedEntities.person?.value && resolvedEntities.person.confidence && resolvedEntities.person.confidence >= 0.7) {
             currentState.activePerson = {
               id: resolvedEntities.person.value,
@@ -204,17 +231,27 @@ export async function runChatPipeline(
             currentState.lastProject = resolvedEntities.page.value;
             changed = true;
           }
+        }
 
-          if (changed) {
-            await updateSessionState(attachedSessionId, currentState);
-          }
+        if (currentState.lastRewrittenQuery !== finalQuery) {
+          currentState.lastRewrittenQuery = finalQuery;
+          changed = true;
+        }
+
+        if (finalQuery === rawMessage && !isCorrectionMessage(rawMessage)) {
+          currentState.lastUserQueryPreCorrection = rawMessage;
+          changed = true;
+        }
+
+        if (changed) {
+          await updateSessionState(attachedSessionId, currentState);
         }
       }
     };
 
-    // 3. Intent Classification (runs first, on the raw query)
+    // 3. Intent Classification (runs first, on the raw query or rewritten query)
     telemetry.startStep("intent_classifier_ms");
-    let parsed = await resolveQuery(rawMessage, history, session.user?.name || undefined, mergedEntities);
+    let parsed = await resolveQuery(finalQuery, history, session.user?.name || undefined, mergedEntities);
     telemetry.endStep("intent_classifier_ms");
     telemetry.setIntent(parsed.kind, parsed.confidence, parsed.source);
     if (parsed.source !== "regex") {
@@ -223,14 +260,15 @@ export async function runChatPipeline(
 
     // 4. Construct Context
     const ctx: PipelineContext = {
-      message: rawMessage,
+      message: finalQuery,
       history,
       sessionId: attachedSessionId,
       lastProject: mergedEntities.lastProject,
       lastPerson: mergedEntities.lastPerson,
       sessionName: session.user?.name || undefined,
       reformulatedQuery: parsed.reformulatedQuery,
-      telemetry
+      telemetry,
+      isWrongAnswerRetry
     };
 
     // 6. Try Notion Link Answer
@@ -245,6 +283,9 @@ export async function runChatPipeline(
     if (parsed.kind === "smalltalk") {
       telemetry.setExecutionPath("Smalltalk/Fastpath");
       telemetry.incrementLlmCalls();
+      if (attachedSessionId) {
+        await saveState().catch(err => console.error("Error saving session state:", err));
+      }
       response = await streamGeminiAnswer(
         ctx.message,
         "",
