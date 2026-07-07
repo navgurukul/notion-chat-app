@@ -3,6 +3,7 @@ import { resolvePerson, ResolutionQuality, ResolvedPerson } from "./person";
 import { resolveDocument, ResolvedDocument } from "./document";
 import type { ParsedQuery } from "@/lib/query/types";
 import { getPeopleDirectory } from "@/lib/db/team-members";
+import { isNoiseTopic } from "@/lib/query/normalize";
 
 export { ResolutionQuality };
 
@@ -170,20 +171,13 @@ export async function extractRawEntities(message: string): Promise<{ personName?
     }
   }
 
-  // 2. Stop words list to prevent extracting noise words like "there", "is" in fallback
-  const STOP_WORDS = new Set([
-    "there", "here", "is", "are", "was", "were", "the", "a", "an", "for", "any", "some", "only", "one", 
-    "what", "which", "who", "when", "where", "why", "how", "to", "from", "in", "on", "at", "by", "with", 
-    "about", "all", "tasks", "task", "project", "projects", "work", "pages", "page", "docs", "doc", "them", 
-    "they", "him", "her", "his", "their", "me", "my", "your", "us", "our", "you",
-    "he", "she", "it", "its", "does", "do", "did", "has", "have", "had", "working"
-  ]);
+
 
   if (!personName) {
     const assignedToMatch = message.match(/\b(?:assigned\s+to|tasks\s+of|by|for)\s+([a-zA-Z][a-zA-Z'.-]*(?:\s+[a-zA-Z][a-zA-Z'.-]*){0,2})\b/i);
     if (assignedToMatch?.[1]) {
       const candidate = assignedToMatch[1].trim();
-      if (!STOP_WORDS.has(candidate.toLowerCase())) {
+      if (!isNoiseTopic(candidate)) {
         personName = candidate;
       }
     }
@@ -195,10 +189,10 @@ export async function extractRawEntities(message: string): Promise<{ personName?
   }
 
   if (!personName) {
-    const candidates = words.filter((w, idx) => idx > 0 && /^[a-zA-Z][a-zA-Z'.-]*$/.test(w.replace(/[^a-zA-Z]/g, "")));
+    const candidates = words.filter((w) => /^[a-zA-Z][a-zA-Z'.-]*$/.test(w.replace(/[^a-zA-Z]/g, "")));
     for (const c of candidates) {
       const candidateClean = c.replace(/[^a-zA-Z]/g, "");
-      if (candidateClean.length >= 2 && !STOP_WORDS.has(candidateClean.toLowerCase())) {
+      if (candidateClean.length >= 2 && !isNoiseTopic(candidateClean)) {
         personName = candidateClean;
         break;
       }

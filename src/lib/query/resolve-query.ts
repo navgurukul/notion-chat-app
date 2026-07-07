@@ -5,12 +5,22 @@ import { logQueryRouting } from "./telemetry";
 import type { ParsedQuery } from "./types";
 import { withRegexScores } from "./rule-confidence";
 import type { ChatHistoryItem } from "@/lib/ai/gemini";
-import { tryFastPathRegexRoute, isAmbiguousQuery } from "@/lib/chat/pipeline/router";
+import {
+  tryFastPathRegexRoute,
+  isAmbiguousQuery,
+} from "@/lib/chat/pipeline/router";
 import { isNotionLinkRequest } from "@/lib/chat/link-lookup";
-import { shouldReformulate, reformulateSearchQuery } from "@/lib/chat/query-reformulation";
+import {
+  shouldReformulate,
+  reformulateSearchQuery,
+} from "@/lib/chat/query-reformulation";
 
 const INTENT_KIND_HINTS: Record<string, Set<ParsedQuery["kind"]>> = {
-  PERSON_ACTIVITY: new Set(["activity_summary", "worked_on_list", "assigned_list"]),
+  PERSON_ACTIVITY: new Set([
+    "activity_summary",
+    "worked_on_list",
+    "assigned_list",
+  ]),
   PERSON_OWNERSHIP: new Set(["owner_list", "owner_of", "project_manager_of"]),
   PROJECT_TEAM: new Set(["team_roster", "team_activity"]),
   PROJECT_SUMMARY: new Set(["project_summary", "page_about"]),
@@ -28,7 +38,7 @@ const INTENT_CONFIDENCE_FLOORS: Record<string, number> = {
 };
 
 const LLM_ENABLED = process.env.AI_INTENT_CLASSIFIER !== "false";
-export const HIGH_CONFIDENCE = 0.90;
+export const HIGH_CONFIDENCE = 0.9;
 export const PARSER_CONFIDENCE_THRESHOLD = 0.75;
 
 function hasBrokenEntities(parsed: ParsedQuery) {
@@ -44,7 +54,11 @@ function shouldUseLlm(rules: ParsedQuery): boolean {
   if (rules.kind === "semantic") return true;
   if (rules.requiresLlmVerification) return true;
   if (hasBrokenEntities(rules)) return true;
-  if (rules.parserConfidence !== undefined && rules.parserConfidence < PARSER_CONFIDENCE_THRESHOLD) return true;
+  if (
+    rules.parserConfidence !== undefined &&
+    rules.parserConfidence < PARSER_CONFIDENCE_THRESHOLD
+  )
+    return true;
   if (rules.confidence < PARSER_CONFIDENCE_THRESHOLD) return true;
   return false;
 }
@@ -65,14 +79,19 @@ function applyIntentHint(question: string, rules: ParsedQuery): ParsedQuery {
 
 function mergeRulesAndLlm(rules: ParsedQuery, llm: ParsedQuery): ParsedQuery {
   if (rules.confidence >= HIGH_CONFIDENCE && !hasBrokenEntities(rules)) {
-    return { 
-      ...rules, 
-      source: "merged", 
-      confidence: Math.max(rules.confidence, llm.confidence * 0.5) 
+    return {
+      ...rules,
+      source: "merged",
+      confidence: Math.max(rules.confidence, llm.confidence * 0.5),
     };
   }
 
-  const mergedKind = (llm.confidence >= 0.72) ? llm.kind : rules.kind;
+  const smalltalkOverride = llm.kind === "smalltalk" && llm.confidence >= 0.5;
+  const mergedKind = smalltalkOverride
+    ? "smalltalk"
+    : llm.confidence >= 0.72
+      ? llm.kind
+      : rules.kind;
   const confidence = Math.max(llm.confidence, rules.confidence);
 
   return {
@@ -84,23 +103,31 @@ function mergeRulesAndLlm(rules: ParsedQuery, llm: ParsedQuery): ParsedQuery {
     compareTitleB: rules.compareTitleB,
     year: rules.year,
     dateRange: rules.dateRange,
-    raw: rules.raw
+    raw: rules.raw,
   };
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: T,
+): Promise<T> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      console.warn(`[resolveQuery] Intent classifier timeout after ${timeoutMs}ms. Falling back.`);
+      console.warn(
+        `[resolveQuery] Intent classifier timeout after ${timeoutMs}ms. Falling back.`,
+      );
       resolve(fallback);
     }, timeoutMs);
-    promise.then((res) => {
-      clearTimeout(timer);
-      resolve(res);
-    }).catch(() => {
-      clearTimeout(timer);
-      resolve(fallback);
-    });
+    promise
+      .then((res) => {
+        clearTimeout(timer);
+        resolve(res);
+      })
+      .catch(() => {
+        clearTimeout(timer);
+        resolve(fallback);
+      });
   });
 }
 
@@ -113,18 +140,47 @@ export async function resolveQuery(
   question: string,
   history: ChatHistoryItem[] = [],
   sessionName?: string,
-  lastEntities?: { lastPerson?: string; lastProject?: string }
+  lastEntities?: { lastPerson?: string; lastProject?: string },
 ): Promise<ParsedQuery> {
   // 1. Fast-path regex checks (greetings/thanks/bye/link)
   const fastPath = tryFastPathRegexRoute(question);
+
+  const SMALLTALK_HEURISTIC =
+    /\b(not\s+)?feel(?:ing)?\s*well\b|\bhow\s+are\s+you\b|^(hi|hello|hey|thanks?|ok|okay)[\s!.,]*$/i;
+
+  // inside resolveQuery, right after tryFastPathRegexRoute check:
+  if (SMALLTALK_HEURISTIC.test(question)) {
+    return {
+      kind: "smalltalk",
+      confidence: 1.0,
+      source: "regex",
+      raw: question,
+    };
+  }
+
   if (fastPath) {
-    return { kind: "smalltalk", confidence: 1.0, source: "regex", raw: question };
+    return {
+      kind: "smalltalk",
+      confidence: 1.0,
+      source: "regex",
+      raw: question,
+    };
   }
   if (isAmbiguousQuery(question, history)) {
-    return { kind: "smalltalk", confidence: 1.0, source: "regex", raw: question };
+    return {
+      kind: "smalltalk",
+      confidence: 1.0,
+      source: "regex",
+      raw: question,
+    };
   }
   if (isNotionLinkRequest(question)) {
-    return { kind: "semantic", confidence: 1.0, source: "regex", raw: question };
+    return {
+      kind: "semantic",
+      confidence: 1.0,
+      source: "regex",
+      raw: question,
+    };
   }
 
   // 1.5 Early Query Reformulation for follow-up turns
@@ -137,7 +193,10 @@ export async function resolveQuery(
   }
 
   // 2. Regex rules parsing on the processed question
-  const rules = applyIntentHint(processedQuestion, withRegexScores(parseQueryByRules(processedQuestion)));
+  const rules = applyIntentHint(
+    processedQuestion,
+    withRegexScores(parseQueryByRules(processedQuestion)),
+  );
 
   let parsed: ParsedQuery;
   let usedLlm = false;
@@ -160,7 +219,7 @@ export async function resolveQuery(
   const finalParsed: ParsedQuery = {
     ...parsed,
     raw: question,
-    reformulatedQuery: reformulatedQueryText
+    reformulatedQuery: reformulatedQueryText,
   };
 
   logQueryRouting(question, rules, finalParsed, usedLlm);

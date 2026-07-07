@@ -155,9 +155,9 @@ const NOISE_WORDS = new Set([
   // Question / Relative
   "which", "what", "who", "whom", "whose", "where", "when", "why", "how",
   // Verbs / Auxiliaries
-  "did", "does", "do", "has", "have", "had", "is", "are", "was", "were", "be", "been", "can", "could", "will", "would", "should",
+  "did", "does", "do", "has", "have", "had", "is", "are", "was", "were", "be", "been", "can", "could", "will", "would", "should", "am", "m", "re", "ve", "ll", "d",
   // Articles / Determiners / Pronouns
-  "the", "a", "an", "this", "that", "these", "those", "my", "your", "his", "her", "their", "our", "me", "i", "you", "he", "she", "it", "we", "they", "him", "them", "us",
+  "the", "a", "an", "this", "that", "these", "those", "my", "your", "his", "her", "their", "our", "me", "i", "you", "he", "she", "it", "we", "they", "him", "them", "us", "its",
   // Quantifiers
   "all", "every", "each", "some", "any", "no", "none", "only", "one",
   // Prepositions / Conjunctions
@@ -165,7 +165,11 @@ const NOISE_WORDS = new Set([
   // Instructions / Actions
   "list", "show", "give", "find", "get", "tell", "display", "check", "verify", "search", "lookup", "down",
   // Time references
-  "today", "tonight", "tomorrow", "yesterday", "week", "month", "year", "now", "currently", "lately", "recent", "recently"
+  "today", "tonight", "tomorrow", "yesterday", "week", "month", "year", "now", "currently", "lately", "recent", "recently",
+  // Structural / Common query terms
+  "role", "roles", "task", "tasks", "project", "projects", "page", "pages", "doc", "docs", "document", "documents", "details", "info", "information", "status", "statuses", "comment", "comments", "feedback", "feedbacks", "name", "names", "person", "people",
+  // Task verbs / Project actions
+  "work", "worked", "workd", "working", "works", "done", "doing", "assign", "assigned", "assignee", "lead", "leading", "leads", "leader", "manager", "managers", "owner", "owners", "own", "owns", "member", "members", "team", "teams", "there", "here", "progress", "progresses"
 ]);
 
 export function isNoiseTopic(topic?: string): boolean {

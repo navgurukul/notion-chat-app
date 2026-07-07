@@ -1,5 +1,6 @@
 import { query } from "@/lib/db";
 import { ResolutionQuality } from "./person";
+import { isNoiseTopic } from "@/lib/query/normalize";
 
 export type ResolvedDocument = {
   value: string | null;
@@ -60,7 +61,9 @@ function computeMatchScore(topic: string, title: string): { score: number; quali
     return { score: 0.94, quality: ResolutionQuality.PARTIAL };
   }
 
-  if (titleNorm.includes(tNorm)) {
+  const escaped = tNorm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const wordRegex = new RegExp(`\\b${escaped}\\b`, "i");
+  if (wordRegex.test(titleNorm)) {
     return { score: 0.85, quality: ResolutionQuality.PARTIAL };
   }
 
@@ -83,7 +86,7 @@ function computeMatchScore(topic: string, title: string): { score: number; quali
 
 export async function resolveDocument(topic: string): Promise<ResolvedDocument> {
   const trimmed = topic.trim();
-  if (trimmed.length < 2) {
+  if (trimmed.length < 2 || isNoiseTopic(trimmed)) {
     return { value: null, url: null, quality: ResolutionQuality.NONE };
   }
 

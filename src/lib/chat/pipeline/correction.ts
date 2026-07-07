@@ -399,6 +399,10 @@ export async function detectAndHandleCorrection(
     }
   }
 
+  if (!isWrongFeedback && !correctedPerson && !correctedProject) {
+    return null;
+  }
+
   return {
     isCorrection,
     rewrittenMessage,
