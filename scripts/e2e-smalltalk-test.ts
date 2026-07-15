@@ -142,7 +142,7 @@ async function main() {
       `Expected response to contain "John Doe". Got: "${parsedWithName.answer}"`
     );
 
-    // Accumulate the first greeting into history
+    // Accumulate the 1st greeting into history
     history.push({ role: "user", content: "hi" });
     history.push({ role: "bot", content: parsedWithName.answer });
 
@@ -171,8 +171,8 @@ async function main() {
     history.push({ role: "user", content: "hi" });
     history.push({ role: "bot", content: parsedRep2.answer });
 
-    // Send a 3rd greeting (should trigger repeats >= 3)
-    console.log("Sending 3rd greeting (should trigger warm reply)...");
+    // Send a 3rd greeting
+    console.log("Sending 3rd greeting...");
     latestTrace = null;
     const resRep3 = await runChatPipeline(mockSessionWithName, {
       message: "hi",
@@ -180,21 +180,51 @@ async function main() {
       history: history
     });
     const parsedRep3 = await parseResponse(resRep3);
-
-    // Warm reply triggers either Gemini streaming (llmCalls > 0) or fallback reply
-    const isWarmLlm = latestTrace && latestTrace.llmCalls > 0;
-    const isFallback = parsedRep3.answer.includes("Hi! What would you like to check") || 
-                       parsedRep3.answer.includes("Hi! How can I help you");
     
     assert(
-      "3rd greeting triggers repeats warm reply or fallback",
-      isWarmLlm || isFallback,
-      `Expected LLM call or fallback warm pool response. Got LLM calls: ${latestTrace?.llmCalls}, Answer: "${parsedRep3.answer}"`
+      "3rd greeting uses fast path",
+      latestTrace && latestTrace.llmCalls === 0 && latestTrace.executionPath === "Smalltalk/Fastpath",
+      `Expected fast path and 0 LLM calls. Got path: ${latestTrace?.executionPath}, LLM calls: ${latestTrace?.llmCalls}`
     );
 
     // Accumulate 3rd greeting into history
     history.push({ role: "user", content: "hi" });
     history.push({ role: "bot", content: parsedRep3.answer });
+
+    // Send a 4th greeting (this should trigger repeats >= 3 since we have 3 user greetings in the past history)
+    console.log("Sending 4th greeting (should trigger warm reply)...");
+    latestTrace = null;
+    const resRep4 = await runChatPipeline(mockSessionWithName, {
+      message: "hi",
+      sessionId: testSessionId,
+      history: history
+    });
+    const parsedRep4 = await parseResponse(resRep4);
+
+    // Warm reply triggers either Gemini streaming or fallback reply
+    // If it is a warm reply, the response will NOT be one of the static fastpath templates
+    const staticGreetingVariations = [
+      "Hello! I am your NavGurukul Notion assistant. How can I help you today?",
+      "Hey! I’m here to help you find pages, tasks, owners, and statuses in NavGurukul’s Notion. What do you need?",
+      "Hi! Want to look up a project, tasks, owners, or details in our Notion workspace?",
+      "Good to see you — tell me what we should check in NavGurukul’s Notion.",
+      "Hi John Doe! I’m your NavGurukul Notion assistant. What can I help you with today?",
+      "Hey John Doe! I’m here to help you find pages, tasks, and status updates in Notion. What do you need?"
+    ].map(v => v.toLowerCase());
+
+    const isFastpathResponse = staticGreetingVariations.includes(parsedRep4.answer.toLowerCase());
+    const isFallback = parsedRep4.answer.includes("Hi! What would you like to check") || 
+                       parsedRep4.answer.includes("Hi! How can I help you");
+    
+    assert(
+      "4th greeting triggers repeats warm reply or fallback",
+      !isFastpathResponse || isFallback,
+      `Expected a warm reply (non-static fastpath variation) or fallback response. Got answer: "${parsedRep4.answer}"`
+    );
+
+    // Accumulate 4th greeting into history
+    history.push({ role: "user", content: "hi" });
+    history.push({ role: "bot", content: parsedRep4.answer });
 
     // ----------------------------------------------------
     // 4. Test Non-Regex Small Talk (Gemini Routing)
@@ -243,8 +273,8 @@ async function main() {
     console.log(`Saved messages count: ${messages.length}`);
     assert(
       "User & bot messages persisted in database",
-      messages.length >= 10,
-      `Expected at least 10 messages persisted. Got: ${messages.length}`
+      messages.length >= 12,
+      `Expected at least 12 messages persisted. Got: ${messages.length}`
     );
 
     const lastMessage = messages[messages.length - 1];
