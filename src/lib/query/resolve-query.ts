@@ -146,7 +146,7 @@ export async function resolveQuery(
   const fastPath = tryFastPathRegexRoute(question);
 
   const SMALLTALK_HEURISTIC =
-    /\b(not\s+)?feel(?:ing)?\s*well\b|\bhow\s+are\s+you\b|^(hi|hello|hey|thanks?|ok|okay)[\s!.,]*$/i;
+    /\b(not\s+)?feel(?:ing)?\s*well\b|\bhow\s+are\s+you\b|^(hi|hello|hey|thanks?|ok|okay)[\s!.,]*$|^(good\s+morning|good\s+afternoon|good\s+evening|goodbye|bye|greetings|hey\s+there|how's\s+it\s+going|what's\s+up)[\s!.,]*$|^(who\s+are\s+you|what\s+is\s+your\s+name|who\s+created\s+you|are\s+you\s+a\s+bot)[\s!.,?]*$/i;
 
   // inside resolveQuery, right after tryFastPathRegexRoute check:
   if (SMALLTALK_HEURISTIC.test(question)) {

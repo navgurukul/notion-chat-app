@@ -206,6 +206,41 @@ const CASES: Array<{
     expected_lane: "chat",
     expected_intent: "smalltalk"
   },
+  {
+    query: "good morning",
+    expected_lane: "chat",
+    expected_intent: "smalltalk"
+  },
+  {
+    query: "how are you today?",
+    expected_lane: "chat",
+    expected_intent: "smalltalk"
+  },
+  {
+    query: "who are you?",
+    expected_lane: "chat",
+    expected_intent: "smalltalk"
+  },
+  {
+    query: "tell me a joke",
+    expected_lane: "chat",
+    expected_intent: "smalltalk"
+  },
+  {
+    query: "nice job",
+    expected_lane: "chat",
+    expected_intent: "smalltalk"
+  },
+  {
+    query: "bye",
+    expected_lane: "chat",
+    expected_intent: "smalltalk"
+  },
+  {
+    query: "what is your name?",
+    expected_lane: "chat",
+    expected_intent: "smalltalk"
+  },
 
   // 5. Multi-turn / Follow-up
   {

@@ -84,6 +84,16 @@ Intent guide:
 - person_project_membership: whether a specific person is working on or associated with a specific project/topic (fallback/alias for assignee_project_check).
 - semantic: open-ended why/how, synthesis, or unclear factual inquiries
 - smalltalk: greetings (hi, hello), feedback/comments (thanks, nice, great), casual banter, jokes, playful remarks, laughing (hahaha), statements about feelings/moods, or generic chatbot chit-chat that doesn't seek factual information from Notion.
+  Examples:
+  * "good morning!" -> {"intent":"smalltalk","confidence":1.0}
+  * "who are you?" -> {"intent":"smalltalk","confidence":0.98}
+  * "what is your name?" -> {"intent":"smalltalk","confidence":0.95}
+  * "tell me a joke" -> {"intent":"smalltalk","confidence":0.9}
+  * "greetings assistant" -> {"intent":"smalltalk","confidence":1.0}
+  * "haha that's funny" -> {"intent":"smalltalk","confidence":0.95}
+  * "thank you so much!" -> {"intent":"smalltalk","confidence":1.0}
+  * "bye bye" -> {"intent":"smalltalk","confidence":1.0}
+  * "how are you doing today?" -> {"intent":"smalltalk","confidence":0.98}
 
 JSON shape:
 {"intent":"...","confidence":0.95}

@@ -13,26 +13,24 @@ import {
   extractReferencedTitle,
   isNotionLinkRequest,
 } from "@/lib/chat/link-lookup";
-import { reformulateSearchQuery } from "@/lib/chat/query-reformulation";
 import { streamGeminiAnswer } from "@/lib/chat/stream-response";
 import { resolveQuery } from "@/lib/query/resolve-query";
-import { detectIntent } from "@/lib/query/intent";
 import { analyzeUserEmotion } from "@/lib/chat/emotion";
-import { extractYear } from "@/lib/query/year";
 import type { ParsedQuery } from "@/lib/query/types";
 import { lookupPageLinkByTitle } from "@/lib/sql/answers";
 import {
-  tryFastPathRegexRoute,
-  resolveFirstPerson,
-  isFollowUpQuery,
   extractLastEntityFromHistory,
   jsonAnswer,
+  resolveFirstPerson,
+  tryFastPathRegexRoute,
 } from "./pipeline/router";
 import { trySqlAnswer } from "./pipeline/sql";
 import { tryRagAnswer } from "./pipeline/rag";
-import { PipelineContext, PipelineTrace, LATENCY_BUDGETS } from "./pipeline/timing";
+import { PipelineContext, LATENCY_BUDGETS } from "./pipeline/timing";
 import { PipelineTelemetry } from "./pipeline/telemetry";
 import { detectAndHandleCorrection, isCorrectionMessage } from "./pipeline/correction";
+import { detectSmalltalkType, tryFastPathRegexRoute as smalltalkFastPath } from "./pipeline/router";
+import type { ChatHistoryItem } from "@/lib/ai/gemini";
 
 export type ChatRequestBody = {
   message?: unknown;
@@ -73,12 +71,15 @@ async function attachSession(
   const ownsSession = await ensureSessionBelongsToUser(rawSessionId, user.id);
   if (!ownsSession) throw new ChatNotFoundError();
 
-  await addChatMessage(rawSessionId, "user", message, userEmotion)
-    .catch(err => console.error("[DB Write Error] Failed to save user message:", err));
+  await addChatMessage(rawSessionId, "user", message, userEmotion).catch(err =>
+    console.error("[DB Write Error] Failed to save user message:", err),
+  );
   return rawSessionId;
 }
 
 async function tryNotionLinkAnswer(ctx: PipelineContext, emotion?: string, signal?: AbortSignal) {
+  // kept identical to previous behavior
+  // eslint-disable-next-line @typescript-eslint/no-shadow
   if (!isNotionLinkRequest(ctx.message)) return null;
 
   const linkTitle = extractReferencedTitle(ctx.message, ctx.history);
@@ -104,13 +105,79 @@ async function tryNotionLinkAnswer(ctx: PipelineContext, emotion?: string, signa
   return null;
 }
 
-// logPipelineTelemetry is now handled via the PipelineTelemetry helper class.
+function countSmalltalkRepeats(history: ChatHistoryItem[], smalltalkType: ReturnType<typeof detectSmalltalkType>, maxUserTurns = 8) {
+  if (!smalltalkType) return 0;
+  const userTurns = history
+    .filter(h => h.role === "user")
+    .map(h => h.content)
+    .slice(-maxUserTurns);
 
-export async function runChatPipeline(
-  session: Session,
-  body: ChatRequestBody,
-  signal?: AbortSignal,
-) {
+  return userTurns.filter(t => detectSmalltalkType(t) === smalltalkType).length;
+}
+
+function buildSmalltalkWarmPoolFallback(type: ReturnType<typeof detectSmalltalkType>, userName?: string, message?: string) {
+  const fast = message ? smalltalkFastPath(message, userName) : null;
+  if (fast && fast.kind === "smalltalk") return fast.answer;
+  return type
+    ? "Hi! What would you like to check in NavGurukul’s Notion today?"
+    : "Hi! How can I help you today?";
+}
+
+async function tryWarmReplyOrFallback(opts: {
+  message: string;
+  history: ChatHistoryItem[];
+sessionId: string | null;
+userName?: string;
+    smalltalkType: ReturnType<typeof detectSmalltalkType>;
+    userEmotion?: string;
+signal?: AbortSignal;
+}): Promise<Response> {
+
+
+  const fallbackAnswer = buildSmalltalkWarmPoolFallback(opts.smalltalkType, opts.userName ?? undefined, opts.message);
+
+
+
+  // warm reply via LLM (Gemini) using a short prompt; if anything fails => fallback
+  const warmPrompt = `User message: ${opts.message}
+
+Smalltalk type: ${opts.smalltalkType}
+${opts.userName ? `Address the user as ${opts.userName}.` : ""}
+
+Write a single short, friendly warm reply (1-2 sentences). Do NOT repeat the exact same response as before.
+If relevant, ask a lightweight next question about what they'd like to check in NavGurukul Notion.`;
+
+  try {
+    return await streamGeminiAnswer(
+      warmPrompt,
+      "",
+      opts.history,
+      opts.sessionId,
+      "smalltalk" as any,
+      opts.signal,
+      {
+        tStart: 0,
+        normalization: 0,
+        intentClassification: 0,
+        sqlAnswerAttempt: 0,
+        queryReformulation: 0,
+        queryExpansion: 0,
+        retrieval: 0,
+        expandedQueryCount: 0,
+        contextChars: 0,
+        topScore: 0,
+        avgScore: 0,
+        confidenceOk: true,
+        historyEntityUsed: false,
+      },
+      opts.userEmotion,
+    );
+  } catch {
+    return jsonAnswer(opts.sessionId, fallbackAnswer, opts.userEmotion, opts.signal);
+  }
+}
+
+export async function runChatPipeline(session: Session, body: ChatRequestBody, signal?: AbortSignal) {
   const tStart = performance.now();
 
   const rawMessage = validateMessage(body.message);
@@ -123,52 +190,65 @@ export async function runChatPipeline(
   let response: any = null;
 
   try {
-    // 1. Fast-path regex routing
-    const fastPath = tryFastPathRegexRoute(rawMessage);
+    // 1. Fast-path regex routing (smalltalk only)
+    const fastPath = tryFastPathRegexRoute(rawMessage, session.user?.name || undefined);
     if (fastPath) {
       telemetry.setExecutionPath("Smalltalk/Fastpath");
       telemetry.setIntent("smalltalk", 1.0, "regex");
-      
+
       if (sessionId) {
         try {
-          const user = await getOrCreateUser(session);
-          const ownsSession = await ensureSessionBelongsToUser(sessionId, user.id);
-          if (ownsSession) {
+          const owns = await ensureSessionBelongsToUser(sessionId, (await getOrCreateUser(session)).id);
+          if (owns) {
             await addChatMessage(sessionId, "user", rawMessage, "neutral");
+
+            // repeat detection based on history user messages only
+            const stType = detectSmalltalkType(rawMessage);
+            const repeats = countSmalltalkRepeats(history, stType);
+            if (repeats >= 3) {
+              response = await tryWarmReplyOrFallback({
+                message: rawMessage,
+                history,
+                sessionId,
+                userName: session.user?.name ?? undefined,
+                smalltalkType: stType,
+
+                userEmotion: "neutral",
+                signal,
+              });
+              // ensure bot message persistence if warm reply used fallback jsonAnswer path
+              return response;
+            }
+
             await addChatMessage(sessionId, "bot", fastPath.answer, "neutral");
           }
         } catch (err) {
           console.error("[DB Write Error] Failed to save smalltalk messages:", err);
         }
       }
+
       response = NextResponse.json({ answer: fastPath.answer, emotion: "neutral", sessionId });
       return response;
     }
 
-    // 2. Parallel Preprocessing
+    // 2. Preprocessing
     telemetry.startStep("emotion_analysis_ms");
     const lastEntities = await extractLastEntityFromHistory(history);
-    const [emotionAnalysis] = await Promise.all([
-      analyzeUserEmotion(rawMessage, history),
-    ]);
+    const [emotionAnalysis] = await Promise.all([analyzeUserEmotion(rawMessage, history)]);
     const userEmotion = emotionAnalysis.emotion;
     telemetry.endStep("emotion_analysis_ms");
     telemetry.incrementLlmCalls();
 
     const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion);
 
-    // Merge DB active state if available
+    // merge DB state
     let dbStateProject: string | undefined;
     let dbStatePerson: string | undefined;
     if (attachedSessionId) {
       const dbState = await getSessionState(attachedSessionId);
       if (dbState) {
-        if (dbState.activeProject?.name) {
-          dbStateProject = dbState.activeProject.name;
-        }
-        if (dbState.activePerson?.name) {
-          dbStatePerson = dbState.activePerson.name;
-        }
+        if (dbState.activeProject?.name) dbStateProject = dbState.activeProject.name;
+        if (dbState.activePerson?.name) dbStatePerson = dbState.activePerson.name;
       }
     }
 
@@ -177,88 +257,79 @@ export async function runChatPipeline(
       lastPerson: dbStatePerson || lastEntities.lastPerson,
     };
 
-    // 2.5 Correction / Feedback detection & handling
+    // correction
     let finalQuery = rawMessage;
     let isWrongAnswerRetry = false;
     const correction = await detectAndHandleCorrection(rawMessage, history, attachedSessionId, {
       lastPerson: mergedEntities.lastPerson,
       lastProject: mergedEntities.lastProject,
     });
+
     if (correction) {
       if (correction.clarifyingQuestion) {
         return jsonAnswer(attachedSessionId, correction.clarifyingQuestion, userEmotion, signal);
       }
       if (correction.rewrittenMessage) {
-        console.log(`[Correction Handled] Original: "${rawMessage}" -> Rewritten: "${correction.rewrittenMessage}"`);
         finalQuery = correction.rewrittenMessage;
-        if (correction.correctedPerson) {
-          mergedEntities.lastPerson = correction.correctedPerson;
-        }
-        if (correction.correctedProject) {
-          mergedEntities.lastProject = correction.correctedProject;
-        }
+        if (correction.correctedPerson) mergedEntities.lastPerson = correction.correctedPerson;
+        if (correction.correctedProject) mergedEntities.lastProject = correction.correctedProject;
       }
-      if (correction.isWrongAnswerRetry) {
-        isWrongAnswerRetry = true;
-      }
+      if (correction.isWrongAnswerRetry) isWrongAnswerRetry = true;
     }
 
-    // Helper to asynchronously save state
     const saveState = async () => {
-      if (attachedSessionId) {
-        const resolvedEntities = telemetry.getTrace().entities;
-        const currentState = await getSessionState(attachedSessionId) || {};
-        let changed = false;
+      if (!attachedSessionId) return;
+      const resolvedEntities = telemetry.getTrace().entities;
+      const currentState = (await getSessionState(attachedSessionId)) || {};
+      let changed = false;
 
-        if (resolvedEntities) {
-          if (resolvedEntities.person?.value && resolvedEntities.person.confidence && resolvedEntities.person.confidence >= 0.7) {
-            currentState.activePerson = {
-              id: resolvedEntities.person.value,
-              name: resolvedEntities.person.value,
-              confidence: resolvedEntities.person.confidence,
-              source: "retrieval"
-            };
-            currentState.lastPerson = resolvedEntities.person.value;
-            changed = true;
-          }
-          if (resolvedEntities.page?.value) {
-            currentState.activeProject = {
-              id: resolvedEntities.page.value,
-              name: resolvedEntities.page.value,
-              confidence: resolvedEntities.page.quality === "EXACT" ? 1.0 : 0.85,
-              source: "retrieval"
-            };
-            currentState.lastProject = resolvedEntities.page.value;
-            changed = true;
-          }
-        }
-
-        if (currentState.lastRewrittenQuery !== finalQuery) {
-          currentState.lastRewrittenQuery = finalQuery;
+      if (resolvedEntities) {
+        if (
+          resolvedEntities.person?.value &&
+          resolvedEntities.person.confidence &&
+          resolvedEntities.person.confidence >= 0.7
+        ) {
+          currentState.activePerson = {
+            id: resolvedEntities.person.value,
+            name: resolvedEntities.person.value,
+            confidence: resolvedEntities.person.confidence,
+            source: "retrieval",
+          };
+          currentState.lastPerson = resolvedEntities.person.value;
           changed = true;
         }
-
-        if (finalQuery === rawMessage && !isCorrectionMessage(rawMessage)) {
-          currentState.lastUserQueryPreCorrection = rawMessage;
+        if (resolvedEntities.page?.value) {
+          currentState.activeProject = {
+            id: resolvedEntities.page.value,
+            name: resolvedEntities.page.value,
+            confidence: resolvedEntities.page.quality === "EXACT" ? 1.0 : 0.85,
+            source: "retrieval",
+          };
+          currentState.lastProject = resolvedEntities.page.value;
           changed = true;
-        }
-
-        if (changed) {
-          await updateSessionState(attachedSessionId, currentState);
         }
       }
+
+      if (currentState.lastRewrittenQuery !== finalQuery) {
+        currentState.lastRewrittenQuery = finalQuery;
+        changed = true;
+      }
+
+      if (finalQuery === rawMessage && !isCorrectionMessage(rawMessage)) {
+        currentState.lastUserQueryPreCorrection = rawMessage;
+        changed = true;
+      }
+
+      if (changed) await updateSessionState(attachedSessionId, currentState);
     };
 
-    // 3. Intent Classification (runs first, on the raw query or rewritten query)
+    // 3. Intent classification
     telemetry.startStep("intent_classifier_ms");
-    let parsed = await resolveQuery(finalQuery, history, session.user?.name || undefined, mergedEntities);
+    const parsed = await resolveQuery(finalQuery, history, session.user?.name || undefined, mergedEntities);
     telemetry.endStep("intent_classifier_ms");
     telemetry.setIntent(parsed.kind, parsed.confidence, parsed.source);
-    if (parsed.source !== "regex") {
-      telemetry.incrementLlmCalls();
-    }
+    if (parsed.source !== "regex") telemetry.incrementLlmCalls();
 
-    // 4. Construct Context
     const ctx: PipelineContext = {
       message: finalQuery,
       history,
@@ -268,10 +339,10 @@ export async function runChatPipeline(
       sessionName: session.user?.name || undefined,
       reformulatedQuery: parsed.reformulatedQuery,
       telemetry,
-      isWrongAnswerRetry
+      isWrongAnswerRetry,
     };
 
-    // 6. Try Notion Link Answer
+    // 6. Notion link
     const linkResponse = await tryNotionLinkAnswer(ctx, userEmotion, signal);
     if (linkResponse) {
       telemetry.setExecutionPath("Notion Link");
@@ -281,11 +352,28 @@ export async function runChatPipeline(
 
     // 7. Smalltalk (non-fastpath)
     if (parsed.kind === "smalltalk") {
+      const stType = detectSmalltalkType(rawMessage);
+      const repeats = countSmalltalkRepeats(history, stType);
+
       telemetry.setExecutionPath("Smalltalk/Fastpath");
       telemetry.incrementLlmCalls();
-      if (attachedSessionId) {
-        await saveState().catch(err => console.error("Error saving session state:", err));
+
+      if (attachedSessionId) await saveState().catch(err => console.error("Error saving session state:", err));
+
+      // warm reply on 3rd+ repeats; fallback to variation pool answer
+      if (repeats >= 3) {
+        return await tryWarmReplyOrFallback({
+          message: rawMessage,
+          history,
+          sessionId: attachedSessionId,
+          userName: session.user?.name ?? undefined,
+          smalltalkType: stType,
+
+          userEmotion,
+          signal,
+        });
       }
+
       response = await streamGeminiAnswer(
         ctx.message,
         "",
@@ -308,12 +396,12 @@ export async function runChatPipeline(
           confidenceOk: true,
           historyEntityUsed: false,
         },
-        userEmotion
+        userEmotion,
       );
       return response;
     }
 
-    // 8. SQL Metadata lane
+    // 8. SQL
     telemetry.startStep("sql_ms");
     const sqlResponse = await trySqlAnswer(parsed, ctx, userEmotion, signal, {
       tStart,
@@ -324,9 +412,7 @@ export async function runChatPipeline(
 
     if (sqlResponse) {
       telemetry.setExecutionPath("SQL Hit");
-      if (attachedSessionId) {
-        await saveState().catch(err => console.error("Error saving session state:", err));
-      }
+      if (attachedSessionId) await saveState().catch(err => console.error("Error saving session state:", err));
       response = sqlResponse;
       return response;
     }
@@ -342,7 +428,7 @@ export async function runChatPipeline(
       return response;
     }
 
-    // 9. RAG lane
+    // 9. RAG
     telemetry.startStep("rag_ms");
     const ragResponse = await tryRagAnswer(parsed, ctx, session, {
       tStart,
@@ -354,12 +440,11 @@ export async function runChatPipeline(
     telemetry.endStep("rag_ms");
     telemetry.setExecutionPath("RAG Fallback");
 
-    if (attachedSessionId) {
-      await saveState().catch(err => console.error("Error saving session state:", err));
-    }
+    if (attachedSessionId) await saveState().catch(err => console.error("Error saving session state:", err));
     response = ragResponse;
     return response;
   } finally {
     telemetry.finish();
   }
 }
+
