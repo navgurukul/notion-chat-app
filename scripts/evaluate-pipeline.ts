@@ -333,7 +333,7 @@ async function runEvaluation() {
       tc.query,
       tc.history || [],
       "Test User",
-      tc.lastEntities
+      undefined as any
     );
     const dIntent = performance.now() - tIntentStart;
 

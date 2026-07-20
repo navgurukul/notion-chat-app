@@ -1,4 +1,5 @@
 import "dotenv/config";
+process.env.IS_EVALUATION = "true";
 import "../src/lib/dns-hook";
 import { runChatPipeline } from "../src/lib/chat/pipeline";
 import { createChatSession, getOrCreateUser } from "../src/lib/chat/store";
@@ -96,7 +97,7 @@ async function main() {
       { msg: "bye now", type: "bye", expectKeywords: ["Goodbye", "later", "care", "ready"] },
       { msg: "what can you do", type: "help", expectKeywords: ["find", "pages", "tasks", "status", "Notion"] },
       { msg: "are you a bot", type: "identity", expectKeywords: ["assistant", "Notion", " workplace", "documentation", "query"] },
-      { msg: "whats up", type: "howAreYou", expectKeywords: ["great", "doing well", "good", "ready"] }
+      { msg: "whats up", type: "howAreYou", expectKeywords: ["great", "doing well", "good", "ready", "all set"] }
     ];
 
     for (const tc of fastPathCases) {

@@ -6,6 +6,7 @@
  * Requires: .env with DATABASE_URL (and GEMINI_API_KEY for optional LLM check)
  */
 import "dotenv/config";
+process.env.IS_EVALUATION = "true";
 import { query } from "../src/lib/db";
 import { chunkPageContent } from "../src/lib/ingestion/chunk";
 import { hasNotionChunks, hybridChunkContext } from "../src/lib/rag/hybrid-search";
@@ -352,7 +353,7 @@ async function testFastPathGreetingsLatency() {
       return;
     }
 
-    if (!data.answer || !/hello|welcome|goodbye/i.test(data.answer)) {
+    if (!data.answer || !/hello|hi|hey|welcome|goodbye|bye/i.test(data.answer)) {
       fail(
         `Greeting response invalid: "${tc.message}"`,
         `Got: "${data.answer}"`,

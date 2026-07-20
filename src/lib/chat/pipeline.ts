@@ -233,13 +233,39 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
 
     // 2. Preprocessing
     telemetry.startStep("emotion_analysis_ms");
+
+    // Fast LLM-friendly utility: current date/time (general question)
+    // If user asks “today’s date / what date is it” / “current time” etc., answer without Notion retrieval.
+    const utilityDateTimeRegex = /\b(today\s*['’]?\s*s\s+date|today\s+date|today\s+is\s+date|what\s+date\s+is\s+it\s+today|what\s+is\s+today\s*['’]?\s*s\s+date|what\s+day\s+is\s+it\s+today|day\s+today|current\s+time|what\s+time\s+is\s+it|time\s+now|current\s+date)\b/i;
+
     const lastEntities = await extractLastEntityFromHistory(history);
     const [emotionAnalysis] = await Promise.all([analyzeUserEmotion(rawMessage, history)]);
     const userEmotion = emotionAnalysis.emotion;
     telemetry.endStep("emotion_analysis_ms");
+
+    // Utility response bypasses Notion retrieval.
+    if (utilityDateTimeRegex.test(rawMessage)) {
+      const now = new Date();
+      const isoDate = now.toISOString().slice(0, 10);
+      const weekday = now.toLocaleDateString(undefined, { weekday: "long" });
+      const time = now.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+      const answer =
+        /\b(time\b|what\s+time|current\s+time|time\s+now)/i.test(rawMessage)
+          ? `Current time is **${time}** (local to the server).`
+          : `Today is **${weekday}**, **${isoDate}** (local to the server).`;
+
+      const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion);
+      if (attachedSessionId) {
+        await addChatMessage(attachedSessionId, "bot", answer, userEmotion).catch(err => console.error("[DB Write Error] Failed to save utility bot message:", err));
+      }
+
+      return NextResponse.json({ answer, emotion: userEmotion, sessionId: attachedSessionId });
+    }
+
     telemetry.incrementLlmCalls();
 
     const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion);
+
 
     // merge DB state
     let dbStateProject: string | undefined;
