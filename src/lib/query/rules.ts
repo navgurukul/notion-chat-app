@@ -407,9 +407,17 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
+  // "Who works where?" — people discovery across projects/workspace
+  if (
+    /^who\s+works\s+where[.?!]?\s*$/i.test(q) ||
+    /^who\s+works?\s+on\s+what[.?!]?\s*$/i.test(q)
+  ) {
+    return { kind: "people_list", raw: question, parserConfidence: 0.95 };
+  }
+
   if (
     /who\s+are\s+all\s+(?:the\s+)?(?:developers|devs|people|team\s+members)\b/i.test(q) ||
-    /^(?:list|show)\s+(?:all\s+)?(?:developers|devs|people|team\s+members)\??$/i.test(q) ||
+    /^(?:list|show)\s+(?:all\s+)?(?:developers|devs|people|team\s+members)[.?!]?\s*$/i.test(q) ||
     /how\s+many\s+(?:total\s+)?(?:developers|devs|people|team\s+members|engineers|users)\b/i.test(q) ||
     /total\s+(?:number\s+of\s+)?(?:developers|devs|people|team\s+members|engineers|users)\b/i.test(q)
   ) {
