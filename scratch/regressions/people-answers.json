@@ -1,0 +1,33 @@
+[
+  {
+    "question": "List all developers.",
+    "checks": [
+      "nonEmpty",
+      "containsPeopleCount",
+      "containsAllPeople"
+    ]
+  },
+  {
+    "question": "Who works where?",
+    "checks": [
+      "nonEmpty",
+      "containsPeopleCount"
+    ]
+  },
+  {
+    "question": "Who are all developers?",
+    "checks": [
+      "nonEmpty",
+      "containsAllPeople"
+    ]
+  },
+  {
+    "question": "Which project has the most developers?",
+    "checks": [
+      "nonEmpty",
+      "containsProject",
+      "containsDeveloperCount"
+    ]
+  }
+]
+

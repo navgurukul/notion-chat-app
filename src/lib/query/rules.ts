@@ -29,6 +29,23 @@ function withYear(question: string, partial: Omit<RulesQuery, "raw" | "year">): 
   return { ...partial, year, raw: question };
 }
 
+// ─── Reusable keyword groups ────────────────────────────────────────────────
+const PEOPLE_WORDS = ["developers", "developer", "devs", "dev", "engineers", "engineer", "people", "team members", "team member"];
+const LIST_WORDS = ["list", "show", "display", "get"];
+const COUNT_WORDS = ["how many", "number of", "total", "count"];
+
+/** Build a case-insensitive regex that matches any of the given keywords. */
+function keywordsPattern(words: string[], flags = "i"): RegExp {
+  // Sort longest first so multi-word patterns match before sub-strings
+  const sorted = [...words].sort((a, b) => b.length - a.length);
+  const joined = sorted.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  return new RegExp(joined, flags);
+}
+
+const PEOPLE_PATTERN = keywordsPattern(PEOPLE_WORDS);
+const LIST_PATTERN = keywordsPattern(LIST_WORDS);
+const COUNT_PATTERN = keywordsPattern(COUNT_WORDS);
+
 function preprocessQuestion(text: string) {
   return text
     .replace(/\bsummry\b/gi, "summary")
@@ -415,11 +432,37 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "people_list", raw: question, parserConfidence: 0.95 };
   }
 
+  // Single-word/quasi-single-word queries clearly about people listing
+  // e.g. "Developers?", "Devs", "Engineers", "Team members"
+  const singleWordPeople = new RegExp(
+    `^(?:${PEOPLE_PATTERN.source})[.?!]?\\s*$`, "i"
+  );
+  if (singleWordPeople.test(q)) {
+    return { kind: "people_list", raw: question, parserConfidence: 0.90 };
+  }
+
+  const whoAreAll = new RegExp(
+    `who\\s+(?:are\\s+all|all\\s+are)\\s+(?:the\\s+)?(?:${PEOPLE_PATTERN.source})\\b`, "i"
+  );
+  const listAllPeople = new RegExp(
+    `^(?:${LIST_PATTERN.source})\\s+(?:all|every)\\s+(?:${PEOPLE_PATTERN.source})[.?!]?\\s*$`, "i"
+  );
+  const listPeople = new RegExp(
+    `^(?:${LIST_PATTERN.source})\\s+(?:${PEOPLE_PATTERN.source})[.?!]?\\s*$`, "i"
+  );
+  const countPeople = new RegExp(
+    `\\bhow\\s+many\\s+(?:total\\s+)?(?:${PEOPLE_PATTERN.source}|users)\\b`, "i"
+  );
+  const totalPeople = new RegExp(
+    `\\btotal\\s+(?:number\\s+of\\s+)?(?:${PEOPLE_PATTERN.source}|users)\\b`, "i"
+  );
+
   if (
-    /who\s+are\s+all\s+(?:the\s+)?(?:developers|devs|people|team\s+members)\b/i.test(q) ||
-    /^(?:list|show)\s+(?:all\s+)?(?:developers|devs|people|team\s+members)[.?!]?\s*$/i.test(q) ||
-    /how\s+many\s+(?:total\s+)?(?:developers|devs|people|team\s+members|engineers|users)\b/i.test(q) ||
-    /total\s+(?:number\s+of\s+)?(?:developers|devs|people|team\s+members|engineers|users)\b/i.test(q)
+    whoAreAll.test(q) ||
+    listAllPeople.test(q) ||
+    listPeople.test(q) ||
+    countPeople.test(q) ||
+    totalPeople.test(q)
   ) {
     return { kind: "people_list", raw: question, parserConfidence: 0.95 };
   }

@@ -20,7 +20,7 @@
 
 ### P0-01 People Discovery
 
-**Status** ❌ Open
+**Status** 🟡 Partially Fixed
 
 **User Examples**
 - "How many developers are working?"
@@ -67,6 +67,20 @@ Users cannot get a simple headcount or roster. Trust erodes immediately since th
 
 **Notes**
 - The evaluation script (`scripts/evaluate-pipeline.ts`) already tests these cases (cases 14–16). Run it to see current pass/fail.
+
+---
+
+### Completed ✅
+- Intent routing for `people_list` (regex patterns for `List all developers.`, `Show all developers.`, `List all team members.`, `Who works where?`)
+- Regex trailing punctuation handling (`\??$` → `[.?!]?\s*$`)
+- "Who works where?" → `people_list` intent mapping
+
+### Remaining □
+- Verify SQL correctness — `handlePeopleList()` and `handleProjectMostDevs()` produce accurate results
+- Verify developer count matches expectations
+- Verify name aliases resolve correctly (e.g., "Tamanna a" → "Tamanna")
+- Verify final answer accuracy end-to-end (not just intent classification)
+- Add regression tests that validate final answer content, not just intent routing
 
 ---
 
