@@ -86,7 +86,7 @@ function formatPageSection(row: PageRow) {
 function deriveCoreTerm(term: string): string | null {
   const stripped = term.trim().replace(FUZZY_STRIP_SUFFIX, "").trim().toLowerCase();
   if (stripped === term.trim().toLowerCase()) return null; // nothing changed
-  if (stripped.length < 3) return null; // too short to be useful
+  if (stripped.length < 4) return null; // too short — substring LIKE gets noisy below this
   return stripped;
 }
 

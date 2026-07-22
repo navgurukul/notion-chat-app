@@ -22,15 +22,20 @@ function readThreshold(name: string, fallback: number) {
 }
 
 function getMinTopScore() {
-  return readThreshold("RETRIEVAL_MIN_TOP_SCORE", 0.1);
+  // 0.1 was letting near-random chunk-level noise (final_score ~ weighted
+  // avg of sem/kw scores) through as "confident" evidence. Raised so a
+  // single weak hit can no longer clear the gate on its own.
+  return readThreshold("RETRIEVAL_MIN_TOP_SCORE", 0.16);
 }
 
 function getMinAvgScore() {
-  return readThreshold("RETRIEVAL_MIN_AVG_SCORE", 0.06);
+  return readThreshold("RETRIEVAL_MIN_AVG_SCORE", 0.1);
 }
 
 function getStrongTopScore() {
-  return readThreshold("RETRIEVAL_STRONG_TOP_SCORE", 0.22);
+  // Below this, a single very strong hit is no longer assumed sufficient
+  // by itself — it still has to clear minTop/minAvg/minChunks together.
+  return readThreshold("RETRIEVAL_STRONG_TOP_SCORE", 0.3);
 }
 
 function getMinChunkCount() {
@@ -98,4 +103,3 @@ export function assessRetrievalConfidence(
 
 export const RETRIEVAL_REFUSAL_MESSAGE =
   "I couldn’t confidently answer from the currently synced Notion data. I found some related context but it may be incomplete—try **Sync changes**, include the exact project/person/page title from Notion, or rephrase with more specific keywords.";
-

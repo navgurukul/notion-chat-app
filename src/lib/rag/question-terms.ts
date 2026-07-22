@@ -104,10 +104,6 @@ function extractTopicPhrases(question: string) {
     }
   }
 
-  if (containsPhrase(lower, "payment")) {
-    phrases.push("payment", "payments", "PRD");
-  }
-
   const whyHowTopic = extractWhyOrHowTopic(question);
   if (whyHowTopic) phrases.push(whyHowTopic);
 

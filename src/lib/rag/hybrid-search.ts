@@ -41,10 +41,35 @@ function getHybridCandidateLimit() {
   );
 }
 
+function readFloatEnv(name: string, fallback: number) {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
+}
+
+/**
+ * Relative floor: drop rows whose final_score is far below the best row's
+ * score. Without this, topK always fills with the K best AVAILABLE rows —
+ * even when only 1-2 are actually relevant and the rest are noise from the
+ * UNION of sem/kw candidate pools. Always keep at least 1 row.
+ */
+function applyRelevanceFloor(rows: ChunkHybridRow[]) {
+  if (rows.length <= 1) return rows;
+  const topScore = rows[0].final_score;
+  if (topScore <= 0) return rows;
+  const ratio = readFloatEnv("HYBRID_RELATIVE_FLOOR_RATIO", 0.35);
+  const floor = topScore * ratio;
+  const kept = rows.filter((row) => row.final_score >= floor);
+  return kept.length ? kept : rows.slice(0, 1);
+}
+
 function refineChunkResults(rows: ChunkHybridRow[], topK: number) {
   if (!rows.length) return rows;
 
-  const candidates: (ChunkHybridRow & MMRCandidate)[] = rows.map((row) => ({
+  const floored = applyRelevanceFloor(
+    [...rows].sort((a, b) => b.final_score - a.final_score),
+  );
+
+  const candidates: (ChunkHybridRow & MMRCandidate)[] = floored.map((row) => ({
     ...row,
     id: row.chunk_id,
     relevance: row.final_score,
