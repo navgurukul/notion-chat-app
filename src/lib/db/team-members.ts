@@ -10,22 +10,81 @@ let _directory: PersonRecord[] | null = null;
 let _lastFetched = 0;
 const CACHE_TTL_MS = 60 * 60 * 1000;
 
-function cleanAndNormalizeName(name: string): string | null {
+// Noise patterns — consolidated from team-roster.ts to filter non-person entities
+const PERSON_FIELD_NOISE =
+  /^(unknown|n\/a|none|navgurukul|notion|unassigned|tbd|me|team|project|-+)$/i;
+
+const MENTION_NOISE =
+  /^(untitled|backend|datapivots|navgurkul|design|scope|item|user|admin|qa|dev|pm|billing|rate|total|due|gmail|please|cost|price|rs|invoice|sow|proposal|value|fee|fees|charges|usd|inr|pay|payment)$/i;
+
+// Additional known non-person patterns found in owner/editor fields
+const NON_PERSON_PATTERNS = [
+  /^PnC$/i,
+  /^Billing\s+rate$/i,
+  /^Total\s+Due$/i,
+  /^aws-amplify$/i,
+  /^production[- ]server/i,
+  /use\s+this$/i,
+  /\bAI$/i,
+  /^Untitled/i,
+  /^(backend|frontend|fullstack)$/i,
+  /^(admin|administrator|coordinator)$/i,
+  /^(hr|pnc|finance|accounts)$/i,
+  /^(intern|trainee|fellow)$/i,
+  /^growth\s+(manager|lead|team)$/i,
+  /^(product|program|project)\s+(manager|lead|owner)$/i,
+  /^Bot$/i,
+  /^Content\s+(writer|creator|manager)$/i,
+];
+
+function looksLikePersonName(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed.length < 2 || trimmed.length > 40) return false;
+
+  // Check noise patterns
+  if (PERSON_FIELD_NOISE.test(trimmed)) return false;
+  if (MENTION_NOISE.test(trimmed)) return false;
+  for (const pattern of NON_PERSON_PATTERNS) {
+    if (pattern.test(trimmed)) return false;
+  }
+
+  // Reject values with digits, special chars
+  if (/\d/.test(trimmed)) return false;
+  if (/[@#:|{}()[\]"'$%&?*+=\/\\_]/.test(trimmed)) return false;
+  if (/[.!?]$/.test(trimmed)) return false;
+
+  // Reject if every word starts lowercase (likely a command/slug/tech term)
+  const words = trimmed.split(/\s+/);
+  if (words.length >= 2) {
+    const allLower = words.every(w => /^[a-z]/.test(w));
+    if (allLower) return false;
+  }
+
+  // Reject sentence-like patterns with verbs
+  const verbPattern = /\b(is|are|was|were|has|have|had|use|used|using|this|that|the|and|for|to)\b/i;
+  if (words.length >= 3 && verbPattern.test(trimmed)) return false;
+
+  return true;
+}
+
+/** Title-case a name, handling edge cases like "Mahendra Mahendra" → "Mahendra" */
+function normalizeNameValue(name: string): string | null {
   const trimmed = name.trim();
 
   // 1. Filter out UUIDs
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (uuidRegex.test(trimmed)) {
-    return null;
-  }
+  if (uuidRegex.test(trimmed)) return null;
 
-  // 2. Title case/capitalize the name (proper capitalization)
+  // 2. Skip obviously non-person entries
+  if (!looksLikePersonName(trimmed)) return null;
+
+  // 3. Title case/capitalize the name (proper capitalization)
   let capitalized = trimmed
     .split(/\s+/)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(" ");
 
-  // 3. Deduplicate repeated names like "Mahendra Mahendra" -> "Mahendra" or "Ujala Ujala" -> "Ujala"
+  // 4. Deduplicate repeated names like "Mahendra Mahendra" -> "Mahendra"
   const parts = capitalized.split(" ");
   if (parts.length === 2 && parts[0] === parts[1]) {
     capitalized = parts[0];
@@ -54,7 +113,7 @@ export async function getPeopleDirectory(): Promise<PersonRecord[]> {
   const dir: PersonRecord[] = [];
 
   for (const r of rows) {
-    const cleaned = cleanAndNormalizeName(r.name);
+    const cleaned = normalizeNameValue(r.name);
     if (!cleaned) continue;
 
     const normalized = cleaned.toLowerCase();

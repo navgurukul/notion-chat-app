@@ -22,6 +22,7 @@ export type QueryKind =
   | "onboarding_tasks"
   | "people_list"
   | "project_most_devs"
+  | "project_member_breakdown"
   | "analytics"
   | "semantic"
   | "smalltalk"

@@ -171,8 +171,6 @@ export async function extractRawEntities(message: string): Promise<{ personName?
     }
   }
 
-
-
   if (!personName) {
     const assignedToMatch = message.match(/\b(?:assigned\s+to|tasks\s+of|by|for)\s+([a-zA-Z][a-zA-Z'.-]*(?:\s+[a-zA-Z][a-zA-Z'.-]*){0,2})\b/i);
     if (assignedToMatch?.[1]) {
@@ -200,6 +198,39 @@ export async function extractRawEntities(message: string): Promise<{ personName?
   }
 
   return { personName, docTitle, compareTitleB };
+}
+
+/**
+ * Check if the current message actually NEEDS entity context from history.
+ * Only returns true when the query has pronouns, or is a short contextual follow-up
+ * that clearly refers to a previously mentioned entity without explicitly naming it.
+ * This prevents incorrectly injecting `lastPerson`/`lastProject` into queries
+ * that are standalone and unrelated to the previous conversation.
+ */
+function isFollowUpNeedingContext(message: string, history: ChatHistoryItem[]): boolean {
+  if (!history || history.length === 0) return false;
+
+  const lower = message.trim().toLowerCase();
+
+  // Has explicit pronouns referring to people or things
+  if (/\b(he|him|his|she|her|hers|they|them|their|it|its|this|that)\b/i.test(lower)) {
+    return true;
+  }
+
+  // Short queries that clearly continue previous topic (2-5 words with follow-up indicators)
+  const words = lower.split(/\s+/).filter(Boolean);
+  if (words.length >= 2 && words.length <= 5) {
+    const followUpPatterns = [
+      /^(and|but|or|also|then|so)\b/,
+      /\b(about\s+this|about\s+that|for\s+it|for\s+this|for\s+that)\b/,
+      /\b(what\s+about|how\s+about|tell\s+me\s+more|show\s+details|more\s+details|more\s+info)\b/,
+    ];
+    for (const pattern of followUpPatterns) {
+      if (pattern.test(lower)) return true;
+    }
+  }
+
+  return false;
 }
 
 export async function resolveAllEntities(
@@ -242,7 +273,11 @@ export async function resolveAllEntities(
     await withTimeout(pPromise, TIMEOUT_MS, null);
   }
 
-  let rawDoc = raw.docTitle || lastEntities?.lastProject;
+  // Only fall back to lastEntities.lastProject if the current message is a follow-up needing context
+  let rawDoc = raw.docTitle;
+  if (!rawDoc && lastEntities?.lastProject && isFollowUpNeedingContext(message, history)) {
+    rawDoc = lastEntities.lastProject;
+  }
   if (rawDoc) {
     const dPromise = resolveDocument(rawDoc).then((d) => {
       if (d.value) {
@@ -278,6 +313,7 @@ export async function lazyResolveSqlEntities(
 ): Promise<ParsedQuery> {
   const finalParsed = { ...parsed };
   const rawMessage = parsed.raw || "";
+  const needsFollowUpContext = isFollowUpNeedingContext(rawMessage, history);
 
   // 1. Resolve Person for SQL intents that need a person
   const needsPerson = [
@@ -303,7 +339,8 @@ export async function lazyResolveSqlEntities(
     if (!rawPerson && sessionName && /\b(me|my|myself|i)\b/i.test(rawMessage)) {
       rawPerson = sessionName;
     }
-    if (!rawPerson && lastEntities?.lastPerson) {
+    // GUARDRAIL: Only fall back to lastEntities.lastPerson if the current message is a follow-up needing context
+    if (!rawPerson && needsFollowUpContext && lastEntities?.lastPerson) {
       rawPerson = lastEntities.lastPerson;
     }
 
@@ -364,7 +401,8 @@ export async function lazyResolveSqlEntities(
       const extracted = await extractRawEntities(rawMessage);
       rawDoc = extracted.docTitle;
     }
-    if (!rawDoc && lastEntities?.lastProject) {
+    // GUARDRAIL: Only fall back to lastEntities.lastProject if the current message is a follow-up needing context
+    if (!rawDoc && needsFollowUpContext && lastEntities?.lastProject) {
       rawDoc = lastEntities.lastProject;
     }
     if (rawDoc) {
@@ -411,6 +449,7 @@ export async function lazyResolveRagEntities(
 ): Promise<ParsedQuery> {
   const finalParsed = { ...parsed };
   const rawMessage = parsed.raw || "";
+  const needsFollowUpContext = isFollowUpNeedingContext(rawMessage, history);
 
   // 1. Resolve Person
   let rawPerson = parsed.personName;
@@ -427,7 +466,8 @@ export async function lazyResolveRagEntities(
   if (!rawPerson && sessionName && /\b(me|my|myself|i)\b/i.test(rawMessage)) {
     rawPerson = sessionName;
   }
-  if (!rawPerson && lastEntities?.lastPerson) {
+  // GUARDRAIL: Only fall back to lastEntities.lastPerson if the current message is a follow-up needing context
+  if (!rawPerson && needsFollowUpContext && lastEntities?.lastPerson) {
     rawPerson = lastEntities.lastPerson;
   }
 
@@ -466,7 +506,8 @@ export async function lazyResolveRagEntities(
   const needsDoc = ["page_about", "project_summary", "risks_for", "onboarding_tasks"].includes(parsed.kind);
   if (needsDoc) {
     let rawDoc = parsed.docTitle;
-    if (!rawDoc && lastEntities?.lastProject) {
+    // GUARDRAIL: Only fall back to lastEntities.lastProject if the current message is a follow-up needing context
+    if (!rawDoc && needsFollowUpContext && lastEntities?.lastProject) {
       rawDoc = lastEntities.lastProject;
     }
     if (!rawDoc) {

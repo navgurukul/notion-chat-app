@@ -24,6 +24,7 @@ export const METADATA_ONLY_KINDS = new Set<QueryKind>([
   "risks_for",
   "people_list",
   "project_most_devs",
+  "project_member_breakdown",
   "person_project_membership",
   "assignee_project_check",
 ]);
@@ -73,6 +74,8 @@ export function metadataNotFoundAnswer(parsed: ParsedQuery): string {
       return title
         ? `No team members found for **${title}** in synced Notion (owner, assignee, captain, or team roster lines). Try **Sync changes** or check spelling (e.g. datapivots vs datapivot).`
         : "No project name found — e.g. **Who all are working on datapivots ai?**";
+    case "project_member_breakdown":
+      return `No project data found to generate a member breakdown. Try **Sync changes** or ask about a specific project with **"who is working on [project]?"**`;
     case "person_project_membership":
       return person && title
         ? `No. I couldn't find **${person}** associated with the **${title}** project in synced Notion data.`

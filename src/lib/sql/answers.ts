@@ -1401,26 +1401,9 @@ async function handlePeopleList(): Promise<string> {
   return `## Team Members (${dir.length})\n\nHere are all team members found in the synced Notion data:\n${list}\n\n*Note: This list represents all members who own, create, or edit tasks and pages in the synced Notion workspace (including program managers, People & Culture/HR, and other coordinators in addition to developers).*`;
 }
 
-async function handleProjectMostDevs(): Promise<string> {
-  const rows = await query<{ title: string; dev_count: number }>(`
-    SELECT coalesce(title, 'Untitled') as title, count(DISTINCT dev) as dev_count
-    FROM (
-      SELECT title, trim(unnest(string_to_array(owner, ','))) as dev
-      FROM notion_pages
-      WHERE owner IS NOT NULL AND trim(owner) <> ''
-    ) AS devs
-    WHERE dev <> '' AND lower(dev) NOT IN ('unknown', 'n/a', 'none', 'tbd', 'unassigned')
-    GROUP BY title
-    ORDER BY dev_count DESC, title ASC
-    LIMIT 5
-  `);
 
-  if (rows.length === 0) {
-    return "No active projects with developers found in synced Notion data.";
-  }
 
-  const topProject = rows[0];
-  const list = rows.map((r, idx) => `${idx + 1}. **${r.title}** (${r.dev_count} developer(s))`).join("\n");
+
   return `The project with the most developers is **${topProject.title}** with **${topProject.dev_count}** developers.\n\n### Top Projects by Developer Count:\n${list}`;
 }
 
