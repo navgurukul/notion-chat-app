@@ -10,7 +10,7 @@ import type {
   NotionPageRow,
   WorkedOnRow,
 } from "@/lib/shared/notion-types";
-import { normalizePersonNameForMatch, isWorkspaceScope } from "@/lib/query/normalize";
+import { normalizePersonNameForMatch, isWorkspaceScope, personDedupeKey } from "@/lib/query/normalize";
 import { isNoiseTopic } from "@/lib/query/rules";
 import type { ParsedQuery } from "@/lib/query/types";
 import {
@@ -25,7 +25,6 @@ import {
 } from "@/lib/sql/format-display";
 import { buildPersonMatchParams, personColumnMatchSql, personColumnsMatchSql } from "@/lib/sql/person-filter";
 import { extractPeopleFromContent, splitPersonField } from "@/lib/sql/team-roster";
-import { personDedupeKey } from "@/lib/query/normalize";
 import {
   filterPagesForProjectTopic,
   primaryTopicToken,
@@ -1379,20 +1378,6 @@ async function handlePeopleList(): Promise<string> {
 }
 
 /**
- * FIX: this function did not exist. `handleProjectMostDevs()` was called at
- * the site below, but nowhere in the file defined it — the code that used to
- * follow `handlePeopleList` was an orphaned tail end (a `return` statement
- * referencing `topProject`/`list`/`dev_count` with no function signature, no
- * SQL query, and no computation of any of those variables). This is a real
- * implementation, not a guess at restoring lost code — I don't have your
- * original, so I built it from scratch using the same project-grouping logic
- * (`inferProjectThemeForPage`) and person-extraction helpers
- * (`splitPersonField`, `extractPeopleFromContent`) already used elsewhere in
- * this file, so "most developers" counts against the same project
- * boundaries the rest of the SQL answers use rather than a separate ad-hoc
- * grouping.
- */
-/**
  * Shared by handleProjectMostDevs and handleProjectMemberBreakdown — both
  * need the same "distinct people per project theme" grouping, just
  * presented differently (single winner + top 10, vs a full table).
@@ -1445,7 +1430,7 @@ async function handleProjectMostDevs(): Promise<string> {
     .map((p) => `- **${p.title}** — ${p.dev_count} developer(s)`)
     .join("\n");
 
-  return `The project with the most developers is **${topProject.title}** with **${topProject.dev_count}** developers.\n\n### Top Projects by Developer Count:\n${list}`;
+  return `## Project with Most Developers\n\n**${topProject.title}** has the highest recorded number of developers/assignees (${topProject.dev_count}).\n\n### Top Projects by Developer Count:\n${list}`;
 }
 
 /**
@@ -2289,7 +2274,7 @@ async function handleMetadataQueryInner(
     async function fetchActivityRows(requireYear: boolean) {
       return findPersonActivityRows({
         personTerm,
-        personName,
+        fuzzyPersonTerm: personName,
         topicTerm,
         requireYear,
         yearStart,

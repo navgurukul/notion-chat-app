@@ -215,7 +215,7 @@ export async function detectAndHandleCorrection(
     try {
       const dbMessages = await listChatMessages(sessionId);
       resolvedHistory = dbMessages.map(m => ({
-        role: m.role === "bot" ? "model" : "user",
+        role: m.role === "bot" ? "bot" : "user",
         content: m.content
       }));
     } catch (e) {

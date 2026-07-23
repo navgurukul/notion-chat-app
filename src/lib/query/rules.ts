@@ -343,7 +343,7 @@ export function parseQueryByRules(question: string): RulesQuery {
 
   // Implicit assigned list matching
   if (
-    /^(?:show|list|get|display|what are the)\s+assigned\s+(?:tasks?|issues?|tickets?|bugs?|work\s+items?)(?:\?|$)/i.test(q) ||
+    /^(?:show|list|get|display|what are the)\s+(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)(?:\s+(?:assigned\s+)?to\s+me)?(?:\?|$)/i.test(q) ||
     /\bassigned\s+(?:tasks?|issues?|tickets?|bugs?|work\s+items?)(?:\?|$)/i.test(q)
   ) {
     return {
@@ -752,8 +752,8 @@ export function parseQueryByRules(question: string): RulesQuery {
   }
 
   // page details shortcut
-  if (/\b(?:details|info|information|more|tell me more)\s+(?:of|about|for|on)\s+(.+?)(?:\?|$)/i.test(q) || /^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i.test(q)) {
-    const match = question.match(/\b(?:details|info|information|more|tell me more)\s+(?:of|about|for|on)\s+(.+?)(?:\?|$)/i) ?? question.match(/^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i);
+  if (/\b(?:tell\s+me\s+more\s+about|more\s+about|details|info|information)\s+(?:of|about|for|on)?\s*(.+?)(?:\?|$)/i.test(q) || /^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i.test(q)) {
+    const match = question.match(/\b(?:tell\s+me\s+more\s+about|more\s+about|details|info|information)\s+(?:of|about|for|on)?\s*(.+?)(?:\?|$)/i) ?? question.match(/^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i);
     const doc = stripDocWords(match?.[1] || "");
     if (doc) {
       return { kind: "page_about", docTitle: doc, raw: question, parserConfidence: 0.95 };

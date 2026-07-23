@@ -14,7 +14,7 @@ export function formatDisplayLink(title: string, url: string | null | undefined)
   return url ? `[${title}](${url})` : title;
 }
 
-export function stripNotionBodyRaw(content?: string | null) {
+export function stripNotionBodyRaw(content?: string | null, maxLength?: number) {
   const raw = (content || "").trim();
   if (!raw) return "";
 
@@ -23,6 +23,10 @@ export function stripNotionBodyRaw(content?: string | null) {
     .replace(/^Title:.*$/m, "")
     .replace(/^URL:.*$/m, "")
     .trim();
+
+  if (maxLength && body.length > maxLength) {
+    return body.slice(0, maxLength);
+  }
 
   return body;
 }

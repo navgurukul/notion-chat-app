@@ -202,7 +202,7 @@ async function main() {
     });
     const parsedRep4 = await parseResponse(resRep4);
 
-    // Warm reply triggers either Gemini streaming or fallback reply
+    // Warm reply triggers either OpenAI streaming or fallback reply
     // If it is a warm reply, the response will NOT be one of the static fastpath templates
     const staticGreetingVariations = [
       "Hello! I am your NavGurukul Notion assistant. How can I help you today?",
@@ -228,9 +228,9 @@ async function main() {
     history.push({ role: "bot", content: parsedRep4.answer });
 
     // ----------------------------------------------------
-    // 4. Test Non-Regex Small Talk (Gemini Routing)
+    // 4. Test Non-Regex Small Talk (OpenAI Routing)
     // ----------------------------------------------------
-    console.log("\n--- Category 4: Non-Regex Small Talk (Gemini Routing) ---");
+    console.log("\n--- Category 4: Non-Regex Small Talk (OpenAI Routing) ---");
     const nonRegexMsgs = [
       "tell me a funny joke",
       "do you like coding in typescript?"

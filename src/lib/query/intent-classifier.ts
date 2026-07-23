@@ -76,7 +76,7 @@ function tryFastPathIntent(question: string): ParsedQuery | null {
     return {
       kind: "assigned_list",
       confidence: 1.0,
-      source: "rule",
+      source: "regex",
       raw: question,
     };
   }

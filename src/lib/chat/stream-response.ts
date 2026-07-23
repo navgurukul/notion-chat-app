@@ -137,6 +137,7 @@ export async function streamOpenAIAnswer(
     }
     throw error;
   }
+
   const dGetChatStream = performance.now() - tStreamStart;
 
   const encoder = new TextEncoder();

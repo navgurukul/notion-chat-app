@@ -60,7 +60,7 @@ You will need the following API keys:
 -   **Framework**: [Next.js](https://nextjs.org/) (App Router)
 -   **Authentication**: [NextAuth.js](https://next-auth.js.org/)
 -   **AI**: [OpenAI SDK](https://platform.openai.com/docs/api-reference) (Embeddings, Completions, and Streaming)
--   **Database**: Neon PostgreSQL with `pgvector`
+-   **Database / RAG**: Neon PostgreSQL with `pgvector` + OpenAI Embeddings
 -   **Workspace Export**: [@notionhq/client](https://www.npmjs.com/package/@notionhq/client)
 
 ## 📜 License

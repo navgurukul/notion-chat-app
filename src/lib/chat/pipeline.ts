@@ -148,7 +148,7 @@ Write a single short, friendly warm reply (1-2 sentences). Do NOT repeat the exa
 If relevant, ask a lightweight next question about what they'd like to check in NavGurukul Notion.`;
 
   try {
-    return await streamOpenAIAnswer(
+      return await streamOpenAIAnswer(
       warmPrompt,
       "",
       opts.history,

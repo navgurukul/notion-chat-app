@@ -261,9 +261,26 @@ export async function resolveQuery(
     }
   }
 
+  let docTitle = parsed.docTitle;
+  let personName = parsed.personName;
+  if (reformulatedQueryText) {
+    const refRules = parseQueryByRules(reformulatedQueryText);
+    if (!docTitle && refRules.docTitle) {
+      docTitle = refRules.docTitle;
+    }
+    if (!personName && refRules.personName) {
+      personName = refRules.personName;
+    }
+  }
+
+  if (!personName && lastEntities?.lastPerson) {
+    personName = lastEntities.lastPerson;
+  }
+
   const finalParsed: ParsedQuery = {
     ...parsed,
-    personName: parsed.personName || (lastEntities?.lastPerson && (/\b(he|his|him|she|her|they|them)\b/i.test(question) || !parsed.personName) ? lastEntities.lastPerson : parsed.personName),
+    ...(docTitle ? { docTitle } : {}),
+    personName: personName || parsed.personName || (lastEntities?.lastPerson && (/\b(he|his|him|she|her|they|them)\b/i.test(question) || !parsed.personName) ? lastEntities.lastPerson : undefined),
     raw: question,
     reformulatedQuery: reformulatedQueryText,
   };

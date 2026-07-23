@@ -226,14 +226,14 @@ export default function ChatPage() {
               content: useContent,
               emotion: useEmotion,
             });
-            usedDbIds.add(dbMsg.id);
+            if (dbMsg.id) usedDbIds.add(dbMsg.id);
           } else {
             // Message had ID but not found in DB (e.g. deleted on server?), keep it
             merged.push(localMsg);
           }
         } else {
           // In-flight local message: match by role to any unused DB message
-          const dbMsg = mapped.find((m) => m.role === localMsg.role && !usedDbIds.has(m.id));
+          const dbMsg = mapped.find((m) => m.role === localMsg.role && (!m.id || !usedDbIds.has(m.id)));
           if (dbMsg) {
             const useContent = localMsg.content.length > dbMsg.content.length ? localMsg.content : dbMsg.content;
             const useEmotion = localMsg.emotion || dbMsg.emotion;
@@ -242,7 +242,7 @@ export default function ChatPage() {
               content: useContent,
               emotion: useEmotion,
             });
-            usedDbIds.add(dbMsg.id);
+            if (dbMsg.id) usedDbIds.add(dbMsg.id);
           } else {
             // Keep local in-flight message as-is
             merged.push(localMsg);
@@ -252,7 +252,7 @@ export default function ChatPage() {
 
       // Add any remaining messages from the DB
       for (const dbMsg of mapped) {
-        if (!usedDbIds.has(dbMsg.id)) {
+        if (dbMsg.id && !usedDbIds.has(dbMsg.id)) {
           merged.push(dbMsg);
           usedDbIds.add(dbMsg.id);
         }

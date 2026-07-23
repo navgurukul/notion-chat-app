@@ -42,7 +42,7 @@ graph TB
 
     subgraph External Services [SaaS APIs]
         NotionAPI[[Notion SDK / API]]
-        LLM[[Gemini / DeepSeek API]]
+        LLM[[OpenAI API (gpt-4o-mini)]]
     end
 
     %% Client and Auth Flow
@@ -92,7 +92,7 @@ sequenceDiagram
     participant Sync as Notion Sync Service
     participant Notion as Notion API Client
     participant DB as PostgreSQL Client
-    participant AI as Gemini/OpenAI Embedding API
+    participant AI as OpenAI API (Embeddings & Completions)
 
     Admin->>API: POST /api/sync?embed=true
     API->>Sync: syncNotionToPostgres({ embed: true })

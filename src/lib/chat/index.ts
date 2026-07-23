@@ -17,7 +17,7 @@ export {
   extractReferencedTitle,
   resolveSemanticSearchQuery,
 } from "@/lib/chat/link-lookup";
-export { streamOpenAIAnswer } from "@/lib/chat/stream-response";
+export { streamOpenAIAnswer, streamGeminiAnswer } from "@/lib/chat/stream-response";
 export {
   addChatMessage,
   CHAT_HISTORY_LIMIT,
