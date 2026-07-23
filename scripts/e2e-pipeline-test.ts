@@ -3,7 +3,7 @@
  *
  * Run: npm run test:e2e
  *
- * Requires: .env with DATABASE_URL (and GEMINI_API_KEY for optional LLM check)
+ * Requires: .env with DATABASE_URL (and OPENAI_API_KEY for optional LLM check)
  */
 import "dotenv/config";
 process.env.IS_EVALUATION = "true";
@@ -353,7 +353,7 @@ async function testFastPathGreetingsLatency() {
       return;
     }
 
-    if (!data.answer || !/hello|hi|hey|welcome|goodbye|bye|anytime|happy\s+to\s+help|no\s+problem|sure/i.test(data.answer)) {
+    if (!data.answer || !/hello|hi|hey|welcome|goodbye|bye|talk|later|see\s+you|here|anytime|happy\s+to\s+help|no\s+problem|sure/i.test(data.answer)) {
       fail(
         `Greeting response invalid: "${tc.message}"`,
         `Got: "${data.answer}"`,

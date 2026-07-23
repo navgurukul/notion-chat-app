@@ -1,5 +1,5 @@
-import { getJsonCompletion } from "@/lib/ai/gemini";
-import type { ChatHistoryItem } from "@/lib/ai/gemini";
+import { getJsonCompletion } from "@/lib/ai/openai";
+import type { ChatHistoryItem } from "@/lib/ai/openai";
 import { buildContextualSearchQuery } from "@/lib/chat/history";
 
 const REFORMULATION_SYSTEM_PROMPT = `

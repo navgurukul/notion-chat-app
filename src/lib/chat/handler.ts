@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import type { Session } from "next-auth";
-import {
-  OPENAI_QUOTA_USER_MESSAGE,
-  isOpenAIQuotaError,
-} from "@/lib/ai/provider-errors";
+import { OPENAI_QUOTA_USER_MESSAGE, isOpenAIQuotaError } from "@/lib/ai/provider-errors";
 import {
   ChatNotFoundError,
   ChatValidationError,

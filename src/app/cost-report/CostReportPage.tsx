@@ -201,7 +201,6 @@ export default function CostReportPage() {
 
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([
     "gpt-4o-mini",
-    "deepseek-chat",
   ]);
 
 

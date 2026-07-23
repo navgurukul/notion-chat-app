@@ -3,7 +3,7 @@ import { classifyQueryIntent } from "./intent-classifier";
 import { detectIntent } from "./intent";
 import { logQueryRouting } from "./telemetry";
 import type { ParsedQuery } from "./types";
-import { withRegexScores } from "./rule-confidence";
+import { withRegexScores, NOISY_ENTITY } from "./rule-confidence";
 import type { ChatHistoryItem } from "@/lib/ai/openai";
 import {
   tryFastPathRegexRoute,
@@ -41,10 +41,19 @@ const LLM_ENABLED = process.env.AI_INTENT_CLASSIFIER !== "false";
 export const HIGH_CONFIDENCE = 0.9;
 export const PARSER_CONFIDENCE_THRESHOLD = 0.75;
 
+/**
+ * FIX: previously used its own shorter, diverging noisy-entity regex
+ * (`/^(is|was|are|were|only|one|what|who|which)$/i`) that disagreed with
+ * rule-confidence.ts's NOISY_ENTITY. An entity like "manager" or "project"
+ * would fail rule-confidence.ts's entityQuality() check (correctly) but pass
+ * this function's old shorter check (incorrectly) — so whether a bad entity
+ * got flagged for LLM re-verification depended on which of the two
+ * divergent copies ran, not on any real distinction. Both now use the same
+ * source of truth.
+ */
 function hasBrokenEntities(parsed: ParsedQuery) {
-  const noisy = /^(is|was|are|were|only|one|what|who|which)$/i;
-  if (parsed.personName && noisy.test(parsed.personName)) return true;
-  if (parsed.docTitle && noisy.test(parsed.docTitle)) return true;
+  if (parsed.personName && NOISY_ENTITY.test(parsed.personName)) return true;
+  if (parsed.docTitle && NOISY_ENTITY.test(parsed.docTitle)) return true;
   if (parsed.docTitle && parsed.docTitle.length > 80) return true;
   return false;
 }
@@ -77,8 +86,30 @@ function applyIntentHint(question: string, rules: ParsedQuery): ParsedQuery {
   };
 }
 
+/**
+ * FIX: previously, when `rules.confidence >= HIGH_CONFIDENCE` (0.9), this
+ * returned `{ ...rules, source: "merged", confidence: max(rules.confidence,
+ * llm.confidence * 0.5) }` — it kept `rules.kind` UNCONDITIONALLY and only
+ * ever blended the LLM's confidence NUMBER in. The LLM's classified `kind`
+ * was computed but never used in that branch, so a confidently-wrong regex
+ * rule could never be corrected even when the LLM disagreed with high
+ * confidence of its own. Now rules only win outright when the LLM agrees,
+ * or is clearly less confident than the rules parser.
+ *
+ * NOTE: this changes routing behavior — test against your eval set / query
+ * log before shipping. The threshold below (`llm.confidence < rules.confidence
+ * - 0.1`) is a starting point, not a guarantee.
+ */
 function mergeRulesAndLlm(rules: ParsedQuery, llm: ParsedQuery): ParsedQuery {
-  if (rules.confidence >= HIGH_CONFIDENCE && !hasBrokenEntities(rules)) {
+  const smalltalkOverride = llm.kind === "smalltalk" && llm.confidence >= 0.5;
+
+  const rulesWinsOutright =
+    !smalltalkOverride &&
+    rules.confidence >= HIGH_CONFIDENCE &&
+    !hasBrokenEntities(rules) &&
+    (rules.kind === llm.kind || llm.confidence < rules.confidence - 0.1);
+
+  if (rulesWinsOutright) {
     return {
       ...rules,
       source: "merged",
@@ -86,10 +117,9 @@ function mergeRulesAndLlm(rules: ParsedQuery, llm: ParsedQuery): ParsedQuery {
     };
   }
 
-  const smalltalkOverride = llm.kind === "smalltalk" && llm.confidence >= 0.5;
   const mergedKind = smalltalkOverride
     ? "smalltalk"
-    : llm.confidence >= 0.72
+    : llm.confidence >= rules.confidence || llm.confidence >= 0.72
       ? llm.kind
       : rules.kind;
   const confidence = Math.max(llm.confidence, rules.confidence);
@@ -148,7 +178,6 @@ export async function resolveQuery(
   const SMALLTALK_HEURISTIC =
     /\b(not\s+)?feel(?:ing)?\s*well\b|\bhow\s+are\s+you\b|^(hi|hello|hey|thanks?|ok|okay)[\s!.,]*$|^(good\s+morning|good\s+afternoon|good\s+evening|goodbye|bye|greetings|hey\s+there|how's\s+it\s+going|what's\s+up)[\s!.,]*$|^(who\s+are\s+you|what\s+is\s+your\s+name|who\s+created\s+you|are\s+you\s+a\s+bot)[\s!.,?]*$/i;
 
-  // inside resolveQuery, right after tryFastPathRegexRoute check:
   if (SMALLTALK_HEURISTIC.test(question)) {
     return {
       kind: "smalltalk",
@@ -186,16 +215,32 @@ export async function resolveQuery(
   // 1.5 Early Query Reformulation for follow-up turns
   let processedQuestion = question;
   let reformulatedQueryText: string | undefined;
+  // FIX: rules-safe input is kept separate from the reformulated one.
+  // buildContextualSearchQuery's fallback (used when the reformulation LLM
+  // call fails, or QUERY_REFORMULATION=false) returns a multi-line
+  // "Conversation context: ...\n\nCurrent question: ..." block — most of
+  // rules.ts's regexes are ^-anchored and cannot match that shape, so this
+  // fallback firing on a follow-up question (the exact class of message
+  // shouldReformulate() targets) silently broke regex-based intent parsing
+  // for that turn. Only a genuine LLM rewrite (method: "llm") is a clean
+  // standalone question safe to hand to parseQueryByRules; the
+  // contextual_fallback/original text still flows into the LLM classifier
+  // and downstream RAG retrieval via reformulatedQueryText, where extra
+  // prose context is harmless or even helpful.
+  let rulesInputQuestion = question;
   if (shouldReformulate(question, history)) {
     const reformulated = await reformulateSearchQuery(question, history);
     processedQuestion = reformulated.searchQuery;
     reformulatedQueryText = reformulated.searchQuery;
+    if (reformulated.method === "llm") {
+      rulesInputQuestion = reformulated.searchQuery;
+    }
   }
 
-  // 2. Regex rules parsing on the processed question
+  // 2. Regex rules parsing on the rules-safe question
   const rules = applyIntentHint(
-    processedQuestion,
-    withRegexScores(parseQueryByRules(processedQuestion)),
+    rulesInputQuestion,
+    withRegexScores(parseQueryByRules(rulesInputQuestion)),
   );
 
   let parsed: ParsedQuery;
@@ -235,7 +280,7 @@ export async function resolveQuery(
   const finalParsed: ParsedQuery = {
     ...parsed,
     ...(docTitle ? { docTitle } : {}),
-    ...(personName ? { personName } : {}),
+    personName: personName || parsed.personName || (lastEntities?.lastPerson && (/\b(he|his|him|she|her|they|them)\b/i.test(question) || !parsed.personName) ? lastEntities.lastPerson : undefined),
     raw: question,
     reformulatedQuery: reformulatedQueryText,
   };

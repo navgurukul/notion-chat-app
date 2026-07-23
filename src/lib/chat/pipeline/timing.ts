@@ -1,4 +1,4 @@
-import type { ChatHistoryItem } from "@/lib/ai/gemini";
+import type { ChatHistoryItem } from "@/lib/ai/openai";
 
 export type ResolvedEntityTrace = {
   value: any;

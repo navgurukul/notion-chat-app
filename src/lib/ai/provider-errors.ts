@@ -21,7 +21,7 @@ export function isOpenAIQuotaError(error: unknown): boolean {
 }
 
 export const OPENAI_QUOTA_USER_MESSAGE =
-  "The OpenAI rate limit or quota was reached for your API key. Wait about a minute and try again, or check your OpenAI dashboard for quota and usage limits.";
+  "The OpenAI rate limit or quota was reached for your API key. Wait about a minute and try again, or check OpenAI dashboard for quota and usage limits.";
 
 /** Backward compatibility aliases */
 export const isGeminiQuotaError = isOpenAIQuotaError;

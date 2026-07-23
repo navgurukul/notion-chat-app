@@ -49,7 +49,12 @@ const NEEDS_TITLE = new Set<QueryKind>([
   "risks_for",
 ]);
 
-const NOISY_ENTITY = /^(is|was|are|were|only|one|what|who|which|task|tasks|project|projects|work|manager|lead)$/i;
+/**
+ * Single source of truth for "this extracted entity looks like noise, not a
+ * real name/title" — exported so resolve-query.ts's hasBrokenEntities can use
+ * the same list instead of its own shorter, divergent copy.
+ */
+export const NOISY_ENTITY = /^(is|was|are|were|only|one|what|who|which|task|tasks|project|projects|work|manager|lead)$/i;
 
 function entityQuality(parsed: Omit<ParsedQuery, "confidence" | "source">) {
   let score = 1;
@@ -69,8 +74,19 @@ function entityQuality(parsed: Omit<ParsedQuery, "confidence" | "source">) {
 export function scoreRegexParse(
   parsed: Omit<ParsedQuery, "confidence" | "source">,
 ): number {
+  const entity = entityQuality(parsed);
+
   if (parsed.parserConfidence !== undefined) {
-    return parsed.parserConfidence;
+    // FIX: previously `return parsed.parserConfidence` verbatim — a rule
+    // branch that hardcodes parserConfidence: 0.95 kept that score even when
+    // the entity it actually extracted (cleanPersonName/stripDocWords output)
+    // looked like noise ("only", "manager", a stray fragment). That let a
+    // confidently-wrong parse skip both entity-quality scoring below AND the
+    // LLM-verification threshold in resolve-query.ts's shouldUseLlm (0.95
+    // stays above the 0.75 cutoff regardless of entity quality). Scaling by
+    // entity quality means a bad extraction still pulls the score down even
+    // from a "trusted" branch, so shouldUseLlm can catch it.
+    return parsed.parserConfidence * entity;
   }
 
   if (parsed.kind === "semantic") return 0.15;
@@ -82,7 +98,6 @@ export function scoreRegexParse(
     return 0.05;
   }
 
-  const entity = entityQuality(parsed);
   if (entity < 0.6) return 0.35;
 
   if (HIGH_PRECISION_KINDS.has(parsed.kind)) {

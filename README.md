@@ -10,9 +10,9 @@ The **Notion AI Chat Assistant** is designed to bridge the gap between static No
 
 -   **Google OAuth Login**: Seamless authentication using `next-auth`.
 -   **Notion Workspace Export**: Manual Notion-to-S3 export script using the official Notion SDK.
--   **Bedrock Knowledge Base Retrieval**: S3-backed RAG retrieval through Amazon Bedrock Knowledge Bases.
--   **AI Engine**: Powered strictly by OpenAI (GPT-4o-mini / GPT-4.1) for high-speed, intelligent responses.
--   **Premium Design**: A high-end dark mode interface built with Tailwind CSS and glassmorphism.
+-   **Hybrid Vector & SQL Search**: Direct Postgres SQL lookup and vector search context retrieval.
+-   **AI Engine**: Unified OpenAI provider (`gpt-4o-mini` / `text-embedding-3-small`) for fast, intelligent responses.
+-   **Premium Design**: A high-end interface built with modern CSS and dynamic animations.
 -   **Context-Aware**: AI responses are strictly grounded in your Notion database content.
 
 ## 🚀 Getting Started
@@ -22,7 +22,7 @@ The **Notion AI Chat Assistant** is designed to bridge the gap between static No
 You will need the following API keys:
 -   **Google Cloud Console**: For OAuth Client ID and Secret.
 -   **Notion Integrations**: For the Internal Integration Token.
--   **OpenAI**: For the OpenAI API Key (`OPENAI_API_KEY`).
+-   **OpenAI**: For `OPENAI_API_KEY` (used for embeddings, intent resolution, and response generation).
 
 ### Installation
 
@@ -48,26 +48,20 @@ You will need the following API keys:
     npm run dev
     ```
 
-5.  Export the Notion workspace to S3 when content changes:
+5.  Run E2E pipeline test suite:
     ```bash
-    npm run export:notion
+    npm run test:e2e
     ```
 
-6.  Start Bedrock ingestion from the app's sync button, or verify retrieval directly:
-    ```bash
-    npm run test:bedrock
-    ```
-
-7.  Open [http://localhost:3000](http://localhost:3000) in your browser.
+6.  Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## 🛠 Tech Stack
 
 -   **Framework**: [Next.js](https://nextjs.org/) (App Router)
 -   **Authentication**: [NextAuth.js](https://next-auth.js.org/)
--   **AI**: OpenAI SDK (`openai`)
--   **RAG**: PostgreSQL pgvector + OpenAI Embeddings
+-   **AI**: [OpenAI SDK](https://platform.openai.com/docs/api-reference) (Embeddings, Completions, and Streaming)
+-   **Database / RAG**: Neon PostgreSQL with `pgvector` + OpenAI Embeddings
 -   **Workspace Export**: [@notionhq/client](https://www.npmjs.com/package/@notionhq/client)
--   **Styling**: Tailwind CSS & Lucide Icons
 
 ## 📜 License
 

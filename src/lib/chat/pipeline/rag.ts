@@ -49,7 +49,7 @@ function isExplicitPageQuestion(message: string, docTitle?: string) {
 }
 
 import { lazyResolveRagEntities } from "@/lib/query/entity-resolver";
-import { ChatHistoryItem } from "@/lib/ai/openai";
+import type { ChatHistoryItem } from "@/lib/ai/openai";
 
 export async function tryRagAnswer(
   parsed: ParsedQuery,

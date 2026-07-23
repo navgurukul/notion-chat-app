@@ -1,9 +1,6 @@
 import { getChatStream } from "@/lib/ai/openai";
 import type { ChatHistoryItem } from "@/lib/ai/openai";
-import {
-  OPENAI_QUOTA_USER_MESSAGE,
-  isOpenAIQuotaError,
-} from "@/lib/ai/provider-errors";
+import { OPENAI_QUOTA_USER_MESSAGE, isOpenAIQuotaError } from "@/lib/ai/provider-errors";
 import { addChatMessage } from "@/lib/chat/store";
 import { extractFinalAnswer } from "@/lib/chat/stream-tags";
 import type { QueryKind } from "@/lib/query/types";
@@ -228,4 +225,5 @@ export async function streamOpenAIAnswer(
   });
 }
 
+/** Backward compatibility alias */
 export const streamGeminiAnswer = streamOpenAIAnswer;

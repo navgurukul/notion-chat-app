@@ -2,6 +2,7 @@
  * AI layer — embeddings (search) and OpenAI (answers).
  */
 export {
+  getChatResponse,
   getChatStream,
   getJsonCompletion,
   type ChatHistoryItem,
