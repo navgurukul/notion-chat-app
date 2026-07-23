@@ -39,14 +39,14 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error("Chat API Error:", error);
 
-    const { isGeminiQuotaError, GEMINI_QUOTA_USER_MESSAGE } =
+    const { isOpenAIQuotaError, OPENAI_QUOTA_USER_MESSAGE } =
       await import("@/lib/ai/provider-errors");
 
-    if (isGeminiQuotaError(error)) {
+    if (isOpenAIQuotaError(error)) {
       return NextResponse.json(
         {
-          error: GEMINI_QUOTA_USER_MESSAGE,
-          answer: GEMINI_QUOTA_USER_MESSAGE,
+          error: OPENAI_QUOTA_USER_MESSAGE,
+          answer: OPENAI_QUOTA_USER_MESSAGE,
         },
         { status: 429 },
       );

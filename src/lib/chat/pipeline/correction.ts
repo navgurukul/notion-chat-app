@@ -1,4 +1,4 @@
-import { ChatHistoryItem } from "@/lib/ai/gemini";
+import { ChatHistoryItem } from "@/lib/ai/openai";
 import { resolvePerson } from "@/lib/query/entity-resolver/person";
 import { resolveDocument } from "@/lib/query/entity-resolver/document";
 import { reformulationCache, sqlMetadataCache } from "@/lib/chat/cache";
@@ -215,7 +215,7 @@ export async function detectAndHandleCorrection(
     try {
       const dbMessages = await listChatMessages(sessionId);
       resolvedHistory = dbMessages.map(m => ({
-        role: m.role === "bot" ? "model" : "user",
+        role: m.role === "bot" ? "bot" : "user",
         content: m.content
       }));
     } catch (e) {

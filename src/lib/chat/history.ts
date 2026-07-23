@@ -1,4 +1,4 @@
-import type { ChatHistoryItem } from "@/lib/ai/gemini";
+import type { ChatHistoryItem } from "@/lib/ai/openai";
 
 /** Keep only valid user/bot turns for the LLM (last N messages). */
 export function sanitizeChatHistory(value: unknown, maxTurns = 8): ChatHistoryItem[] {

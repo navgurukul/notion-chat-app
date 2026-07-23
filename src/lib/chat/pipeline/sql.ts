@@ -4,7 +4,7 @@ import { handleMetadataQuery } from "@/lib/sql/answers";
 import { isSqlMissAnswer, isTeamActivityMetadataGap, shouldFallbackToRag } from "@/lib/chat/answer-quality";
 import { isMetadataOnlyKind, metadataNotFoundAnswer } from "@/lib/chat/routing-policy";
 import { logChatRoute } from "@/lib/chat/retrieval-diagnostics";
-import { streamGeminiAnswer } from "@/lib/chat/stream-response";
+import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { jsonAnswer } from "./router";
 
 export function isSynthesisRequest(message: string): boolean {
@@ -85,7 +85,7 @@ export async function trySqlAnswer(
     const isSynthesis = isSynthesisRequest(ctx.message);
     if (isSynthesis) {
       logChatRoute("sql_synthesis_stream", finalParsed, { answer_chars: directAnswer.length });
-      return streamGeminiAnswer(
+      return streamOpenAIAnswer(
         ctx.message,
         directAnswer,
         ctx.history,

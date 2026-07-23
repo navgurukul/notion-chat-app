@@ -7,7 +7,7 @@ import { expandSearchQueries } from "@/lib/chat/multi-query";
 import { logChatRoute, logRetrievalDiagnostics } from "@/lib/chat/retrieval-diagnostics";
 import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
 import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag/retrieval-confidence";
-import { streamGeminiAnswer } from "@/lib/chat/stream-response";
+import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { jsonAnswer } from "./router";
 
 const BROAD_RAG_KINDS = new Set<ParsedQuery["kind"]>([
@@ -49,7 +49,7 @@ function isExplicitPageQuestion(message: string, docTitle?: string) {
 }
 
 import { lazyResolveRagEntities } from "@/lib/query/entity-resolver";
-import { ChatHistoryItem } from "@/lib/ai/gemini";
+import { ChatHistoryItem } from "@/lib/ai/openai";
 
 export async function tryRagAnswer(
   parsed: ParsedQuery,
@@ -242,7 +242,7 @@ export async function tryRagAnswer(
   if (ctx.telemetry) {
     ctx.telemetry.incrementLlmCalls();
   }
-  return streamGeminiAnswer(
+  return streamOpenAIAnswer(
     ctx.message,
     notionContext,
     ctx.history,

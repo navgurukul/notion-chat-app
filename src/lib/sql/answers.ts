@@ -10,7 +10,7 @@ import type {
   NotionPageRow,
   WorkedOnRow,
 } from "@/lib/shared/notion-types";
-import { normalizePersonNameForMatch, isWorkspaceScope } from "@/lib/query/normalize";
+import { normalizePersonNameForMatch, isWorkspaceScope, personDedupeKey } from "@/lib/query/normalize";
 import { isNoiseTopic } from "@/lib/query/rules";
 import type { ParsedQuery } from "@/lib/query/types";
 import {
@@ -1401,10 +1401,29 @@ async function handlePeopleList(): Promise<string> {
   return `## Team Members (${dir.length})\n\nHere are all team members found in the synced Notion data:\n${list}\n\n*Note: This list represents all members who own, create, or edit tasks and pages in the synced Notion workspace (including program managers, People & Culture/HR, and other coordinators in addition to developers).*`;
 }
 
+async function handleProjectMostDevs(): Promise<string> {
+  const rows = await query<{ title: string; url: string | null; dev_count: number }>(`
+    SELECT
+      title,
+      url,
+      COUNT(DISTINCT owner) AS dev_count
+    FROM notion_pages
+    WHERE owner IS NOT NULL AND owner != ''
+    GROUP BY title, url
+    ORDER BY dev_count DESC, title ASC
+    LIMIT 5
+  `);
 
+  if (!rows.length) {
+    return "No project developer data found in the synced Notion workspace.";
+  }
 
+  const top = rows[0];
+  const list = rows
+    .map((r) => `- ${formatLink(r.title || "Untitled", r.url)} (${r.dev_count} developer${r.dev_count === 1 ? "" : "s"})`)
+    .join("\n");
 
-  return `The project with the most developers is **${topProject.title}** with **${topProject.dev_count}** developers.\n\n### Top Projects by Developer Count:\n${list}`;
+  return `## Project with Most Developers\n\n**${top.title}** has the highest recorded number of developers/assignees (${top.dev_count}).\n\n### Top Projects by Developer Count:\n${list}`;
 }
 
 async function handleMetadataQueryInner(

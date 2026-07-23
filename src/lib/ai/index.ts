@@ -5,7 +5,7 @@ export {
   getChatStream,
   getJsonCompletion,
   type ChatHistoryItem,
-} from "@/lib/ai/gemini";
+} from "@/lib/ai/openai";
 export {
   embedText,
   embedBatch,

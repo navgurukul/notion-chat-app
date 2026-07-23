@@ -4,7 +4,7 @@ import { detectIntent } from "./intent";
 import { logQueryRouting } from "./telemetry";
 import type { ParsedQuery } from "./types";
 import { withRegexScores } from "./rule-confidence";
-import type { ChatHistoryItem } from "@/lib/ai/gemini";
+import type { ChatHistoryItem } from "@/lib/ai/openai";
 import {
   tryFastPathRegexRoute,
   isAmbiguousQuery,
@@ -216,8 +216,26 @@ export async function resolveQuery(
     }
   }
 
+  let docTitle = parsed.docTitle;
+  let personName = parsed.personName;
+  if (reformulatedQueryText) {
+    const refRules = parseQueryByRules(reformulatedQueryText);
+    if (!docTitle && refRules.docTitle) {
+      docTitle = refRules.docTitle;
+    }
+    if (!personName && refRules.personName) {
+      personName = refRules.personName;
+    }
+  }
+
+  if (!personName && lastEntities?.lastPerson) {
+    personName = lastEntities.lastPerson;
+  }
+
   const finalParsed: ParsedQuery = {
     ...parsed,
+    ...(docTitle ? { docTitle } : {}),
+    ...(personName ? { personName } : {}),
     raw: question,
     reformulatedQuery: reformulatedQueryText,
   };

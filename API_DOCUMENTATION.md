@@ -154,7 +154,7 @@ This endpoint may return either:
   - invalid `sessionId` ownership
 - `429 Too Many Requests`
   - rate limited by `checkRateLimit`
-  - or Gemini quota errors are mapped to `429` (handled in the route catch)
+  - or OpenAI quota errors are mapped to `429` (handled in the route catch)
 - `500 Internal Server Error`
   - `{ error: "Failed to get response" }`
 
@@ -177,7 +177,7 @@ Implemented in:
    - run SQL metadata lane
    - if needed: run RAG retrieval + stream LLM response
 7. Route-level catch:
-   - if Gemini quota error → return JSON with `429`
+   - if OpenAI quota error → return JSON with `429`
    - else return `{ error: "Failed to get response" }` with `500`
 
 ---

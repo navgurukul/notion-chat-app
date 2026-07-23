@@ -1,4 +1,4 @@
-import { getJsonCompletion } from "@/lib/ai/gemini";
+import { getJsonCompletion } from "@/lib/ai/openai";
 import type { ParsedQuery, QueryKind } from "./types";
 
 const ALL_KINDS: QueryKind[] = [
@@ -76,7 +76,7 @@ function tryFastPathIntent(question: string): ParsedQuery | null {
     return {
       kind: "assigned_list",
       confidence: 1.0,
-      source: "rule",
+      source: "regex",
       raw: question,
     };
   }

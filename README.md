@@ -11,7 +11,7 @@ The **Notion AI Chat Assistant** is designed to bridge the gap between static No
 -   **Google OAuth Login**: Seamless authentication using `next-auth`.
 -   **Notion Workspace Export**: Manual Notion-to-S3 export script using the official Notion SDK.
 -   **Bedrock Knowledge Base Retrieval**: S3-backed RAG retrieval through Amazon Bedrock Knowledge Bases.
--   **AI Engine**: Use Gemini or DeepSeek for high-speed, intelligent responses.
+-   **AI Engine**: Powered strictly by OpenAI (GPT-4o-mini / GPT-4.1) for high-speed, intelligent responses.
 -   **Premium Design**: A high-end dark mode interface built with Tailwind CSS and glassmorphism.
 -   **Context-Aware**: AI responses are strictly grounded in your Notion database content.
 
@@ -22,9 +22,7 @@ The **Notion AI Chat Assistant** is designed to bridge the gap between static No
 You will need the following API keys:
 -   **Google Cloud Console**: For OAuth Client ID and Secret.
 -   **Notion Integrations**: For the Internal Integration Token.
--   **AWS**: For S3 and Bedrock Knowledge Base access.
--   **Google AI Studio**: For the Gemini API Key (if using Gemini).
--   **DeepSeek**: For the DeepSeek API Key (if using DeepSeek).
+-   **OpenAI**: For the OpenAI API Key (`OPENAI_API_KEY`).
 
 ### Installation
 
@@ -66,8 +64,8 @@ You will need the following API keys:
 
 -   **Framework**: [Next.js](https://nextjs.org/) (App Router)
 -   **Authentication**: [NextAuth.js](https://next-auth.js.org/)
--   **AI**: Gemini via [Google Gemini SDK](https://ai.google.dev/) or DeepSeek via API
--   **RAG**: Amazon Bedrock Knowledge Bases backed by S3
+-   **AI**: OpenAI SDK (`openai`)
+-   **RAG**: PostgreSQL pgvector + OpenAI Embeddings
 -   **Workspace Export**: [@notionhq/client](https://www.npmjs.com/package/@notionhq/client)
 -   **Styling**: Tailwind CSS & Lucide Icons
 

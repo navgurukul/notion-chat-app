@@ -31,6 +31,10 @@ export function normalizePersonNameForMatch(name: string) {
     .trim();
 }
 
+export function personDedupeKey(name: string) {
+  return normalizePersonNameForMatch(name);
+}
+
 export function stripYearSuffixFromPerson(value: string) {
   let text = value.trim();
 

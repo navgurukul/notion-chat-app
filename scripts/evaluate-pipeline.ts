@@ -355,6 +355,7 @@ async function runEvaluation() {
       parsed = await lazyResolveRagEntities(
         parsed,
         tc.history || [],
+        undefined,
         tc.lastEntities
       );
       dEntity = performance.now() - tEntStart;

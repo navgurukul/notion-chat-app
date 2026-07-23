@@ -8,14 +8,14 @@ The Notion AI Chat Assistant uses a **RAG (Retrieval-Augmented Generation)** pat
 2. **Bedrock Ingestion**: The app sync button starts an Amazon Bedrock Knowledge Base ingestion job for the configured S3 data source.
 3. **User Input**: The user sends a question through the chat interface.
 4. **Context Retrieval**: The server-side API retrieves relevant chunks from the Bedrock Knowledge Base.
-5. **AI Generation**: The prompt (user question plus retrieved context) is sent to Gemini.
-6. **Response**: Gemini streams an answer grounded in the retrieved Notion context.
+5. **AI Generation**: The prompt (user question plus retrieved context) is sent to OpenAI.
+6. **Response**: OpenAI streams an answer grounded in the retrieved Notion context.
 
 ## 🛠 Key Tech Choices
 
-- **Next.js 15**: For both the frontend UI and the serverless API routes.
+- **Next.js**: For both the frontend UI and server API routes.
 - **Tailwind CSS**: For the premium, responsive design.
 - **NextAuth**: For secure Google OAuth handling.
-- **Amazon Bedrock Knowledge Bases**: S3-backed vector retrieval.
-- **Notion SDK**: Official client for manual workspace export.
-- **Google Generative AI SDK**: Direct access to Gemini models.
+- **PostgreSQL + pgvector**: For hybrid vector and full-text retrieval.
+- **Notion SDK**: Official client for workspace export and sync.
+- **OpenAI SDK**: Direct access to OpenAI GPT and Embedding models.
