@@ -1,4 +1,4 @@
-import { ChatHistoryItem } from "@/lib/ai/gemini";
+import { ChatHistoryItem } from "@/lib/ai/openai";
 import { resolvePerson, ResolutionQuality, ResolvedPerson } from "./person";
 import { resolveDocument, ResolvedDocument } from "./document";
 import type { ParsedQuery } from "@/lib/query/types";

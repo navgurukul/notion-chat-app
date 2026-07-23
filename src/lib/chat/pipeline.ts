@@ -13,7 +13,7 @@ import {
   extractReferencedTitle,
   isNotionLinkRequest,
 } from "@/lib/chat/link-lookup";
-import { streamGeminiAnswer } from "@/lib/chat/stream-response";
+import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { resolveQuery } from "@/lib/query/resolve-query";
 import { analyzeUserEmotion } from "@/lib/chat/emotion";
 import type { ParsedQuery } from "@/lib/query/types";
@@ -30,7 +30,7 @@ import { PipelineContext, LATENCY_BUDGETS } from "./pipeline/timing";
 import { PipelineTelemetry } from "./pipeline/telemetry";
 import { detectAndHandleCorrection, isCorrectionMessage } from "./pipeline/correction";
 import { detectSmalltalkType, tryFastPathRegexRoute as smalltalkFastPath } from "./pipeline/router";
-import type { ChatHistoryItem } from "@/lib/ai/gemini";
+import type { ChatHistoryItem } from "@/lib/ai/openai";
 
 export type ChatRequestBody = {
   message?: unknown;
@@ -148,7 +148,7 @@ Write a single short, friendly warm reply (1-2 sentences). Do NOT repeat the exa
 If relevant, ask a lightweight next question about what they'd like to check in NavGurukul Notion.`;
 
   try {
-    return await streamGeminiAnswer(
+    return await streamOpenAIAnswer(
       warmPrompt,
       "",
       opts.history,
@@ -400,7 +400,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
         });
       }
 
-      response = await streamGeminiAnswer(
+      response = await streamOpenAIAnswer(
         ctx.message,
         "",
         ctx.history,

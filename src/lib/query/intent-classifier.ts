@@ -1,4 +1,4 @@
-import { getJsonCompletion } from "@/lib/ai/gemini";
+import { getJsonCompletion } from "@/lib/ai/openai";
 import type { ParsedQuery, QueryKind } from "./types";
 
 const ALL_KINDS: QueryKind[] = [

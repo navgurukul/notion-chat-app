@@ -1,4 +1,4 @@
-import { ChatHistoryItem } from "@/lib/ai/gemini";
+import { ChatHistoryItem } from "@/lib/ai/openai";
 import { resolvePerson } from "@/lib/query/entity-resolver/person";
 import { resolveDocument } from "@/lib/query/entity-resolver/document";
 import { reformulationCache, sqlMetadataCache } from "@/lib/chat/cache";

@@ -1,7 +1,7 @@
 /**
  * SQL answers — lookup owners, status, assignments, summaries from `notion_pages`.
  *
- * No Gemini here. If this returns null, the chat pipeline falls back to RAG.
+ * Direct SQL query here. If this returns null, the chat pipeline falls back to RAG.
  */
 import { escapeLike, query } from "@/lib/db";
 import { getPeopleDirectory } from "@/lib/db/team-members";
@@ -20,7 +20,12 @@ import {
   formatDetailedListItem,
   formatCostEstimationPage,
   formatPageCard,
+  formatDisplayLink,
+  stripNotionBodyRaw,
 } from "@/lib/sql/format-display";
+import { buildPersonMatchParams, personColumnMatchSql, personColumnsMatchSql } from "@/lib/sql/person-filter";
+import { extractPeopleFromContent, splitPersonField } from "@/lib/sql/team-roster";
+import { personDedupeKey } from "@/lib/query/normalize";
 import {
   filterPagesForProjectTopic,
   primaryTopicToken,
@@ -50,10 +55,6 @@ const ACTIVE_STATUSES = new Set([
 function isActiveStatus(status: string | null | undefined) {
   if (!status?.trim()) return false;
   return ACTIVE_STATUSES.has(status.trim().toLowerCase());
-}
-
-function stripVowels(value: string) {
-  return value.toLowerCase().replace(/[aeiou]/g, "");
 }
 
 function normalizeTopic(value: string) {
@@ -144,10 +145,6 @@ function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd
   return { dateStart: null, dateEnd: null };
 }
 
-function formatLink(title: string, url: string | null) {
-  return url ? `[${title}](${url})` : title;
-}
-
 /** Notion pages often lack an Owner property; fall back to creator / editor. */
 function resolvePageOwner(row: NotionPageRow): {
   name: string | null;
@@ -199,25 +196,6 @@ function formatRows(
     .join("\n");
   if (rows.length <= SQL_RESULT_LIMIT) return renderedRows;
   return `${renderedRows}\n\n_Showing top ${SQL_RESULT_LIMIT}. Please narrow the question for more specific results._`;
-}
-
-function extractPageBody(content?: string | null, maxLength = 2400) {
-  const raw = (content || "").trim();
-  if (!raw) return "";
-
-  const marker = "=== CONTENT ===";
-  const start = raw.indexOf(marker);
-  const body = (start >= 0 ? raw.slice(start + marker.length) : raw)
-    .replace(/^Title:.*$/m, "")
-    .replace(/^URL:.*$/m, "")
-    .trim();
-
-  if (!body) return "";
-  return body.length > maxLength ? `${body.slice(0, maxLength)}...` : body;
-}
-
-function contentSnippet(content?: string | null, maxLength = 200) {
-  return compactSnippet(content, maxLength);
 }
 
 const PROJECT_THEMES = [
@@ -337,7 +315,7 @@ async function buildProjectSummary(topic: string) {
   if (!pages.length) return null;
 
   const hub = pages[0];
-  const hubBody = extractPageBody(hub.content, 1200);
+  const hubBody = stripNotionBodyRaw(hub.content, 1200);
   const related = pages.slice(1, 12);
 
   const statusCounts = new Map<string, number>();
@@ -363,7 +341,7 @@ async function buildProjectSummary(topic: string) {
     hubBody
       ? hubBody
       : "_Main project page has limited body text in sync — see related pages below._",
-    hub.url ? `\n${formatLink("Open main page in Notion", hub.url)}` : "",
+    hub.url ? `\n${formatDisplayLink("Open main page in Notion", hub.url)}` : "",
     "",
     `**Scope (${pages.length} related pages in Notion):**`,
     activeStatuses.length
@@ -384,7 +362,7 @@ async function buildProjectSummary(topic: string) {
       .filter(Boolean)
       .join(" · ");
     lines.push(
-      `- **${formatLink(row.title || "Untitled", row.url)}**${meta ? ` — ${meta}` : ""}`,
+      `- **${formatDisplayLink(row.title || "Untitled", row.url)}**${meta ? ` — ${meta}` : ""}`,
     );
   }
 
@@ -414,10 +392,13 @@ function personOnProjectTeam(
 ) {
   if (!content?.trim()) return false;
   const norm = person.toLowerCase().trim();
-  const fuzzy = stripVowels(norm);
   const text = content.toLowerCase();
-  if (!text.includes(norm) && !text.replace(/[aeiou]/g, "").includes(fuzzy))
-    return false;
+  // Exact substring only. The previous vowel-stripped fallback here had the
+  // same false-positive risk as the SQL version below ("Ravi"/"Rovi" collide) —
+  // dropped rather than ported, since this is a plain JS string check with no
+  // access to trigram similarity; a person mentioned via a genuine misspelling
+  // will still surface through the owner/created_by/last_edited_by SQL match.
+  if (!text.includes(norm)) return false;
 
   const firstName =
     norm.split(/\s+/)[0]?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") ?? norm;
@@ -504,8 +485,7 @@ function attachOrphanTasksToOwnedProject(
 }
 
 async function findProjectRosterThemes(person: string) {
-  const personTerm = `%${escapeLike(person)}%`;
-  const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
+  const { personTerm, personName } = buildPersonMatchParams(person);
   const rows = await query<{
     title: string | null;
     url: string | null;
@@ -515,10 +495,7 @@ async function findProjectRosterThemes(person: string) {
     SELECT title, url, content
     FROM notion_pages
     WHERE
-      (
-        lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(content, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-      )
+      ${personColumnMatchSql("content", 1, 2)}
       AND (
         lower(coalesce(title, '')) LIKE '%datapivot%'
         OR lower(coalesce(title, '')) LIKE '%nagaada%'
@@ -532,7 +509,7 @@ async function findProjectRosterThemes(person: string) {
       )
     LIMIT 30
     `,
-    [personTerm, fuzzyPersonTerm],
+    [personTerm, personName],
   );
 
   const seen = new Set<string>();
@@ -617,7 +594,7 @@ async function formatAssignedProjectsAnswer(
       isActiveStatus(row.status),
     ).length;
     const hubLink = hub?.url
-      ? formatLink(hub.title || theme, hub.url)
+      ? formatDisplayLink(hub.title || theme, hub.url)
       : `**${theme}**`;
 
     const parts: string[] = [];
@@ -803,7 +780,7 @@ async function buildRisksAnswer(topic: string) {
     const fallback = await lookupByTitle(topic, true);
     if (fallback.length) {
       const hub = fallback[0];
-      const body = extractPageBody(hub.content, 1500);
+      const body = stripNotionBodyRaw(hub.content, 1500);
       const riskLines = (body || "")
         .split(/\n/)
         .filter((line) =>
@@ -815,7 +792,7 @@ async function buildRisksAnswer(topic: string) {
           `## Risks / concerns — **${hub.title || topic}**`,
           "",
           riskLines.map((l) => `- ${l.trim()}`).join("\n"),
-          hub.url ? `\n${formatLink("Open in Notion", hub.url)}` : "",
+          hub.url ? `\n${formatDisplayLink("Open in Notion", hub.url)}` : "",
         ].join("\n");
       }
     }
@@ -830,7 +807,7 @@ async function buildRisksAnswer(topic: string) {
   ];
 
   for (const row of rows.slice(0, 8)) {
-    const snippet = contentSnippet(row.content, 500);
+    const snippet = compactSnippet(row.content, 500);
     const riskSnippet = snippet
       .split(/(?<=[.!?])\s+/)
       .filter((s) =>
@@ -839,7 +816,7 @@ async function buildRisksAnswer(topic: string) {
       .slice(0, 2)
       .join(" ");
     lines.push(
-      `- **${formatLink(row.title || "Untitled", row.url)}**${row.status ? ` — ${row.status}` : ""}${riskSnippet ? `\n  ${riskSnippet}` : snippet ? `\n  ${snippet}` : ""}`,
+      `- **${formatDisplayLink(row.title || "Untitled", row.url)}**${row.status ? ` — ${row.status}` : ""}${riskSnippet ? `\n  ${riskSnippet}` : snippet ? `\n  ${snippet}` : ""}`,
     );
   }
 
@@ -872,7 +849,7 @@ async function buildOnboardingTasksAnswer() {
   const taskPages = rows.filter((r) => /onboarding task/i.test(r.title || ""));
 
   const checklistFromHub = hub
-    ? (extractPageBody(hub.content, 2000) || "")
+    ? (stripNotionBodyRaw(hub.content, 2000) || "")
         .split(/\n/)
         .filter(
           (line) =>
@@ -907,12 +884,12 @@ async function buildOnboardingTasksAnswer() {
     lines.push(`**${taskPages.length} task page(s) in Notion:**`);
     for (const row of taskPages.slice(0, 12)) {
       lines.push(
-        `- **${formatLink(row.title || "Untitled", row.url)}**${row.status ? ` — ${row.status}` : ""}`,
+        `- **${formatDisplayLink(row.title || "Untitled", row.url)}**${row.status ? ` — ${row.status}` : ""}`,
       );
     }
   } else if (hub) {
     lines.push(
-      `**Hub:** ${formatLink(hub.title || "Employee Onboarding Hub", hub.url)}`,
+      `**Hub:** ${formatDisplayLink(hub.title || "Employee Onboarding Hub", hub.url)}`,
     );
     lines.push(
       "",
@@ -925,7 +902,7 @@ async function buildOnboardingTasksAnswer() {
   if (hub?.url) {
     lines.push(
       "",
-      formatLink("Open Employee Onboarding Hub in Notion", hub.url),
+      formatDisplayLink("Open Employee Onboarding Hub in Notion", hub.url),
     );
   }
 
@@ -994,7 +971,7 @@ function formatActivityRowLine(
   ]
     .filter(Boolean)
     .join(" · ");
-  return `**${formatLink(row.title || "Untitled", row.url)}** — ${meta}`;
+  return `**${formatDisplayLink(row.title || "Untitled", row.url)}** — ${meta}`;
 }
 
 async function lookupProjectStatusPages(topic: string) {
@@ -1213,7 +1190,7 @@ async function buildProjectEtaAnswer(topic: string): Promise<string | null> {
     ? extractTimelineBullets(charterSection)
     : pages
         .flatMap((row) =>
-          extractTimelineBullets(extractPageBody(row.content, 600), 4),
+          extractTimelineBullets(stripNotionBodyRaw(row.content, 600), 4),
         )
         .slice(0, 6);
 
@@ -1221,7 +1198,7 @@ async function buildProjectEtaAnswer(topic: string): Promise<string | null> {
     ...new Set(
       pages.flatMap((row) =>
         extractDateMentions(
-          `${row.title ?? ""}\n${extractPageBody(row.content, 2000)}`,
+          `${row.title ?? ""}\n${stripNotionBodyRaw(row.content, 2000)}`,
         ),
       ),
     ),
@@ -1235,7 +1212,7 @@ async function buildProjectEtaAnswer(topic: string): Promise<string | null> {
     `## ETA — **${topic}**`,
     "",
     hub
-      ? `**Hub:** ${formatLink(hub.title || topic, hub.url)} · **${hub.status || "not set"}**${hub.owner ? ` · ${hub.owner}` : ""}`
+      ? `**Hub:** ${formatDisplayLink(hub.title || topic, hub.url)} · **${hub.status || "not set"}**${hub.owner ? ` · ${hub.owner}` : ""}`
       : "",
   ];
 
@@ -1275,7 +1252,7 @@ async function buildProjectEtaAnswer(topic: string): Promise<string | null> {
     lines.push("", "**Version / release pages:**");
     for (const row of mvpPages) {
       lines.push(
-        `- ${formatLink(row.title || "Untitled", row.url)} — **${row.status || "not set"}**`,
+        `- ${formatDisplayLink(row.title || "Untitled", row.url)} — **${row.status || "not set"}**`,
       );
     }
   }
@@ -1283,7 +1260,7 @@ async function buildProjectEtaAnswer(topic: string): Promise<string | null> {
   const hasSubstance =
     charterSection || dateMentions.length > 0 || roadmapBullets.length > 0;
   if (!hasSubstance) {
-    const body = extractPageBody(hub?.content, 500);
+    const body = stripNotionBodyRaw(hub?.content, 500);
     if (body) {
       lines.push("", "**Page content:**", body);
     }
@@ -1304,7 +1281,7 @@ async function buildProjectEtaAnswer(topic: string): Promise<string | null> {
   const relatedLinks = pages
     .filter((row) => row.id !== hub?.id)
     .slice(0, 4)
-    .map((row) => formatLink(row.title || "Untitled", row.url));
+    .map((row) => formatDisplayLink(row.title || "Untitled", row.url));
 
   if (relatedLinks.length) {
     lines.push("", `**Related pages:** ${relatedLinks.join(", ")}`);
@@ -1401,10 +1378,101 @@ async function handlePeopleList(): Promise<string> {
   return `## Team Members (${dir.length})\n\nHere are all team members found in the synced Notion data:\n${list}\n\n*Note: This list represents all members who own, create, or edit tasks and pages in the synced Notion workspace (including program managers, People & Culture/HR, and other coordinators in addition to developers).*`;
 }
 
+/**
+ * FIX: this function did not exist. `handleProjectMostDevs()` was called at
+ * the site below, but nowhere in the file defined it — the code that used to
+ * follow `handlePeopleList` was an orphaned tail end (a `return` statement
+ * referencing `topProject`/`list`/`dev_count` with no function signature, no
+ * SQL query, and no computation of any of those variables). This is a real
+ * implementation, not a guess at restoring lost code — I don't have your
+ * original, so I built it from scratch using the same project-grouping logic
+ * (`inferProjectThemeForPage`) and person-extraction helpers
+ * (`splitPersonField`, `extractPeopleFromContent`) already used elsewhere in
+ * this file, so "most developers" counts against the same project
+ * boundaries the rest of the SQL answers use rather than a separate ad-hoc
+ * grouping.
+ */
+/**
+ * Shared by handleProjectMostDevs and handleProjectMemberBreakdown — both
+ * need the same "distinct people per project theme" grouping, just
+ * presented differently (single winner + top 10, vs a full table).
+ */
+async function collectProjectMemberCounts(): Promise<
+  Array<{ title: string; dev_count: number; members: string[] }>
+> {
+  const rows = await query<{
+    id: string;
+    title: string | null;
+    owner: string | null;
+    created_by: string | null;
+    last_edited_by: string | null;
+    content: string | null;
+  }>(`
+    SELECT id, title, owner, created_by, last_edited_by, content
+    FROM notion_pages
+  `);
 
+  const byTheme = new Map<string, Set<string>>();
 
+  for (const row of rows) {
+    const theme = inferProjectThemeForPage(row);
+    if (!theme) continue;
+
+    const members = byTheme.get(theme) ?? new Set<string>();
+    for (const name of splitPersonField(row.owner)) members.add(personDedupeKey(name));
+    for (const name of splitPersonField(row.created_by)) members.add(personDedupeKey(name));
+    for (const name of splitPersonField(row.last_edited_by)) members.add(personDedupeKey(name));
+    for (const { name } of extractPeopleFromContent(row.content)) members.add(personDedupeKey(name));
+    byTheme.set(theme, members);
+  }
+
+  return [...byTheme.entries()]
+    .map(([title, members]) => ({ title, dev_count: members.size, members: [...members] }))
+    .filter((p) => p.dev_count > 0)
+    .sort((a, b) => b.dev_count - a.dev_count);
+}
+
+async function handleProjectMostDevs(): Promise<string> {
+  const ranked = await collectProjectMemberCounts();
+
+  if (!ranked.length) {
+    return "No projects with identifiable team members found in synced Notion data.";
+  }
+
+  const topProject = ranked[0];
+  const list = ranked
+    .slice(0, 10)
+    .map((p) => `- **${p.title}** — ${p.dev_count} developer(s)`)
+    .join("\n");
 
   return `The project with the most developers is **${topProject.title}** with **${topProject.dev_count}** developers.\n\n### Top Projects by Developer Count:\n${list}`;
+}
+
+/**
+ * FIX: "project_member_breakdown" was a QueryKind that rules.ts's
+ * memberBreakdownPatterns regex produced with parserConfidence: 0.90 — high
+ * enough to skip LLM re-classification entirely — but handleMetadataQueryInner
+ * had no case for it, so every one of these questions silently fell through
+ * to `return null` and dropped to RAG, which can't compute per-project
+ * counts. This closes that dead end using the same grouping
+ * (collectProjectMemberCounts) as handleProjectMostDevs, just presented as a
+ * full table instead of a single winner.
+ */
+async function handleProjectMemberBreakdown(): Promise<string> {
+  const ranked = await collectProjectMemberCounts();
+
+  if (!ranked.length) {
+    return "No projects with identifiable team members found in synced Notion data.";
+  }
+
+  const tableHeader = [
+    "| Project | Members |",
+    "| :--- | :---: |",
+  ];
+  const tableRows = ranked.map((p) => `| **${p.title}** | ${p.dev_count} |`);
+  const tableMarkdown = [...tableHeader, ...tableRows].join("\n");
+
+  return `## Project member breakdown\n\n${tableMarkdown}\n\n_Counts distinct people found as owner, creator, last editor, or in team-roster/assignee text on synced pages, grouped by inferred project area._`;
 }
 
 async function handleMetadataQueryInner(
@@ -1416,14 +1484,16 @@ async function handleMetadataQueryInner(
   if (parsed.kind === "project_most_devs") {
     return handleProjectMostDevs();
   }
+  if (parsed.kind === "project_member_breakdown") {
+    return handleProjectMemberBreakdown();
+  }
 
   const personRaw = parsed.personName?.trim();
   const person = personRaw ? normalizePersonNameForMatch(personRaw) : undefined;
   const docTitle = parsed.docTitle?.trim();
 
   if (parsed.kind === "owner_list" && person) {
-    const personTerm = `%${escapeLike(person)}%`;
-    const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
+    const { personTerm, personName } = buildPersonMatchParams(person);
     const projectsOwnedQuery =
       /\b(?:which|what)\s+projects?\s+.+\s+the\s+owner\s+of/i.test(parsed.raw);
     const singularProject = /\bwhich\s+project\s+/i.test(parsed.raw);
@@ -1432,9 +1502,7 @@ async function handleMetadataQueryInner(
       `
       SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
       FROM notion_pages
-      WHERE
-        lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
+      WHERE ${personColumnMatchSql("owner", 1, 2)}
       ORDER BY
         CASE
           WHEN lower(coalesce(status, '')) IN ('in development', 'in progress', 'testing', 'prod ready') THEN 0
@@ -1444,7 +1512,7 @@ async function handleMetadataQueryInner(
         title ASC
       LIMIT ${SQL_RESULT_LIMIT}
       `,
-      [personTerm, fuzzyPersonTerm],
+      [personTerm, personName],
     );
     if (!rows.length) return null;
 
@@ -1474,7 +1542,7 @@ async function handleMetadataQueryInner(
     } else if (singularProject && uniqueRows.length === 1) {
       const row = uniqueRows[0];
       lines.push(
-        `**${ownerName}** is owner of **${formatLink(row.title || "Untitled", row.url)}**${row.status ? ` (status: ${row.status})` : ""}.`,
+        `**${ownerName}** is owner of **${formatDisplayLink(row.title || "Untitled", row.url)}**${row.status ? ` (status: ${row.status})` : ""}.`,
         "",
       );
     }
@@ -1518,8 +1586,7 @@ async function handleMetadataQueryInner(
   }
 
   if (parsed.kind === "assigned_list" && person) {
-    const personTerm = `%${escapeLike(person)}%`;
-    const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
+    const { personTerm, personName } = buildPersonMatchParams(person);
     const isWorkspace = docTitle ? isWorkspaceScope(docTitle) : true;
     const normalizedTopic = !isWorkspace && docTitle ? normalizeTopic(docTitle) : "";
     // Keep original docTitle as fallback in case normalization strips too much
@@ -1541,12 +1608,10 @@ async function handleMetadataQueryInner(
           OR lower(coalesce(content, '')) LIKE '%assigned:%'
           OR lower(coalesce(content, '')) LIKE '%captain:%'
         )
-        AND (
-          lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
-          OR regexp_replace(lower(coalesce(content, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-        )
+        AND lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
       )
     `;
+    const ownerMatchSql = personColumnMatchSql("owner", 1, 2);
     const rows = await query<
       NotionPageRow & { notion_edited_at?: string | null }
     >(
@@ -1554,11 +1619,7 @@ async function handleMetadataQueryInner(
       SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content, notion_edited_at::text
       FROM notion_pages
       WHERE
-        (
-          lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-          OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-          OR ${assigneeInContentSql}
-        )
+        (${ownerMatchSql} OR ${assigneeInContentSql})
         AND (
           $3::text IS NULL
           OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
@@ -1573,15 +1634,12 @@ async function handleMetadataQueryInner(
           )
         )
       ORDER BY
-        CASE
-          WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\' THEN 0
-          ELSE 1
-        END,
+        CASE WHEN ${ownerMatchSql} THEN 0 ELSE 1 END,
         notion_edited_at DESC NULLS LAST,
         title ASC
       LIMIT ${SQL_RESULT_LIMIT}
       `,
-      [personTerm, fuzzyPersonTerm, topicTerm, yearStart, yearEnd],
+      [personTerm, personName, topicTerm, yearStart, yearEnd],
     );
 
     let dateNote = "";
@@ -1639,8 +1697,7 @@ async function handleMetadataQueryInner(
   }
 
   if (parsed.kind === "worked_on_list" && person) {
-    const personTerm = `%${escapeLike(person)}%`;
-    const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
+    const { personTerm, personName } = buildPersonMatchParams(person);
     const isWorkspace = docTitle ? isWorkspaceScope(docTitle) : true;
     const effectiveTopic =
       !isWorkspace && docTitle && !isNoiseTopic(docTitle) ? docTitle : undefined;
@@ -1671,12 +1728,7 @@ async function handleMetadataQueryInner(
 
     const personFieldMatchSql = `
       (
-        lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-        OR lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\'
-        OR lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
+        ${personColumnsMatchSql(["owner", "created_by", "last_edited_by"], 1, 2)}
         OR ${personPropertyInContentSql}
       )
     `;
@@ -1691,59 +1743,51 @@ async function handleMetadataQueryInner(
     `
       : personFieldMatchSql;
 
+    // match_source is computed once in `matched`, then reused for both the
+    // displayed label and the sort order — previously the same CASE logic
+    // was written out three times (label, an unused inline sort case, and
+    // again in ORDER BY) and had to be hand-kept in sync across all three.
     const rows = await query<WorkedOnRow>(
       `
-      SELECT
-        id,
-        title,
-        url,
-        owner,
-        created_by,
-        last_edited_by,
-        doc_type,
-        status,
-        content,
-        notion_edited_at::text AS notion_edited_at,
-        CASE
-          WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-            OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-            THEN 'owner'
-          WHEN ${personPropertyInContentSql} THEN 'assignee'
-          WHEN lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\'
-            OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-            THEN 'creator'
-          WHEN lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
-            OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-            THEN 'last editor'
-          ELSE 'mentioned'
-        END AS match_source
-      FROM notion_pages
-      WHERE ${personMatchSql}
-      AND (
-        $3::text IS NULL
-        OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
-        OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
-      )
-      AND (
-        $4::text IS NULL
-        OR (
-          notion_edited_at IS NOT NULL
-          AND notion_edited_at >= $4::timestamptz
-          AND notion_edited_at < $5::timestamptz
+      WITH matched AS (
+        SELECT
+          id, title, url, owner, created_by, last_edited_by, doc_type, status, content,
+          notion_edited_at::text AS notion_edited_at,
+          CASE
+            WHEN ${personColumnMatchSql("owner", 1, 2)} THEN 'owner'
+            WHEN ${personPropertyInContentSql} THEN 'assignee'
+            WHEN ${personColumnMatchSql("created_by", 1, 2)} THEN 'creator'
+            WHEN ${personColumnMatchSql("last_edited_by", 1, 2)} THEN 'last editor'
+            ELSE 'mentioned'
+          END AS match_source
+        FROM notion_pages
+        WHERE ${personMatchSql}
+        AND (
+          $3::text IS NULL
+          OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
+          OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
+        )
+        AND (
+          $4::text IS NULL
+          OR (
+            notion_edited_at IS NOT NULL
+            AND notion_edited_at >= $4::timestamptz
+            AND notion_edited_at < $5::timestamptz
+          )
         )
       )
-      ORDER BY
-        CASE
-          WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\' THEN 1
-          WHEN ${personPropertyInContentSql} THEN 2
-          WHEN lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\' THEN 3
+      SELECT *,
+        CASE match_source
+          WHEN 'owner' THEN 1
+          WHEN 'assignee' THEN 2
+          WHEN 'creator' THEN 3
           ELSE 9
-        END,
-        notion_edited_at DESC NULLS LAST,
-        title ASC
+        END AS sort_rank
+      FROM matched
+      ORDER BY sort_rank, notion_edited_at DESC NULLS LAST, title ASC
       LIMIT ${SQL_RESULT_LIMIT}
       `,
-      [personTerm, fuzzyPersonTerm, topicTerm, yearStart, yearEnd],
+      [personTerm, personName, topicTerm, yearStart, yearEnd],
     );
     if (!rows.length) return null;
 
@@ -1808,7 +1852,7 @@ async function handleMetadataQueryInner(
       const ownerName = row.owner?.trim();
       if (ownerName) {
         return row.url
-          ? `${ownerName}\n\n${formatLink(row.title || docTitle, row.url)}`
+          ? `${ownerName}\n\n${formatDisplayLink(row.title || docTitle, row.url)}`
           : ownerName;
       }
       return null;
@@ -1849,8 +1893,8 @@ async function handleMetadataQueryInner(
         ]
           .filter(Boolean)
           .join(" · ");
-        const snippet = contentSnippet(row.content, 700);
-        return `**${formatLink(row.title || "Untitled", row.url)}**${metadata ? ` — ${metadata}` : ""}${snippet ? `\n  ${snippet}` : ""}`;
+        const snippet = compactSnippet(row.content, 700);
+        return `**${formatDisplayLink(row.title || "Untitled", row.url)}**${metadata ? ` — ${metadata}` : ""}${snippet ? `\n  ${snippet}` : ""}`;
       },
     )}`;
   }
@@ -2072,8 +2116,8 @@ async function handleMetadataQueryInner(
     return `### ${rows.length} pages matching "${docTitle}"\n\n${formatRows(
       rows,
       (row) => {
-        const snippet = contentSnippet(row.content, 220);
-        return `**${formatLink(row.title || "Untitled", row.url)}**${snippet ? ` — ${snippet}` : ""}`;
+        const snippet = compactSnippet(row.content, 220);
+        return `**${formatDisplayLink(row.title || "Untitled", row.url)}**${snippet ? ` — ${snippet}` : ""}`;
       },
     )}\n\n_Ask about one page by full title for a detailed summary._`;
   }
@@ -2093,7 +2137,7 @@ async function handleMetadataQueryInner(
     return `### ${rows.length} docs matching "${docTitle}"\n\n${formatRows(
       rows,
       (row) =>
-        `**${formatLink(row.title || "Untitled", row.url)}** *(Status: ${row.status || "Unknown"} · Owner: ${row.owner || "Unknown"} · Created by: ${row.created_by || "Unknown"})*`,
+        `**${formatDisplayLink(row.title || "Untitled", row.url)}** *(Status: ${row.status || "Unknown"} · Owner: ${row.owner || "Unknown"} · Created by: ${row.created_by || "Unknown"})*`,
     )}`;
   }
 
@@ -2108,14 +2152,14 @@ async function handleMetadataQueryInner(
           ? " _(No Owner property on this page in Notion.)_"
           : "";
       return `**${label} of "${row.title || docTitle}":** ${name || "Unknown"}${note}${
-        row.url ? `\n\n${formatLink("Open in Notion", row.url)}` : ""
+        row.url ? `\n\n${formatDisplayLink("Open in Notion", row.url)}` : ""
       }`;
     }
     return `### ${rows.length} matching docs for "${docTitle}"\n\n${formatRows(
       rows,
       (row) => {
         const { name, label } = resolvePageOwner(row);
-        return `**${formatLink(row.title || "Untitled", row.url)}** — ${label}: **${name || "Unknown"}**`;
+        return `**${formatDisplayLink(row.title || "Untitled", row.url)}** — ${label}: **${name || "Unknown"}**`;
       },
     )}`;
   }
@@ -2126,13 +2170,13 @@ async function handleMetadataQueryInner(
     if (rows.length === 1) {
       const row = rows[0];
       return `**"${row.title || docTitle}"** was created by: **${row.created_by || "Unknown"}**${
-        row.url ? `\n\n${formatLink("Open in Notion", row.url)}` : ""
+        row.url ? `\n\n${formatDisplayLink("Open in Notion", row.url)}` : ""
       }`;
     }
     return `### ${rows.length} matching docs for "${docTitle}"\n\n${formatRows(
       rows,
       (row) =>
-        `**${formatLink(row.title || "Untitled", row.url)}** — Created by: **${row.created_by || "Unknown"}**`,
+        `**${formatDisplayLink(row.title || "Untitled", row.url)}** — Created by: **${row.created_by || "Unknown"}**`,
     )}`;
   }
 
@@ -2150,18 +2194,18 @@ async function handleMetadataQueryInner(
 
       if (assignedTo) {
         return `**"${row.title || docTitle}"** is assigned to: **${assignedTo}**${
-          row.url ? `\n\n${formatLink("Open in Notion", row.url)}` : ""
+          row.url ? `\n\n${formatDisplayLink("Open in Notion", row.url)}` : ""
         }`;
       }
 
       return `I found **"${row.title || docTitle}"**, but no assignee/owner property is stored for this page.\n\n${fallbackDetails.join(
         "\n",
-      )}${row.url ? `\n\n${formatLink("Open in Notion", row.url)}` : ""}`;
+      )}${row.url ? `\n\n${formatDisplayLink("Open in Notion", row.url)}` : ""}`;
     }
     return `### ${rows.length} matching docs for "${docTitle}"\n\n${formatRows(
       rows,
       (row) =>
-        `**${formatLink(row.title || "Untitled", row.url)}** — Assigned/Owner: **${row.owner || "Not stored"}**`,
+        `**${formatDisplayLink(row.title || "Untitled", row.url)}** — Assigned/Owner: **${row.owner || "Not stored"}**`,
     )}`;
   }
 
@@ -2171,13 +2215,13 @@ async function handleMetadataQueryInner(
     if (rows.length === 1) {
       const row = rows[0];
       return `**Type of "${row.title || docTitle}":** ${row.doc_type || "Unknown"}${
-        row.url ? `\n\n${formatLink("Open in Notion", row.url)}` : ""
+        row.url ? `\n\n${formatDisplayLink("Open in Notion", row.url)}` : ""
       }`;
     }
     return `### ${rows.length} matching docs for "${docTitle}"\n\n${formatRows(
       rows,
       (row) =>
-        `**${formatLink(row.title || "Untitled", row.url)}** — Type: **${row.doc_type || "Unknown"}**`,
+        `**${formatDisplayLink(row.title || "Untitled", row.url)}** — Type: **${row.doc_type || "Unknown"}**`,
     )}`;
   }
 
@@ -2197,8 +2241,8 @@ async function handleMetadataQueryInner(
       ]
         .filter(Boolean)
         .join(" · ");
-      return `${header}\n\n**${formatLink(row.title || docTitle, row.url)}** — ${meta}${
-        row.url ? `\n\n${formatLink("Open in Notion", row.url)}` : ""
+      return `${header}\n\n**${formatDisplayLink(row.title || docTitle, row.url)}** — ${meta}${
+        row.url ? `\n\n${formatDisplayLink("Open in Notion", row.url)}` : ""
       }`;
     }
 
@@ -2215,13 +2259,12 @@ async function handleMetadataQueryInner(
       ]
         .filter(Boolean)
         .join(" · ");
-      return `**${formatLink(row.title || "Untitled", row.url)}** — ${meta}`;
+      return `**${formatDisplayLink(row.title || "Untitled", row.url)}** — ${meta}`;
     })}`;
   }
 
   if (parsed.kind === "activity_summary" && person) {
-    const personTerm = `%${escapeLike(person)}%`;
-    const fuzzyPersonTerm = `%${escapeLike(stripVowels(person))}%`;
+    const { personTerm, personName } = buildPersonMatchParams(person);
     const isWorkspace = docTitle ? isWorkspaceScope(docTitle) : true;
     const normalizedTopic = !isWorkspace && docTitle ? normalizeTopic(docTitle) : "";
     const topicTerm = normalizedTopic
@@ -2246,7 +2289,7 @@ async function handleMetadataQueryInner(
     async function fetchActivityRows(requireYear: boolean) {
       return findPersonActivityRows({
         personTerm,
-        fuzzyPersonTerm,
+        personName,
         topicTerm,
         requireYear,
         yearStart,
@@ -2302,10 +2345,20 @@ async function handleMetadataQueryInner(
           [personTerm, topicTerm, yearStart, yearEnd],
         );
 
-    rows.sort(
-      (a, b) =>
-        calculateActivityScore(b, person) - calculateActivityScore(a, person),
-    );
+    if (!primaryRows.length) {
+      // Only the plain-text-mention fallback needs this: every row there
+      // shares the same role_rank (there's no owner/assignee signal), so a
+      // secondary sort by substring-match strength is a reasonable
+      // tiebreaker. When primaryRows came back, they already carry a correct
+      // role_rank-based order from SQL (owner ranked above last-editor,
+      // etc.) — re-sorting by calculateActivityScore here previously
+      // silently overrode that, because its weights rank last_edited_by (10)
+      // above owner (5), which contradicts the SQL ordering's intent.
+      rows.sort(
+        (a, b) =>
+          calculateActivityScore(b, person) - calculateActivityScore(a, person),
+      );
+    }
 
     console.log("[retrieval_debug]", {
       rows: rows.length,
@@ -2407,7 +2460,7 @@ async function handleMetadataQueryInner(
               const hub = await lookupProjectHubPage(theme);
               lines.push(
                 hub
-                  ? `- **${theme}** — ${formatLink(hub.title || theme, hub.url)}`
+                  ? `- **${theme}** — ${formatDisplayLink(hub.title || theme, hub.url)}`
                   : `- **${theme}**`,
               );
             }
@@ -2429,7 +2482,7 @@ async function handleMetadataQueryInner(
           ? await lookupProjectHubPage(yearTheme)
           : null;
         const hubLine = yearHub
-          ? formatLink(yearHub.title || yearTheme || "Project", yearHub.url)
+          ? formatDisplayLink(yearHub.title || yearTheme || "Project", yearHub.url)
           : yearTheme;
 
         const verb = historicalWork ? "worked on" : "is working on";
@@ -2478,7 +2531,7 @@ async function handleMetadataQueryInner(
           .filter(Boolean)
           .join(" · ");
         lines.push(
-          `**${person}** — strongest focus in synced Notion: **${formatLink(focusRow.title || "Untitled", focusRow.url)}**${focusMeta ? ` (${focusMeta})` : ""}.`,
+          `**${person}** — strongest focus in synced Notion: **${formatDisplayLink(focusRow.title || "Untitled", focusRow.url)}**${focusMeta ? ` (${focusMeta})` : ""}.`,
         );
         if (themes.length > 1) {
           lines.push(
@@ -2486,7 +2539,7 @@ async function handleMetadataQueryInner(
           );
         } else if (hubPage && projectTheme) {
           lines.push(
-            `_Broader area: **${projectTheme}** — ${formatLink(hubPage.title || projectTheme, hubPage.url)}._`,
+            `_Broader area: **${projectTheme}** — ${formatDisplayLink(hubPage.title || projectTheme, hubPage.url)}._`,
           );
         }
       } else if (!activeRows.length && !ownerRows.length) {
@@ -2525,7 +2578,7 @@ async function handleMetadataQueryInner(
       summary = [
         `No pages for **${person}** were edited in Notion during **${year}** in synced data.`,
         projectTheme
-          ? `**Likely project:** ${projectTheme}${hubPage ? ` — ${formatLink(hubPage.title || projectTheme, hubPage.url)}` : ""}.`
+          ? `**Likely project:** ${projectTheme}${hubPage ? ` — ${formatDisplayLink(hubPage.title || projectTheme, hubPage.url)}` : ""}.`
           : `**Current in-progress work** (last known): **${top.title || "Untitled"}** — **${top.status || "unknown"}**, last edited ${editedLabel}.`,
       ].join(" ");
     } else if (workingOnQuery && activeRows.length) {
@@ -2563,7 +2616,7 @@ async function handleMetadataQueryInner(
         ]
           .filter(Boolean)
           .join(" · ");
-        return `**${formatLink(row.title || "Untitled", row.url)}** — ${meta}`;
+        return `**${formatDisplayLink(row.title || "Untitled", row.url)}** — ${meta}`;
       },
     )}`;
   }

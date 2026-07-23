@@ -752,8 +752,8 @@ export function parseQueryByRules(question: string): RulesQuery {
   }
 
   // page details shortcut
-  if (/\b(?:details|info|information)\s+(?:of|about|for|on)\s+(.+?)(?:\?|$)/i.test(q) || /^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i.test(q)) {
-    const match = question.match(/\b(?:details|info|information)\s+(?:of|about|for|on)\s+(.+?)(?:\?|$)/i) ?? question.match(/^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i);
+  if (/\b(?:details|info|information|more|tell me more)\s+(?:of|about|for|on)\s+(.+?)(?:\?|$)/i.test(q) || /^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i.test(q)) {
+    const match = question.match(/\b(?:details|info|information|more|tell me more)\s+(?:of|about|for|on)\s+(.+?)(?:\?|$)/i) ?? question.match(/^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i);
     const doc = stripDocWords(match?.[1] || "");
     if (doc) {
       return { kind: "page_about", docTitle: doc, raw: question, parserConfidence: 0.95 };

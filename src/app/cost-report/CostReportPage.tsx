@@ -39,8 +39,6 @@ type Model = {
 const MODELS: Model[] = [
   { id: "gpt-4o-mini", label: "GPT-4o-mini" },
   { id: "gpt-4.1", label: "GPT-4.1" },
-  { id: "deepseek-chat", label: "DeepSeek Chat" },
-  { id: "deepseek-4", label: "DeepSeek 4" },
 ];
 
 
@@ -203,7 +201,6 @@ export default function CostReportPage() {
 
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([
     "gpt-4o-mini",
-    "deepseek-chat",
   ]);
 
 

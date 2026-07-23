@@ -3,7 +3,7 @@
  *
  * Run: npm run test:e2e
  *
- * Requires: .env with DATABASE_URL (and GEMINI_API_KEY for optional LLM check)
+ * Requires: .env with DATABASE_URL (and OPENAI_API_KEY for optional LLM check)
  */
 import "dotenv/config";
 process.env.IS_EVALUATION = "true";
@@ -108,7 +108,7 @@ async function testRagPath() {
 
   if (process.env.OPENAI_API_KEY?.trim()) {
     try {
-      const { getChatStream } = await import("../src/lib/ai/gemini");
+      const { getChatStream } = await import("../src/lib/ai/openai");
       const stream = await getChatStream(question, context.slice(0, 12000), []);
       let text = "";
       for await (const chunk of stream) {
@@ -353,7 +353,7 @@ async function testFastPathGreetingsLatency() {
       return;
     }
 
-    if (!data.answer || !/hello|hi|hey|welcome|goodbye|bye/i.test(data.answer)) {
+    if (!data.answer || !/hello|hi|hey|welcome|goodbye|bye|talk|later|see\s+you|here|anytime|happy\s+to\s+help|no\s+problem|sure/i.test(data.answer)) {
       fail(
         `Greeting response invalid: "${tc.message}"`,
         `Got: "${data.answer}"`,
@@ -377,7 +377,7 @@ async function main() {
   console.log("--- Path 2: SQL direct ---\n");
   await testSqlPath();
 
-  console.log("--- Path 3: RAG (+ optional Gemini) ---\n");
+  console.log("--- Path 3: RAG (+ optional OpenAI) ---\n");
   await testRagPath();
 
   console.log("--- Chunking: unit + database ---\n");

@@ -1,6 +1,6 @@
-import { getJsonCompletion } from "@/lib/ai/gemini";
+import { getJsonCompletion } from "@/lib/ai/openai";
 import { removeWord } from "@/lib/shared/text-utils";
-import type { ChatHistoryItem } from "@/lib/ai/gemini";
+import type { ChatHistoryItem } from "@/lib/ai/openai";
 
 const MULTI_QUERY_SYSTEM_PROMPT = `
 You generate multiple search queries for NavGurukul's workplace Notion workspace (HRMS, leave policies, projects, onboarding, team docs).

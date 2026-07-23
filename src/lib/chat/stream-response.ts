@@ -1,6 +1,6 @@
-import { getChatStream } from "@/lib/ai/gemini";
-import type { ChatHistoryItem } from "@/lib/ai/gemini";
-import { GEMINI_QUOTA_USER_MESSAGE, isGeminiQuotaError } from "@/lib/ai/provider-errors";
+import { getChatStream } from "@/lib/ai/openai";
+import type { ChatHistoryItem } from "@/lib/ai/openai";
+import { OPENAI_QUOTA_USER_MESSAGE, isOpenAIQuotaError } from "@/lib/ai/provider-errors";
 import { addChatMessage } from "@/lib/chat/store";
 import { extractFinalAnswer } from "@/lib/chat/stream-tags";
 import type { QueryKind } from "@/lib/query/types";
@@ -93,8 +93,8 @@ function buildEnrichedContext(
 }
 
 
-/** Stream Gemini tokens to the browser and save the final answer to the chat session. */
-export async function streamGeminiAnswer(
+/** Stream OpenAI tokens to the browser and save the final answer to the chat session. */
+export async function streamOpenAIAnswer(
   message: string,
   notionContext: string,
   chatHistory: ChatHistoryItem[],
@@ -125,12 +125,12 @@ export async function streamGeminiAnswer(
   try {
     stream = await getChatStream(message, enrichedContext, chatHistory, userEmotion, queryKind);
   } catch (error) {
-    if (isGeminiQuotaError(error)) {
+    if (isOpenAIQuotaError(error)) {
       if (sessionId) {
-        addChatMessage(sessionId, "bot", GEMINI_QUOTA_USER_MESSAGE)
+        addChatMessage(sessionId, "bot", OPENAI_QUOTA_USER_MESSAGE)
           .catch(error => console.error("[Background DB Write Error] Failed to persist bot message:", error));
       }
-      return new Response(GEMINI_QUOTA_USER_MESSAGE, {
+      return new Response(OPENAI_QUOTA_USER_MESSAGE, {
         status: 429,
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
@@ -223,3 +223,6 @@ export async function streamGeminiAnswer(
     },
   });
 }
+
+/** Backward compatibility alias */
+export const streamGeminiAnswer = streamOpenAIAnswer;

@@ -16,10 +16,7 @@ if (typeof window === "undefined") {
     if (
       hostname &&
       (hostname.includes("neon.tech") ||
-        hostname.includes("openai.com") ||
-        hostname.includes("googleapis.com") ||
-        hostname.includes("groq.com") ||
-        hostname.includes("deepseek.com"))
+        hostname.includes("openai.com"))
     ) {
       options.family = 4;
       options.hints = (options.hints || 0) & ~dns.ADDRCONFIG;

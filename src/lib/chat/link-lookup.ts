@@ -1,4 +1,4 @@
-import type { ChatHistoryItem } from "@/lib/ai/gemini";
+import type { ChatHistoryItem } from "@/lib/ai/openai";
 import { buildContextualSearchQuery } from "@/lib/chat/history";
 import {
   containsPhrase,
