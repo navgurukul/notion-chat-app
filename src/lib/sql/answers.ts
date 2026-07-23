@@ -25,7 +25,6 @@ import {
 } from "@/lib/sql/format-display";
 import { buildPersonMatchParams, personColumnMatchSql, personColumnsMatchSql } from "@/lib/sql/person-filter";
 import { extractPeopleFromContent, splitPersonField } from "@/lib/sql/team-roster";
-import { personDedupeKey } from "@/lib/query/normalize";
 import {
   filterPagesForProjectTopic,
   primaryTopicToken,
@@ -1431,7 +1430,7 @@ async function handleProjectMostDevs(): Promise<string> {
     .map((p) => `- **${p.title}** — ${p.dev_count} developer(s)`)
     .join("\n");
 
-  return `## Project with Most Developers\n\n**${top.title}** has the highest recorded number of developers/assignees (${top.dev_count}).\n\n### Top Projects by Developer Count:\n${list}`;
+  return `## Project with Most Developers\n\n**${topProject.title}** has the highest recorded number of developers/assignees (${topProject.dev_count}).\n\n### Top Projects by Developer Count:\n${list}`;
 }
 
 /**
@@ -2275,7 +2274,7 @@ async function handleMetadataQueryInner(
     async function fetchActivityRows(requireYear: boolean) {
       return findPersonActivityRows({
         personTerm,
-        personName,
+        fuzzyPersonTerm: personName,
         topicTerm,
         requireYear,
         yearStart,
