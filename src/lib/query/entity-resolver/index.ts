@@ -207,7 +207,7 @@ export async function extractRawEntities(message: string): Promise<{ personName?
  * This prevents incorrectly injecting `lastPerson`/`lastProject` into queries
  * that are standalone and unrelated to the previous conversation.
  */
-function isFollowUpNeedingContext(message: string, history: ChatHistoryItem[]): boolean {
+export function isFollowUpNeedingContext(message: string, history: ChatHistoryItem[]): boolean {
   if (!history || history.length === 0) return false;
 
   const lower = message.trim().toLowerCase();

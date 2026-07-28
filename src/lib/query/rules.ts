@@ -113,6 +113,9 @@ function stripDocWords(value: string) {
 
 function cleanPersonName(value: string | null) {
   if (!value) return null;
+  if (/\b(project|projects|page|pages|doc|docs|document|documents)\b/i.test(value)) {
+    return null;
+  }
   const cleaned = stripYearSuffixFromPerson(
     stripDocWords(value)
       .replace(/\s+(?:is|are|was|were|has|have|had)\s*$/i, "")
@@ -145,6 +148,20 @@ function extractPageTitle(text: string, patterns: RegExp[]): string | null {
 }
 
 function parseActivityQuery(question: string, q: string): RulesQuery | null {
+  const teamActivityMatch =
+    question.match(
+      /\b(?:most|mostly|least|lowest|bottom)\s+active\s+(?:team\s+member|person|contributor|member)?\s*(?:in|on|for)\s+([^?.!]+?)(?:\?|$)/i,
+    );
+  if (teamActivityMatch?.[1]) {
+    const docTitle = stripDocWords(teamActivityMatch[1]);
+    return {
+      kind: "team_activity",
+      docTitle,
+      raw: question,
+      parserConfidence: 0.95,
+    };
+  }
+
   const teamRosterMatch =
     question.match(
       /\bwho(?:\s+all|\s+else)?\s+(?:is|are)\s+(?:all\s+)?(?:working|work(?:ing)?)\s+(?:on\s+)?(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
@@ -312,7 +329,9 @@ export function parseQueryByRules(question: string): RulesQuery {
     listAllPeople.test(q) ||
     listPeople.test(q) ||
     countPeople.test(q) ||
-    totalPeople.test(q)
+    totalPeople.test(q) ||
+    (/\b(?:list|show|get|display|who)\b.*\b(?:team\s+members?|people|members|users|devs)\b/i.test(q) &&
+     !/\b(?:project|each\s+project|per\s+project|breakdown|by\s+project|project\s+wise)\b/i.test(q))
   ) {
     return { kind: "people_list", raw: question, parserConfidence: 0.95 };
   }
@@ -408,8 +427,8 @@ export function parseQueryByRules(question: string): RulesQuery {
   }
 
   // "show/list assigned tasks for/to X"
-  const showTasksMatch = q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:assigned\s+)?(?:to|for|of)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i)
-    ?? q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:the\s+)?([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})'s\s+(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)/i);
+  const showTasksMatch = q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:assigned\s+)?(?:to|for|of)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i)
+    ?? q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})'s\s+(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)/i);
   if (showTasksMatch) {
     const person = cleanPersonName(showTasksMatch[1]);
     if (person) {
