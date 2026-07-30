@@ -113,11 +113,12 @@ function stripDocWords(value: string) {
 
 function cleanPersonName(value: string | null) {
   if (!value) return null;
-  if (/\b(project|projects|page|pages|doc|docs|document|documents)\b/i.test(value)) {
+  const val = value.trim().replace(/\s+(on|in|for|at|during|since|before|after)$/i, "").trim();
+  if (/\b(project|projects|page|pages|doc|docs|document|documents)\b/i.test(val)) {
     return null;
   }
   const cleaned = stripYearSuffixFromPerson(
-    stripDocWords(value)
+    stripDocWords(val)
       .replace(/\s+(?:is|are|was|were|has|have|had)\s*$/i, "")
       .replace(/^(?:did|does|do|is|are|was|were|has|have|had)\s+/i, ""),
   ).trim();
@@ -426,9 +427,9 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // "show/list assigned tasks for/to X"
-  const showTasksMatch = q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:assigned\s+)?(?:to|for|of)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i)
-    ?? q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})'s\s+(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)/i);
+  // "show/list assigned tasks/projects for/to X"
+  const showTasksMatch = q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|project\s+names?)\s+(?:assigned\s+)?(?:to|for|of)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i)
+    ?? q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})'s\s+(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|project\s+names?)/i);
   if (showTasksMatch) {
     const person = cleanPersonName(showTasksMatch[1]);
     if (person) {

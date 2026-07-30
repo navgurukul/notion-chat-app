@@ -70,6 +70,71 @@ function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd
   const q = rawQuery.toLowerCase();
   const now = new Date();
 
+  // Support explicit dates: e.g. "23 july 2026", "july 23, 2026", "2026-07-23", "23-07-2026"
+  const months = "january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec";
+  const MONTH_MAP: Record<string, number> = {
+    january: 0, jan: 0, february: 1, feb: 1, march: 2, mar: 2, april: 3, apr: 3, may: 4,
+    june: 5, jun: 5, july: 6, jul: 6, august: 7, aug: 7, september: 8, sep: 8, sept: 8,
+    october: 9, oct: 9, november: 10, nov: 10, december: 11, dec: 11
+  };
+
+  // 1. "23 july 2026" or "23rd july 2026"
+  const pattern1 = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${months})\\s+(20\\d{2})\\b`, "i");
+  const match1 = q.match(pattern1);
+  if (match1) {
+    const day = parseInt(match1[1], 10);
+    const month = MONTH_MAP[match1[2]];
+    const yearVal = parseInt(match1[3], 10);
+    const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
+  // 2. "july 23, 2026" or "july 23 2026"
+  const pattern2 = new RegExp(`\\b(${months})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?\\s+(20\\d{2})\\b`, "i");
+  const match2 = q.match(pattern2);
+  if (match2) {
+    const month = MONTH_MAP[match2[1]];
+    const day = parseInt(match2[2], 10);
+    const yearVal = parseInt(match2[3], 10);
+    const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
+  // 3. "2026-07-23" or "2026/07/23"
+  const pattern3 = /\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/;
+  const match3 = q.match(pattern3);
+  if (match3) {
+    const yearVal = parseInt(match3[1], 10);
+    const month = parseInt(match3[2], 10) - 1;
+    const day = parseInt(match3[3], 10);
+    const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
+  // 4. "23-07-2026" or "23/07/2026" or "10/31/2025"
+  const pattern4 = /\b(\d{1,2})[-/](\d{1,2})[-/](20\d{2})\b/;
+  const match4 = q.match(pattern4);
+  if (match4) {
+    const num1 = parseInt(match4[1], 10);
+    const num2 = parseInt(match4[2], 10);
+    const yearVal = parseInt(match4[3], 10);
+    let day = num1;
+    let month = num2 - 1;
+    if (num2 > 12) {
+      day = num2;
+      month = num1 - 1;
+    } else if (num1 <= 12 && num2 <= 12) {
+      day = num2;
+      month = num1 - 1;
+    }
+    const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
   if (/\btoday\b/i.test(q) || /\bdaily\b/i.test(q)) {
     const start = new Date(now);
     start.setHours(0, 0, 0, 0);
@@ -135,9 +200,9 @@ function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd
 
   const explicitYearMatch = q.match(/\b(20\d{2})\b/);
   if (explicitYearMatch) {
-    const year = Number(explicitYearMatch[1]);
-    const start = new Date(year, 0, 1, 0, 0, 0, 0);
-    const end = new Date(year + 1, 0, 1, 0, 0, 0, 0);
+    const yearVal = Number(explicitYearMatch[1]);
+    const start = new Date(yearVal, 0, 1, 0, 0, 0, 0);
+    const end = new Date(yearVal + 1, 0, 1, 0, 0, 0, 0);
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
   }
 
@@ -1354,6 +1419,7 @@ export async function handleMetadataQuery(
     docTitle: parsed.docTitle,
     compareTitleB: parsed.compareTitleB,
     year: parsed.year,
+    dateRange: parsed.dateRange,
   });
   const cached = sqlMetadataCache.get(cacheKey);
   if (cached !== undefined) {
@@ -1570,62 +1636,100 @@ async function handleMetadataQueryInner(
     )}`;
   }
 
-  if (parsed.kind === "assigned_list" && person) {
-    const { personTerm, personName } = buildPersonMatchParams(person);
-    const isWorkspace = docTitle ? isWorkspaceScope(docTitle) : true;
-    const normalizedTopic = !isWorkspace && docTitle ? normalizeTopic(docTitle) : "";
-    // Keep original docTitle as fallback in case normalization strips too much
-    const topicTerm =
-      !isWorkspace && normalizedTopic.length >= 3
-        ? `%${escapeLike(normalizedTopic)}%`
-        : !isWorkspace && docTitle
-          ? `%${escapeLike(docTitle)}%`
-          : null;
+  if (parsed.kind === "assigned_list") {
     const { dateStart, dateEnd } = resolveDateRange(parsed.raw);
     const year = parsed.year;
     const yearStart = dateStart ?? (year ? `${year}-01-01` : null);
     const yearEnd = dateEnd ?? (year ? `${year + 1}-01-01` : null);
-    const assigneeInContentSql = `
-      (
-        (
-          lower(coalesce(content, '')) LIKE '%assignee:%'
-          OR lower(coalesce(content, '')) LIKE '%assign:%'
-          OR lower(coalesce(content, '')) LIKE '%assigned:%'
-          OR lower(coalesce(content, '')) LIKE '%captain:%'
-        )
-        AND lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
-      )
-    `;
-    const ownerMatchSql = personColumnMatchSql("owner", 1, 2);
-    const rows = await query<
-      NotionPageRow & { notion_edited_at?: string | null }
-    >(
-      `
-      SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content, notion_edited_at::text
-      FROM notion_pages
-      WHERE
-        (${ownerMatchSql} OR ${assigneeInContentSql})
-        AND (
-          $3::text IS NULL
-          OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
-          OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
-        )
-        AND (
-          $4::text IS NULL
-          OR (
+
+    const hasExplicitFilter = !!(parsed.personName || parsed.docTitle);
+    const useGlobalDateQuery = !hasExplicitFilter && !!(yearStart && yearEnd);
+
+    let rows: (NotionPageRow & { notion_edited_at?: string | null })[] = [];
+    let isWorkspace = true;
+
+    if (useGlobalDateQuery) {
+      isWorkspace = docTitle ? isWorkspaceScope(docTitle) : true;
+      const normalizedTopic = !isWorkspace && docTitle ? normalizeTopic(docTitle) : "";
+      const topicTerm =
+        !isWorkspace && normalizedTopic.length >= 3
+          ? `%${escapeLike(normalizedTopic)}%`
+          : !isWorkspace && docTitle
+            ? `%${escapeLike(docTitle)}%`
+            : null;
+
+      rows = await query<NotionPageRow & { notion_edited_at?: string | null }>(
+        `
+        SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content, notion_edited_at::text
+        FROM notion_pages
+        WHERE
+          (
             notion_edited_at IS NOT NULL
-            AND notion_edited_at >= $4::timestamptz
-            AND notion_edited_at < $5::timestamptz
+            AND notion_edited_at >= $1::timestamptz
+            AND notion_edited_at < $2::timestamptz
           )
+          AND (
+            $3::text IS NULL
+            OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
+            OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
+          )
+        ORDER BY
+          notion_edited_at DESC NULLS LAST,
+          title ASC
+        LIMIT ${SQL_RESULT_LIMIT}
+        `,
+        [yearStart, yearEnd, topicTerm],
+      );
+    } else if (person) {
+      const { personTerm, personName } = buildPersonMatchParams(person);
+      isWorkspace = docTitle ? isWorkspaceScope(docTitle) : true;
+      const normalizedTopic = !isWorkspace && docTitle ? normalizeTopic(docTitle) : "";
+      const topicTerm =
+        !isWorkspace && normalizedTopic.length >= 3
+          ? `%${escapeLike(normalizedTopic)}%`
+          : !isWorkspace && docTitle
+            ? `%${escapeLike(docTitle)}%`
+            : null;
+      const assigneeInContentSql = `
+        (
+          (
+            lower(coalesce(content, '')) LIKE '%assignee:%'
+            OR lower(coalesce(content, '')) LIKE '%assign:%'
+            OR lower(coalesce(content, '')) LIKE '%assigned:%'
+            OR lower(coalesce(content, '')) LIKE '%captain:%'
+          )
+          AND lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
         )
-      ORDER BY
-        CASE WHEN ${ownerMatchSql} THEN 0 ELSE 1 END,
-        notion_edited_at DESC NULLS LAST,
-        title ASC
-      LIMIT ${SQL_RESULT_LIMIT}
-      `,
-      [personTerm, personName, topicTerm, yearStart, yearEnd],
-    );
+      `;
+      const ownerMatchSql = personColumnMatchSql("owner", 1, 2);
+      rows = await query<NotionPageRow & { notion_edited_at?: string | null }>(
+        `
+        SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content, notion_edited_at::text
+        FROM notion_pages
+        WHERE
+          (${ownerMatchSql} OR ${assigneeInContentSql})
+          AND (
+            $3::text IS NULL
+            OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
+            OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
+          )
+          AND (
+            $4::text IS NULL
+            OR (
+              notion_edited_at IS NOT NULL
+              AND notion_edited_at >= $4::timestamptz
+              AND notion_edited_at < $5::timestamptz
+            )
+          )
+        ORDER BY
+          CASE WHEN ${ownerMatchSql} THEN 0 ELSE 1 END,
+          notion_edited_at DESC NULLS LAST,
+          title ASC
+        LIMIT ${SQL_RESULT_LIMIT}
+        `,
+        [personTerm, personName, topicTerm, yearStart, yearEnd],
+      );
+    }
 
     let dateNote = "";
     if (/\btoday\b/i.test(parsed.raw) || /\bdaily\b/i.test(parsed.raw)) dateNote = " for today";
@@ -1636,32 +1740,39 @@ async function handleMetadataQueryInner(
     else if (/\blast\s+month\b/i.test(parsed.raw)) dateNote = " for last month";
     else if (/\bthis\s+year\b/i.test(parsed.raw)) dateNote = " for this year";
     else if (/\blast\s+year\b/i.test(parsed.raw)) dateNote = " for last year";
+    else if (dateStart && dateEnd) {
+      const start = new Date(dateStart);
+      const end = new Date(dateEnd);
+      const diffDays = Math.round(Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays === 1) {
+        dateNote = ` on ${start.toISOString().split('T')[0]}`;
+      } else {
+        dateNote = ` from ${start.toISOString().split('T')[0]} to ${end.toISOString().split('T')[0]}`;
+      }
+    }
     else if (year) dateNote = ` in ${year}`;
 
     const yearNote = dateNote;
 
     if (!rows.length) {
-      console.log("[assigned_list] debug", {
-        person,
-        personTerm,
-        docTitle,
-        normalizedTopic,
-        topicTerm,
-        rowsFound: rows.length,
-      });
+      if (useGlobalDateQuery) {
+        return `No tasks or pages found${yearNote} in synced Notion.`;
+      }
       return (
         `No tasks or pages with **${person}** as owner or assignee${yearNote} in synced Notion.\n\n` +
         `_Check the exact name spelling in Notion (e.g. **Tamanna a**), or use **Sync changes** if assignments were updated recently._`
       );
     }
 
-    if (asksForProjectsOnly(parsed.raw)) {
+    if (person && asksForProjectsOnly(parsed.raw)) {
       return formatAssignedProjectsAnswer(person, rows, yearNote);
     }
 
-    const listLabel = asksForTasksOnly(parsed.raw)
-      ? `task(s) assigned to ${person}${yearNote}${!isWorkspace && docTitle ? ` matching "${docTitle}"` : ""}`
-      : `page(s) assigned to ${person}${yearNote}${!isWorkspace && docTitle ? ` matching "${docTitle}"` : ""}`;
+    const listLabel = useGlobalDateQuery
+      ? `${asksForTasksOnly(parsed.raw) ? "task(s)" : "page(s)"}${yearNote}${!isWorkspace && docTitle ? ` matching "${docTitle}"` : ""}`
+      : asksForTasksOnly(parsed.raw)
+        ? `task(s) assigned to ${person}${yearNote}${!isWorkspace && docTitle ? ` matching "${docTitle}"` : ""}`
+        : `page(s) assigned to ${person}${yearNote}${!isWorkspace && docTitle ? ` matching "${docTitle}"` : ""}`;
 
     return `${formatListHeader(rows.length, listLabel)}\n\n${formatRows(
       rows,
@@ -1785,6 +1896,16 @@ async function handleMetadataQueryInner(
     else if (/\blast\s+month\b/i.test(parsed.raw)) dateNote = " for last month";
     else if (/\bthis\s+year\b/i.test(parsed.raw)) dateNote = " for this year";
     else if (/\blast\s+year\b/i.test(parsed.raw)) dateNote = " for last year";
+    else if (yearStart && yearEnd) {
+      const start = new Date(yearStart);
+      const end = new Date(yearEnd);
+      const diffDays = Math.round(Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays === 1) {
+        dateNote = ` on ${start.toISOString().split('T')[0]}`;
+      } else {
+        dateNote = ` from ${start.toISOString().split('T')[0]} to ${end.toISOString().split('T')[0]}`;
+      }
+    }
     else if (year) dateNote = ` in ${year}`;
 
     const yearNote = dateNote;
@@ -2359,6 +2480,16 @@ async function handleMetadataQueryInner(
     else if (/\blast\s+month\b/i.test(parsed.raw)) dateNote = " for last month";
     else if (/\bthis\s+year\b/i.test(parsed.raw)) dateNote = " for this year";
     else if (/\blast\s+year\b/i.test(parsed.raw)) dateNote = " for last year";
+    else if (yearStart && yearEnd) {
+      const start = new Date(yearStart);
+      const end = new Date(yearEnd);
+      const diffDays = Math.round(Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays === 1) {
+        dateNote = ` on **${start.toISOString().split('T')[0]}**`;
+      } else {
+        dateNote = ` from **${start.toISOString().split('T')[0]}** to **${end.toISOString().split('T')[0]}**`;
+      }
+    }
     else if (year) dateNote = ` in **${year}**`;
 
     const yearNote = dateNote;
