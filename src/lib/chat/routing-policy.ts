@@ -48,7 +48,7 @@ export function metadataNotFoundAnswer(parsed: ParsedQuery): string {
         : "I couldn't find a project or page title to look up.";
     case "assigned_list":
       return person
-        ? `No tasks or pages found assigned to **${person}** in synced Notion data. Try **Sync changes** or rephrase with a year, e.g. tasks assigned to Tamanna in 2025.`
+        ? `No tasks or pages found assigned to **${person}** in synced Notion data. Try **Sync changes** or rephrase with a year or project name.`
         : "No assignee name found in the question.";
     case "assigned_to_of":
       return title

@@ -45,6 +45,62 @@ export function resolveDates(message: string): { year?: number; dateRange?: { da
   let dateEnd: string | null = null;
   let year: number | undefined;
 
+  // Support explicit dates: e.g. "23 july 2026", "july 23, 2026", "2026-07-23", "23-07-2026"
+  const months = "january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec";
+  const MONTH_MAP: Record<string, number> = {
+    january: 0, jan: 0, february: 1, feb: 1, march: 2, mar: 2, april: 3, apr: 3, may: 4,
+    june: 5, jun: 5, july: 6, jul: 6, august: 7, aug: 7, september: 8, sep: 8, sept: 8,
+    october: 9, oct: 9, november: 10, nov: 10, december: 11, dec: 11
+  };
+
+  // 1. "23 july 2026" or "23rd july 2026"
+  const pattern1 = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${months})\\s+(20\\d{2})\\b`, "i");
+  const match1 = q.match(pattern1);
+  if (match1) {
+    const day = parseInt(match1[1], 10);
+    const month = MONTH_MAP[match1[2]];
+    const yearVal = parseInt(match1[3], 10);
+    const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
+    return { year: yearVal, dateRange: { dateStart: start.toISOString(), dateEnd: end.toISOString() } };
+  }
+
+  // 2. "july 23, 2026" or "july 23 2026"
+  const pattern2 = new RegExp(`\\b(${months})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?\\s+(20\\d{2})\\b`, "i");
+  const match2 = q.match(pattern2);
+  if (match2) {
+    const month = MONTH_MAP[match2[1]];
+    const day = parseInt(match2[2], 10);
+    const yearVal = parseInt(match2[3], 10);
+    const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
+    return { year: yearVal, dateRange: { dateStart: start.toISOString(), dateEnd: end.toISOString() } };
+  }
+
+  // 3. "2026-07-23" or "2026/07/23"
+  const pattern3 = /\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/;
+  const match3 = q.match(pattern3);
+  if (match3) {
+    const yearVal = parseInt(match3[1], 10);
+    const month = parseInt(match3[2], 10) - 1;
+    const day = parseInt(match3[3], 10);
+    const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
+    return { year: yearVal, dateRange: { dateStart: start.toISOString(), dateEnd: end.toISOString() } };
+  }
+
+  // 4. "23-07-2026" or "23/07/2026"
+  const pattern4 = /\b(\d{1,2})[-/](\d{1,2})[-/](20\d{2})\b/;
+  const match4 = q.match(pattern4);
+  if (match4) {
+    const day = parseInt(match4[1], 10);
+    const month = parseInt(match4[2], 10) - 1;
+    const yearVal = parseInt(match4[3], 10);
+    const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
+    return { year: yearVal, dateRange: { dateStart: start.toISOString(), dateEnd: end.toISOString() } };
+  }
+
   if (/\btoday\b/i.test(q) || /\bdaily\b/i.test(q)) {
     const start = new Date(now);
     start.setHours(0, 0, 0, 0);
