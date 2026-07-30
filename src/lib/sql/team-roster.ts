@@ -26,7 +26,7 @@ const MENTION_NOISE =
   /^(untitled|backend|datapivots|navgurkul|design|scope|item|user|admin|qa|dev|pm|billing|rate|total|due|gmail|please|cost|price|rs|invoice|sow|proposal|value|fee|fees|charges|usd|inr|pay|payment)$/i;
 
 function personDedupeKey(name: string) {
-  return normalizePersonNameForMatch(name);
+  return normalizePersonNameForMatch(name).toLowerCase();
 }
 
 function pickLongerName(a: string, b: string) {
@@ -275,6 +275,10 @@ export async function aggregatePeopleOnProject(pages: ProjectPageRow[]): Promise
   function addPerson(name: string, role: string, pageId: string) {
     const canonicalName = findCanonicalName(name, directory);
     const key = personDedupeKey(canonicalName);
+    const existsInDir = directory.some((p) => p.normalized === key);
+    if (!existsInDir) {
+      return;
+    }
     if (!TEAM_MEMBER_WHITELIST.has(key) && !looksLikePersonName(canonicalName)) {
       return;
     }

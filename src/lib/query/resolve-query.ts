@@ -14,6 +14,7 @@ import {
   shouldReformulate,
   reformulateSearchQuery,
 } from "@/lib/chat/query-reformulation";
+import { isFollowUpNeedingContext } from "./entity-resolver";
 
 const INTENT_KIND_HINTS: Record<string, Set<ParsedQuery["kind"]>> = {
   PERSON_ACTIVITY: new Set([
@@ -273,14 +274,14 @@ export async function resolveQuery(
     }
   }
 
-  if (!personName && lastEntities?.lastPerson) {
+  if (!personName && lastEntities?.lastPerson && isFollowUpNeedingContext(question, history)) {
     personName = lastEntities.lastPerson;
   }
 
   const finalParsed: ParsedQuery = {
     ...parsed,
     ...(docTitle ? { docTitle } : {}),
-    personName: personName || parsed.personName || (lastEntities?.lastPerson && (/\b(he|his|him|she|her|they|them)\b/i.test(question) || !parsed.personName) ? lastEntities.lastPerson : undefined),
+    personName: personName || parsed.personName || (lastEntities?.lastPerson && isFollowUpNeedingContext(question, history) ? lastEntities.lastPerson : undefined),
     raw: question,
     reformulatedQuery: reformulatedQueryText,
   };

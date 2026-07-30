@@ -444,20 +444,32 @@ const createNewChat = async () => {
     chatInFlightRef.current = false;
   };
 
-  const executeChatFlow = async (userMessage: string, customHistory?: Message[]) => {
+  const executeChatFlow = async (userMessage: string, customHistory?: Message[], isRegenerate = false) => {
     if (isLoading || !activeSessionId) return;
 
     const sessionId = activeSessionId;
     const baseMessages = customHistory || messages;
     const newUserMsg: Message = { role: "user", content: userMessage };
-    const botIndex = baseMessages.length + 1;
-    pendingBotMessageIndexRef.current = botIndex;
-
-    if (customHistory) {
-      setMessages([...customHistory, newUserMsg, { role: "bot", content: "" }]);
+    
+    let botIndex: number;
+    if (isRegenerate) {
+      botIndex = baseMessages.length - 1;
+      setMessages((prev) => {
+        const next = [...prev];
+        if (next[botIndex]) {
+          next[botIndex] = { ...next[botIndex], content: "" };
+        }
+        return next;
+      });
     } else {
-      setMessages((prev) => [...prev, newUserMsg, { role: "bot", content: "" }]);
+      botIndex = baseMessages.length + 1;
+      if (customHistory) {
+        setMessages([...customHistory, newUserMsg, { role: "bot", content: "" }]);
+      } else {
+        setMessages((prev) => [...prev, newUserMsg, { role: "bot", content: "" }]);
+      }
     }
+    pendingBotMessageIndexRef.current = botIndex;
 
     chatInFlightRef.current = true;
     messagesLoadGenerationRef.current += 1;
@@ -476,7 +488,8 @@ const createNewChat = async () => {
     }));
 
     try {
-      const history = [...baseMessages, newUserMsg]
+      const historyMessages = isRegenerate ? baseMessages.slice(0, -1) : [...baseMessages, newUserMsg];
+      const history = historyMessages
         .slice(-8)
         .map((message) => ({
           role: message.role,
@@ -485,7 +498,7 @@ const createNewChat = async () => {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userMessage, history, sessionId }),
+        body: JSON.stringify({ message: userMessage, history, sessionId, isRegenerate }),
         signal: abortController.signal,
       });
 
@@ -673,8 +686,7 @@ const createNewChat = async () => {
       });
       if (!response.ok) throw new Error("Failed to delete message for regeneration");
 
-      const historyUpToLastUser = messages.slice(0, messages.length - 2);
-      await executeChatFlow(secondLastMsg.content, historyUpToLastUser);
+      await executeChatFlow(secondLastMsg.content, undefined, true);
     } catch (error) {
       console.error("Failed to regenerate response:", error);
     }

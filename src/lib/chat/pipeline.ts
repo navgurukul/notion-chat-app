@@ -36,6 +36,7 @@ export type ChatRequestBody = {
   message?: unknown;
   history?: unknown;
   sessionId?: unknown;
+  isRegenerate?: boolean;
 };
 
 export class ChatValidationError extends Error {
@@ -64,6 +65,7 @@ async function attachSession(
   rawSessionId: unknown,
   message: string,
   userEmotion?: string,
+  isRegenerate = false,
 ): Promise<string | null> {
   if (typeof rawSessionId !== "string" || !rawSessionId.trim()) return null;
 
@@ -71,9 +73,11 @@ async function attachSession(
   const ownsSession = await ensureSessionBelongsToUser(rawSessionId, user.id);
   if (!ownsSession) throw new ChatNotFoundError();
 
-  await addChatMessage(rawSessionId, "user", message, userEmotion).catch(err =>
-    console.error("[DB Write Error] Failed to save user message:", err),
-  );
+  if (!isRegenerate) {
+    await addChatMessage(rawSessionId, "user", message, userEmotion).catch(err =>
+      console.error("[DB Write Error] Failed to save user message:", err),
+    );
+  }
   return rawSessionId;
 }
 
@@ -200,7 +204,9 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
         try {
           const owns = await ensureSessionBelongsToUser(sessionId, (await getOrCreateUser(session)).id);
           if (owns) {
-            await addChatMessage(sessionId, "user", rawMessage, "neutral");
+            if (!body.isRegenerate) {
+              await addChatMessage(sessionId, "user", rawMessage, "neutral");
+            }
 
             // repeat detection based on history user messages only
             const stType = detectSmalltalkType(rawMessage);
@@ -254,7 +260,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
           ? `Current time is **${time}** (local to the server).`
           : `Today is **${weekday}**, **${isoDate}** (local to the server).`;
 
-      const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion);
+      const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion, body.isRegenerate);
       if (attachedSessionId) {
         await addChatMessage(attachedSessionId, "bot", answer, userEmotion).catch(err => console.error("[DB Write Error] Failed to save utility bot message:", err));
       }
@@ -264,7 +270,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
 
     telemetry.incrementLlmCalls();
 
-    const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion);
+    const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion, body.isRegenerate);
 
 
     // merge DB state
