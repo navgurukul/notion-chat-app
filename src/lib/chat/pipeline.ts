@@ -281,6 +281,8 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       if (dbState) {
         if (dbState.activeProject?.name) dbStateProject = dbState.activeProject.name;
         if (dbState.activePerson?.name) dbStatePerson = dbState.activePerson.name;
+        if (dbState.lastPerson) dbStatePerson = dbState.lastPerson;
+        if (dbState.lastProject) dbStateProject = dbState.lastProject;
       }
     }
 
@@ -329,6 +331,9 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
           };
           currentState.lastPerson = resolvedEntities.person.value;
           changed = true;
+        } else if (parsed?.personName) {
+          currentState.lastPerson = parsed.personName;
+          changed = true;
         }
         if (resolvedEntities.page?.value) {
           currentState.activeProject = {
@@ -338,6 +343,18 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
             source: "retrieval",
           };
           currentState.lastProject = resolvedEntities.page.value;
+          changed = true;
+        } else if (parsed?.docTitle) {
+          currentState.lastProject = parsed.docTitle;
+          changed = true;
+        }
+      } else {
+        if (parsed?.personName) {
+          currentState.lastPerson = parsed.personName;
+          changed = true;
+        }
+        if (parsed?.docTitle) {
+          currentState.lastProject = parsed.docTitle;
           changed = true;
         }
       }

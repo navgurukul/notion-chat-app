@@ -90,7 +90,7 @@ export function resolveDates(message: string): { year?: number; dateRange?: { da
   }
 
   // 4. "23-07-2026" or "23/07/2026" or "10/31/2025"
-  const pattern4 = /\b(\d{1,2})[-/](\d{1,2})[-/](20\d{2})\b/;
+  const pattern4 = /\b(\d{1,2})\s*[-/]\s*(\d{1,2})\s*[-/]\s*(20\d{2})\b/;
   const match4 = q.match(pattern4);
   if (match4) {
     const num1 = parseInt(match4[1], 10);
@@ -246,7 +246,7 @@ export async function extractRawEntities(message: string): Promise<{ personName?
       const match = message.match(pat);
       if (match?.[1]) {
         const candidate = match[1].trim();
-        if (!isNoiseTopic(candidate) && !/^(list|show|get|display|who|what|where|when|why|how|task|tasks|project|projects|person|name)$/i.test(candidate)) {
+        if (!isNoiseTopic(candidate) && !/^(the|a|an|my|your|his|her|their|our|its|this|that|these|those|all|any|some|few|many|each|every|no|get|list|show|display|find|who|what|where|when|why|how|which|whose|task|tasks|project|projects|person|name)$/i.test(candidate)) {
           personName = candidate;
           break;
         }

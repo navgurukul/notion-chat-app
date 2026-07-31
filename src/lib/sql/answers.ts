@@ -115,7 +115,7 @@ function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd
   }
 
   // 4. "23-07-2026" or "23/07/2026" or "10/31/2025"
-  const pattern4 = /\b(\d{1,2})[-/](\d{1,2})[-/](20\d{2})\b/;
+  const pattern4 = /\b(\d{1,2})\s*[-/]\s*(\d{1,2})\s*[-/]\s*(20\d{2})\b/;
   const match4 = q.match(pattern4);
   if (match4) {
     const num1 = parseInt(match4[1], 10);
@@ -1756,11 +1756,12 @@ async function handleMetadataQueryInner(
 
     if (!rows.length) {
       if (useGlobalDateQuery) {
-        return `No tasks or pages found${yearNote} in synced Notion.`;
+        const cleanedDateNote = dateNote.trim();
+        return cleanedDateNote ? `No tasks found ${cleanedDateNote}.` : "No tasks found in synced Notion.";
       }
       return (
-        `No tasks or pages with **${person}** as owner or assignee${yearNote} in synced Notion.\n\n` +
-        `_Check the exact name spelling in Notion (e.g. **Tamanna a**), or use **Sync changes** if assignments were updated recently._`
+        `No tasks found for **${person}**${yearNote}.\n\n` +
+        `_Please verify the assignee name in Notion._`
       );
     }
 
