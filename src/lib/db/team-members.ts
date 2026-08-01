@@ -53,12 +53,7 @@ function looksLikePersonName(value: string): boolean {
   if (/[@#:|{}()[\]"'$%&?*+=\/\\_]/.test(trimmed)) return false;
   if (/[.!?]$/.test(trimmed)) return false;
 
-  // Reject if every word starts lowercase (likely a command/slug/tech term)
   const words = trimmed.split(/\s+/);
-  if (words.length >= 2) {
-    const allLower = words.every(w => /^[a-z]/.test(w));
-    if (allLower) return false;
-  }
 
   // Reject sentence-like patterns with verbs
   const verbPattern = /\b(is|are|was|were|has|have|had|use|used|using|this|that|the|and|for|to)\b/i;
