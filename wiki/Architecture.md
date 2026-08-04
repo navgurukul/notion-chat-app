@@ -4,16 +4,15 @@ The Notion AI Chat Assistant uses a **RAG (Retrieval-Augmented Generation)** pat
 
 ## 🏗 High-Level Flow
 
-1. **User Input**: The user sends a question through the chat interface.
-2. **Context Retrieval**: The server-side API fetches the latest data from the specified Notion database using the Notion SDK.
-3. **Context Processing**: The extracted text is formatted and used as context for the AI model.
-4. **AI Generation**: The prompt (User Question + Notion Context) is sent to Gemini 1.5 Flash.
-5. **Response**: The AI generates a response based *only* on the provided context and sends it back to the UI.
+1. **Notion Ingestion & Chunking**: Workspace pages from Notion are stored and chunked into PostgreSQL with `pgvector` embeddings (`text-embedding-3-small`).
+2. **Intent Classification & Routing**: Incoming queries are parsed via regex rules or OpenAI intent classification (`gpt-4o-mini`).
+3. **Context Retrieval & SQL Execution**: The backend routes queries to direct SQL answers or vector-hybrid RAG retrieval.
+4. **AI Response Streaming**: Context and prompt are sent to OpenAI (`gpt-4o-mini`), which streams back the response to the user.
 
 ## 🛠 Key Tech Choices
 
-- **Next.js 15**: For both the frontend UI and the serverless API routes.
-- **Tailwind CSS**: For the premium, responsive design.
+- **Next.js**: For both the frontend UI and serverless API routes.
 - **NextAuth**: For secure Google OAuth handling.
-- **Notion SDK**: Official client for reliable data fetching.
-- **Google Generative AI SDK**: Direct access to Gemini models.
+- **Neon PostgreSQL + pgvector**: For SQL metadata storage and vector similarity retrieval.
+- **Notion SDK**: Official client for workspace sync.
+- **OpenAI SDK**: Sole AI provider for embeddings (`text-embedding-3-small`), intent classification, and chat streaming (`gpt-4o-mini`).

@@ -1,53 +1,60 @@
+import "@/lib/dns-hook";
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { retrieveNotionContext } from "@/lib/aws";
-import { getChatStream } from "@/lib/gemini";
+import { isSessionResponse, requireSession } from "@/lib/auth";
+import { handleChatPost } from "@/lib/chat/handler";
+import { checkRateLimit } from "@/lib/shared/rate-limit";
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession();
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const session = await requireSession();
+
+    if (isSessionResponse(session)) {
+      return session;
     }
 
-    const { message } = await req.json();
-    if (!message) {
+    const userKey = session.user?.email ?? "anonymous";
+
+    const rateLimitResult = checkRateLimit(userKey);
+
+    if (!rateLimitResult.allowed) {
       return NextResponse.json(
-        { error: "Message is required" },
-        { status: 400 }
+        {
+          error: `Too many requests. Please try again in ${rateLimitResult.retryAfterSeconds} seconds.`,
+          retryAfter: rateLimitResult.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(
+              rateLimitResult.retryAfterSeconds,
+            ),
+          },
+        },
       );
     }
 
-    // 🚀 Use AWS Bedrock Knowledge Base for scalable RAG
-    const notionContext = await retrieveNotionContext(message);
+    const body = await req.json();
 
-    console.log("🔍 Search Query:", message);
-    console.log("📄 Retrieved Context Length:", notionContext?.length || 0);
-    if (!notionContext) {
-      console.warn("⚠️ Warning: Notion context is empty! The AI might not have enough data to answer.");
-    }
-
-    const stream = await getChatStream(message, notionContext);
-
-    const encoder = new TextEncoder();
-    const readableStream = new ReadableStream({
-      async start(controller) {
-        for await (const chunk of stream) {
-          const text = chunk.text();
-          controller.enqueue(encoder.encode(text));
-        }
-        controller.close();
-      },
-    });
-
-    return new Response(readableStream, {
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-    });
+    return handleChatPost(session, body, req.signal);
   } catch (error) {
     console.error("Chat API Error:", error);
+
+    const { isOpenAIQuotaError, OPENAI_QUOTA_USER_MESSAGE } =
+      await import("@/lib/ai/provider-errors");
+
+    if (isOpenAIQuotaError(error)) {
+      return NextResponse.json(
+        {
+          error: OPENAI_QUOTA_USER_MESSAGE,
+          answer: OPENAI_QUOTA_USER_MESSAGE,
+        },
+        { status: 429 },
+      );
+    }
+
     return NextResponse.json(
       { error: "Failed to get response" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

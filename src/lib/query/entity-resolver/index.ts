@@ -1,0 +1,609 @@
+import { ChatHistoryItem } from "@/lib/ai/openai";
+import { resolvePerson, ResolutionQuality, ResolvedPerson } from "./person";
+import { resolveDocument, ResolvedDocument } from "./document";
+import type { ParsedQuery } from "@/lib/query/types";
+import { getPeopleDirectory } from "@/lib/db/team-members";
+import { isNoiseTopic } from "@/lib/query/normalize";
+
+export { ResolutionQuality };
+
+export type ResolvedEntity<T> = {
+  value: T;
+  quality: ResolutionQuality;
+};
+
+export type ResolvedEntities = {
+  person?: ResolvedEntity<string> & { ambiguous: boolean; candidates: string[]; confidence: number };
+  page?: ResolvedEntity<string> & { url: string | null };
+  comparePageB?: ResolvedEntity<string> & { url: string | null };
+  year?: ResolvedEntity<number>;
+  dateRange?: ResolvedEntity<{ dateStart: string | null; dateEnd: string | null }>;
+};
+
+// Simple timeout utility
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn(`[EntityResolver] Timeout after ${timeoutMs}ms, using fallback.`);
+      resolve(fallback);
+    }, timeoutMs);
+    promise.then((res) => {
+      clearTimeout(timer);
+      resolve(res);
+    }).catch(() => {
+      clearTimeout(timer);
+      resolve(fallback);
+    });
+  });
+}
+
+export function resolveDates(message: string): { year?: number; dateRange?: { dateStart: string | null; dateEnd: string | null } } {
+  const q = message.toLowerCase();
+  const now = new Date();
+
+  let dateStart: string | null = null;
+  let dateEnd: string | null = null;
+  let year: number | undefined;
+
+  // Support explicit dates: e.g. "23 july 2026", "july 23, 2026", "2026-07-23", "23-07-2026"
+  const months = "january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec";
+  const MONTH_MAP: Record<string, number> = {
+    january: 0, jan: 0, february: 1, feb: 1, march: 2, mar: 2, april: 3, apr: 3, may: 4,
+    june: 5, jun: 5, july: 6, jul: 6, august: 7, aug: 7, september: 8, sep: 8, sept: 8,
+    october: 9, oct: 9, november: 10, nov: 10, december: 11, dec: 11
+  };
+
+  // 1. "23 july 2026" or "23rd july 2026"
+  const pattern1 = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${months})\\s+(20\\d{2})\\b`, "i");
+  const match1 = q.match(pattern1);
+  if (match1) {
+    const day = parseInt(match1[1], 10);
+    const month = MONTH_MAP[match1[2]];
+    const yearVal = parseInt(match1[3], 10);
+    const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
+    return { year: yearVal, dateRange: { dateStart: start.toISOString(), dateEnd: end.toISOString() } };
+  }
+
+  // 2. "july 23, 2026" or "july 23 2026"
+  const pattern2 = new RegExp(`\\b(${months})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?\\s+(20\\d{2})\\b`, "i");
+  const match2 = q.match(pattern2);
+  if (match2) {
+    const month = MONTH_MAP[match2[1]];
+    const day = parseInt(match2[2], 10);
+    const yearVal = parseInt(match2[3], 10);
+    const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
+    return { year: yearVal, dateRange: { dateStart: start.toISOString(), dateEnd: end.toISOString() } };
+  }
+
+  // 3. "2026-07-23" or "2026/07/23"
+  const pattern3 = /\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/;
+  const match3 = q.match(pattern3);
+  if (match3) {
+    const yearVal = parseInt(match3[1], 10);
+    const month = parseInt(match3[2], 10) - 1;
+    const day = parseInt(match3[3], 10);
+    const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
+    return { year: yearVal, dateRange: { dateStart: start.toISOString(), dateEnd: end.toISOString() } };
+  }
+
+  // 4. "23-07-2026" or "23/07/2026" or "10/31/2025"
+  const pattern4 = /\b(\d{1,2})\s*[-/]\s*(\d{1,2})\s*[-/]\s*(20\d{2})\b/;
+  const match4 = q.match(pattern4);
+  if (match4) {
+    const num1 = parseInt(match4[1], 10);
+    const num2 = parseInt(match4[2], 10);
+    const yearVal = parseInt(match4[3], 10);
+    let day = num1;
+    let month = num2 - 1;
+    if (num2 > 12) {
+      day = num2;
+      month = num1 - 1;
+    } else if (num1 <= 12 && num2 <= 12) {
+      day = num2;
+      month = num1 - 1;
+    }
+    const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
+    return { year: yearVal, dateRange: { dateStart: start.toISOString(), dateEnd: end.toISOString() } };
+  }
+
+  if (/\btoday\b/i.test(q) || /\bdaily\b/i.test(q)) {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    dateStart = start.toISOString();
+    dateEnd = end.toISOString();
+  } else if (/\byesterday\b/i.test(q)) {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - 1);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    dateStart = start.toISOString();
+    dateEnd = end.toISOString();
+  } else if (/\bthis\s+week\b/i.test(q) || /\bweekly\b/i.test(q)) {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const day = start.getDay();
+    const diff = start.getDate() - day + (day === 0 ? -6 : 1);
+    start.setDate(diff);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 7);
+    dateStart = start.toISOString();
+    dateEnd = end.toISOString();
+  } else if (/\blast\s+week\b/i.test(q)) {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const day = start.getDay();
+    const diff = start.getDate() - day + (day === 0 ? -6 : 1) - 7;
+    start.setDate(diff);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 7);
+    dateStart = start.toISOString();
+    dateEnd = end.toISOString();
+  } else if (/\bthis\s+month\b/i.test(q) || /\bmonthly\b/i.test(q)) {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+    dateStart = start.toISOString();
+    dateEnd = end.toISOString();
+  } else if (/\blast\s+month\b/i.test(q)) {
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    dateStart = start.toISOString();
+    dateEnd = end.toISOString();
+  } else if (/\bthis\s+year\b/i.test(q)) {
+    const start = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear() + 1, 0, 1, 0, 0, 0, 0);
+    dateStart = start.toISOString();
+    dateEnd = end.toISOString();
+  } else if (/\blast\s+year\b/i.test(q)) {
+    const start = new Date(now.getFullYear() - 1, 0, 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+    dateStart = start.toISOString();
+    dateEnd = end.toISOString();
+  }
+
+  const explicitYearMatch = q.match(/\b(20\d{2})\b/);
+  if (explicitYearMatch) {
+    year = Number(explicitYearMatch[1]);
+    if (!dateStart) {
+      const start = new Date(year, 0, 1, 0, 0, 0, 0);
+      const end = new Date(year + 1, 0, 1, 0, 0, 0, 0);
+      dateStart = start.toISOString();
+      dateEnd = end.toISOString();
+    }
+  }
+
+  if (dateStart || year) {
+    return {
+      year,
+      dateRange: dateStart ? { dateStart, dateEnd } : undefined
+    };
+  }
+  return {};
+}
+
+export function resolvePronouns(
+  message: string,
+  sessionName?: string,
+  lastPerson?: string
+): { message: string; resolvedPerson?: string; resolvedQuality: ResolutionQuality } {
+  let text = message;
+  let resolvedPerson: string | undefined;
+  let resolvedQuality = ResolutionQuality.NONE;
+
+  // First-person pronouns
+  const firstPersonRegex = /\b(my|me|myself|i)\b/i;
+  if (sessionName && firstPersonRegex.test(text)) {
+    resolvedPerson = sessionName;
+    resolvedQuality = ResolutionQuality.EXACT;
+    text = text.replace(/\b(my|me|myself|i)\b/gi, sessionName);
+  }
+
+  // Third-person pronouns
+  const thirdPersonRegex = /\b(he|him|his|she|her|hers|they|them|their)\b/i;
+  if (lastPerson && thirdPersonRegex.test(text)) {
+    resolvedPerson = lastPerson;
+    resolvedQuality = ResolutionQuality.EXACT;
+    text = text.replace(/\b(he|him|his|she|her|hers|they|them|their)\b/gi, lastPerson);
+  }
+
+  return { message: text, resolvedPerson, resolvedQuality };
+}
+
+export async function extractRawEntities(message: string): Promise<{ personName?: string; docTitle?: string; compareTitleB?: string }> {
+  const words = message.trim().split(/\s+/);
+  
+  let personName: string | undefined;
+  let docTitle: string | undefined;
+  let compareTitleB: string | undefined;
+
+  // 1. Case-insensitive whitelisted matching from the people directory
+  const dir = await getPeopleDirectory();
+  const sortedDir = [...dir].sort((a, b) => b.normalized.length - a.normalized.length);
+  
+  const lowerMessage = message.toLowerCase();
+  for (const person of sortedDir) {
+    const escaped = person.normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(`\\b${escaped}\\b`, "i");
+    if (regex.test(lowerMessage)) {
+      personName = person.name;
+      break;
+    }
+  }
+
+  if (!personName) {
+    const patterns = [
+      /\b(?:assigned\s+to|tasks\s+of|by|for)\s+([a-zA-Z][a-zA-Z'.-]*(?:\s+[a-zA-Z][a-zA-Z'.-]*){0,2})\b/i,
+      /\b([a-zA-Z][a-zA-Z'.-]*)\s*'s\s+tasks?\b/i,
+      /\b([a-zA-Z][a-zA-Z'.-]*)\s+tasks?\b/i,
+    ];
+    for (const pat of patterns) {
+      const match = message.match(pat);
+      if (match?.[1]) {
+        const candidate = match[1].trim();
+        if (!isNoiseTopic(candidate) && !/^(the|a|an|my|your|his|her|their|our|its|this|that|these|those|all|any|some|few|many|each|every|no|get|list|show|display|find|who|what|where|when|why|how|which|whose|task|tasks|project|projects|person|name)$/i.test(candidate)) {
+          personName = candidate;
+          break;
+        }
+      }
+    }
+  }
+
+  const docMatch = message.match(/\b(?:about|status\s+of|on|details\s+of|project)\s+([a-zA-Z][a-zA-Z0-9]+(?:\s+[a-zA-Z0-9]+)?)\b/i);
+  if (docMatch?.[1]) {
+    const candidateDoc = docMatch[1].trim();
+    if (!/^\d{4}$/.test(candidateDoc)) {
+      docTitle = candidateDoc;
+    }
+  }
+
+  return { personName, docTitle, compareTitleB };
+}
+
+/**
+ * Check if the current message actually NEEDS entity context from history.
+ * Only returns true when the query has pronouns, or is a short contextual follow-up
+ * that clearly refers to a previously mentioned entity without explicitly naming it.
+ * This prevents incorrectly injecting `lastPerson`/`lastProject` into queries
+ * that are standalone and unrelated to the previous conversation.
+ */
+export function isFollowUpNeedingContext(message: string, history: ChatHistoryItem[]): boolean {
+  if (!history || history.length === 0) return false;
+
+  const lower = message.trim().toLowerCase();
+
+  // Has explicit pronouns referring to people or things
+  if (/\b(he|him|his|she|her|hers|they|them|their|it|its|this|that)\b/i.test(lower)) {
+    return true;
+  }
+
+  // Short queries that clearly continue previous topic (2-5 words with follow-up indicators)
+  const words = lower.split(/\s+/).filter(Boolean);
+  if (words.length >= 2 && words.length <= 5) {
+    const followUpPatterns = [
+      /^(and|but|or|also|then|so)\b/,
+      /\b(about\s+this|about\s+that|for\s+it|for\s+this|for\s+that)\b/,
+      /\b(what\s+about|how\s+about|tell\s+me\s+more|show\s+details|more\s+details|more\s+info)\b/,
+    ];
+    for (const pattern of followUpPatterns) {
+      if (pattern.test(lower)) return true;
+    }
+  }
+
+  return false;
+}
+
+export async function resolveAllEntities(
+  message: string,
+  history: ChatHistoryItem[],
+  sessionName?: string,
+  lastEntities?: { lastPerson?: string; lastProject?: string }
+): Promise<{ message: string; entities: ResolvedEntities }> {
+  const startTime = performance.now();
+  const TIMEOUT_MS = 50;
+
+  const lastPerson = lastEntities?.lastPerson;
+  const { message: pronounResolvedMessage, resolvedPerson, resolvedQuality } = resolvePronouns(message, sessionName, lastPerson);
+
+  const raw = await extractRawEntities(pronounResolvedMessage);
+  
+  let finalPerson = resolvedPerson || raw.personName;
+  const entities: ResolvedEntities = {};
+
+  if (finalPerson) {
+    const pPromise = resolvePerson(finalPerson).then((p) => {
+      if (p.value) {
+        entities.person = {
+          value: p.value,
+          quality: p.quality,
+          confidence: p.confidence,
+          ambiguous: p.ambiguous,
+          candidates: p.candidates
+        };
+      } else if (p.ambiguous) {
+        entities.person = {
+          value: "",
+          quality: p.quality,
+          confidence: p.confidence,
+          ambiguous: p.ambiguous,
+          candidates: p.candidates
+        };
+      }
+    });
+    await withTimeout(pPromise, TIMEOUT_MS, null);
+  }
+
+  // Only fall back to lastEntities.lastProject if the current message is a follow-up needing context
+  let rawDoc = raw.docTitle;
+  if (!rawDoc && lastEntities?.lastProject && isFollowUpNeedingContext(message, history)) {
+    rawDoc = lastEntities.lastProject;
+  }
+  if (rawDoc) {
+    const dPromise = resolveDocument(rawDoc).then((d) => {
+      if (d.value) {
+        entities.page = {
+          value: d.value,
+          url: d.url,
+          quality: d.quality
+        };
+      }
+    });
+    await withTimeout(dPromise, TIMEOUT_MS, null);
+  }
+
+  const dateInfo = resolveDates(pronounResolvedMessage);
+  if (dateInfo.year) {
+    entities.year = { value: dateInfo.year, quality: ResolutionQuality.EXACT };
+  }
+  if (dateInfo.dateRange) {
+    entities.dateRange = { value: dateInfo.dateRange, quality: ResolutionQuality.EXACT };
+  }
+
+  return {
+    message: pronounResolvedMessage,
+    entities
+  };
+}
+
+export async function lazyResolveSqlEntities(
+  parsed: ParsedQuery,
+  history: ChatHistoryItem[] = [],
+  sessionName?: string,
+  lastEntities?: { lastPerson?: string; lastProject?: string }
+): Promise<ParsedQuery> {
+  const finalParsed = { ...parsed };
+  const rawMessage = parsed.raw || "";
+  const needsFollowUpContext = isFollowUpNeedingContext(rawMessage, history);
+
+  // 1. Resolve Person for SQL intents that need a person
+  const needsPerson = [
+    "assigned_list",
+    "worked_on_list",
+    "owner_list",
+    "activity_summary",
+    "person_project_membership",
+    "assignee_project_check"
+  ].includes(parsed.kind);
+  if (needsPerson) {
+    let rawPerson = parsed.personName;
+    if (!rawPerson) {
+      const extracted = await extractRawEntities(rawMessage);
+      rawPerson = extracted.personName;
+    }
+    if (!rawPerson) {
+      const pronounInfo = resolvePronouns(rawMessage, sessionName, lastEntities?.lastPerson);
+      if (pronounInfo.resolvedPerson) {
+        rawPerson = pronounInfo.resolvedPerson;
+      }
+    }
+    if (!rawPerson && sessionName && /\b(me|my|myself|i)\b/i.test(rawMessage)) {
+      rawPerson = sessionName;
+    }
+    // GUARDRAIL: Only fall back to lastEntities.lastPerson if the current message is a follow-up needing context
+    if (!rawPerson && needsFollowUpContext && lastEntities?.lastPerson) {
+      rawPerson = lastEntities.lastPerson;
+    }
+
+    if (rawPerson) {
+      const resolved = await resolvePerson(rawPerson);
+      if (resolved.value) {
+        finalParsed.personName = resolved.value;
+        finalParsed.resolvedEntities = {
+          ...finalParsed.resolvedEntities,
+          person: {
+            value: resolved.value,
+            quality: resolved.quality,
+            confidence: resolved.confidence,
+            ambiguous: resolved.ambiguous,
+            candidates: resolved.candidates
+          }
+        };
+      } else if (resolved.ambiguous) {
+        finalParsed.personName = "";
+        finalParsed.resolvedEntities = {
+          ...finalParsed.resolvedEntities,
+          person: {
+            value: "",
+            quality: resolved.quality,
+            confidence: resolved.confidence,
+            ambiguous: resolved.ambiguous,
+            candidates: resolved.candidates
+          }
+        };
+      } else {
+        finalParsed.personName = rawPerson;
+      }
+    }
+  }
+
+  // 2. Resolve Document for SQL intents that need a document
+  const needsDoc = [
+    "owner_of",
+    "created_by_of",
+    "status_of",
+    "project_eta",
+    "project_manager_of",
+    "assigned_list",
+    "worked_on_list",
+    "activity_summary",
+    "team_activity",
+    "team_roster",
+    "blocker_list",
+    "person_project_membership",
+    "page_about",
+    "project_summary",
+    "risks_for",
+    "assignee_project_check"
+  ].includes(parsed.kind);
+  if (needsDoc) {
+    let rawDoc = parsed.docTitle;
+    if (!rawDoc) {
+      const extracted = await extractRawEntities(rawMessage);
+      rawDoc = extracted.docTitle;
+    }
+    // GUARDRAIL: Only fall back to lastEntities.lastProject if the current message is a follow-up needing context
+    if (!rawDoc && needsFollowUpContext && lastEntities?.lastProject) {
+      rawDoc = lastEntities.lastProject;
+    }
+    if (rawDoc) {
+      const resolved = await resolveDocument(rawDoc);
+      if (resolved.value) {
+        finalParsed.docTitle = resolved.value;
+        finalParsed.resolvedEntities = {
+          ...finalParsed.resolvedEntities,
+          page: {
+            value: resolved.value,
+            url: resolved.url,
+            quality: resolved.quality
+          }
+        };
+      }
+    }
+  }
+
+  // 3. Resolve Date/Year
+  const dateInfo = resolveDates(rawMessage);
+  if (dateInfo.year) {
+    finalParsed.year = dateInfo.year;
+    finalParsed.resolvedEntities = {
+      ...finalParsed.resolvedEntities,
+      year: { value: dateInfo.year, quality: ResolutionQuality.EXACT }
+    };
+  }
+  if (dateInfo.dateRange) {
+    finalParsed.dateRange = dateInfo.dateRange;
+    finalParsed.resolvedEntities = {
+      ...finalParsed.resolvedEntities,
+      dateRange: { value: dateInfo.dateRange, quality: ResolutionQuality.EXACT }
+    };
+  }
+
+  return finalParsed;
+}
+
+export async function lazyResolveRagEntities(
+  parsed: ParsedQuery,
+  history: ChatHistoryItem[] = [],
+  sessionName?: string,
+  lastEntities?: { lastPerson?: string; lastProject?: string }
+): Promise<ParsedQuery> {
+  const finalParsed = { ...parsed };
+  const rawMessage = parsed.raw || "";
+  const needsFollowUpContext = isFollowUpNeedingContext(rawMessage, history);
+
+  // 1. Resolve Person
+  let rawPerson = parsed.personName;
+  if (!rawPerson) {
+    const extracted = await extractRawEntities(rawMessage);
+    rawPerson = extracted.personName;
+  }
+  if (!rawPerson) {
+    const pronounInfo = resolvePronouns(rawMessage, sessionName, lastEntities?.lastPerson);
+    if (pronounInfo.resolvedPerson) {
+      rawPerson = pronounInfo.resolvedPerson;
+    }
+  }
+  if (!rawPerson && sessionName && /\b(me|my|myself|i)\b/i.test(rawMessage)) {
+    rawPerson = sessionName;
+  }
+  // GUARDRAIL: Only fall back to lastEntities.lastPerson if the current message is a follow-up needing context
+  if (!rawPerson && needsFollowUpContext && lastEntities?.lastPerson) {
+    rawPerson = lastEntities.lastPerson;
+  }
+
+  if (rawPerson) {
+    const resolved = await resolvePerson(rawPerson);
+    if (resolved.value) {
+      finalParsed.personName = resolved.value;
+      finalParsed.resolvedEntities = {
+        ...finalParsed.resolvedEntities,
+        person: {
+          value: resolved.value,
+          quality: resolved.quality,
+          confidence: resolved.confidence,
+          ambiguous: resolved.ambiguous,
+          candidates: resolved.candidates
+        }
+      };
+    } else if (resolved.ambiguous) {
+      finalParsed.personName = "";
+      finalParsed.resolvedEntities = {
+        ...finalParsed.resolvedEntities,
+        person: {
+          value: "",
+          quality: resolved.quality,
+          confidence: resolved.confidence,
+          ambiguous: resolved.ambiguous,
+          candidates: resolved.candidates
+        }
+      };
+    } else {
+      finalParsed.personName = rawPerson;
+    }
+  }
+
+  // 2. Resolve Document
+  const needsDoc = ["page_about", "project_summary", "risks_for", "onboarding_tasks"].includes(parsed.kind);
+  if (needsDoc) {
+    let rawDoc = parsed.docTitle;
+    // GUARDRAIL: Only fall back to lastEntities.lastProject if the current message is a follow-up needing context
+    if (!rawDoc && needsFollowUpContext && lastEntities?.lastProject) {
+      rawDoc = lastEntities.lastProject;
+    }
+    if (!rawDoc) {
+      const extracted = await extractRawEntities(rawMessage);
+      rawDoc = extracted.docTitle;
+    }
+    if (rawDoc) {
+      const resolved = await resolveDocument(rawDoc);
+      if (resolved.value) {
+        finalParsed.docTitle = resolved.value;
+        finalParsed.resolvedEntities = {
+          ...finalParsed.resolvedEntities,
+          page: {
+            value: resolved.value,
+            url: resolved.url,
+            quality: resolved.quality
+          }
+        };
+      }
+    }
+  }
+
+  // 3. Resolve Date/Year
+  const dateInfo = resolveDates(rawMessage);
+  if (dateInfo.year) {
+    finalParsed.year = dateInfo.year;
+    finalParsed.resolvedEntities = {
+      ...finalParsed.resolvedEntities,
+      year: { value: dateInfo.year, quality: ResolutionQuality.EXACT }
+    };
+  }
+
+  return finalParsed;
+}

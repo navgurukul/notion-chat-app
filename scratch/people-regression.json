@@ -1,0 +1,87 @@
+[
+  {
+    "question": "List all developers.",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "List all developers!",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "Show all developers.",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "List all team members.",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "Who works where?",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "Who works on what?",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "Who are all developers?",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "how many total developers are working in navgurukul?",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "Which project has the most developers?",
+    "expectedIntent": "project_most_devs"
+  },
+  {
+    "question": "List all developers",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "Show all people",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "List every developer",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "List developers",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "Who all are developers?",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "Developers?",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "Show engineers",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "List engineers",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "Who is in engineering?",
+    "expectedIntent": "unknown"
+  },
+  {
+    "question": "Who is in tech?",
+    "expectedIntent": "unknown"
+  },
+  {
+    "question": "Software engineers",
+    "expectedIntent": "unknown"
+  },
+  {
+    "question": "How many astronauts work here?",
+    "expectedIntent": "unknown"
+  }
+]
+
