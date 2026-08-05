@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSessionResponse, requireSession } from "@/lib/auth";
+import { query } from "@/lib/db";
 import {
   addChatMessage,
   CHAT_HISTORY_LIMIT,
@@ -9,6 +10,7 @@ import {
   getOrCreateUser,
   listChatMessages,
 } from "@/lib/chat/store";
+import { sqlMetadataCache } from "@/lib/chat/cache";
 
 type RouteContext = {
   params: Promise<{ sessionId: string }>;
@@ -44,6 +46,11 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 
 export async function POST(req: NextRequest, context: RouteContext) {
   try {
+    // Clear the SQL metadata cache for every message request in development mode to ensure instant updates
+    if (process.env.NODE_ENV === "development") {
+      sqlMetadataCache.clear();
+    }
+
     const owned = await requireOwnedSession(context);
     if ("error" in owned) return owned.error;
 
@@ -69,7 +76,20 @@ export async function DELETE(req: NextRequest, context: RouteContext) {
     if ("error" in owned) return owned.error;
 
     const { searchParams } = new URL(req.url);
-    const messageId = searchParams.get("messageId");
+    let messageId = searchParams.get("messageId");
+
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (messageId === "undefined" || !messageId || !uuidRegex.test(messageId)) {
+      const lastMsgRows = await query<{ id: string }>(
+        "SELECT id FROM chat_messages WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1",
+        [owned.sessionId]
+      );
+      if (lastMsgRows.length > 0) {
+        messageId = lastMsgRows[0].id;
+      } else {
+        messageId = null;
+      }
+    }
 
     if (messageId) {
       await deleteMessagesFrom(owned.sessionId, messageId);

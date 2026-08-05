@@ -254,6 +254,8 @@ export type ConversationState = {
   activePerson?: ActiveEntity;
   lastProject?: string;
   lastPerson?: string;
+  lastMale?: string;
+  lastFemale?: string;
   lastIntent?: string;
   lastYear?: number;
   lastPage?: string;

@@ -15,6 +15,7 @@ import {
 } from "@/lib/chat/link-lookup";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { resolveQuery } from "@/lib/query/resolve-query";
+import { getGenderOfPerson } from "@/lib/query/entity-resolver/person";
 import { analyzeUserEmotion } from "@/lib/chat/emotion";
 import type { ParsedQuery } from "@/lib/query/types";
 import { lookupPageLinkByTitle } from "@/lib/sql/answers";
@@ -276,6 +277,8 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
     // merge DB state
     let dbStateProject: string | undefined;
     let dbStatePerson: string | undefined;
+    let dbStateLastMale: string | undefined;
+    let dbStateLastFemale: string | undefined;
     if (attachedSessionId) {
       const dbState = await getSessionState(attachedSessionId);
       if (dbState) {
@@ -283,12 +286,16 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
         if (dbState.activePerson?.name) dbStatePerson = dbState.activePerson.name;
         if (dbState.lastPerson) dbStatePerson = dbState.lastPerson;
         if (dbState.lastProject) dbStateProject = dbState.lastProject;
+        if (dbState.lastMale) dbStateLastMale = dbState.lastMale;
+        if (dbState.lastFemale) dbStateLastFemale = dbState.lastFemale;
       }
     }
 
     const mergedEntities = {
       lastProject: dbStateProject || lastEntities.lastProject,
       lastPerson: dbStatePerson || lastEntities.lastPerson,
+      lastMale: dbStateLastMale,
+      lastFemale: dbStateLastFemale,
     };
 
     // correction
@@ -330,9 +337,21 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
             source: "retrieval",
           };
           currentState.lastPerson = resolvedEntities.person.value;
+          const gender = await getGenderOfPerson(resolvedEntities.person.value);
+          if (gender === "female") {
+            currentState.lastFemale = resolvedEntities.person.value;
+          } else {
+            currentState.lastMale = resolvedEntities.person.value;
+          }
           changed = true;
         } else if (parsed?.personName) {
           currentState.lastPerson = parsed.personName;
+          const gender = await getGenderOfPerson(parsed.personName);
+          if (gender === "female") {
+            currentState.lastFemale = parsed.personName;
+          } else {
+            currentState.lastMale = parsed.personName;
+          }
           changed = true;
         }
         if (resolvedEntities.page?.value) {
@@ -351,6 +370,12 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       } else {
         if (parsed?.personName) {
           currentState.lastPerson = parsed.personName;
+          const gender = await getGenderOfPerson(parsed.personName);
+          if (gender === "female") {
+            currentState.lastFemale = parsed.personName;
+          } else {
+            currentState.lastMale = parsed.personName;
+          }
           changed = true;
         }
         if (parsed?.docTitle) {
@@ -385,6 +410,8 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       sessionId: attachedSessionId,
       lastProject: mergedEntities.lastProject,
       lastPerson: mergedEntities.lastPerson,
+      lastMale: mergedEntities.lastMale,
+      lastFemale: mergedEntities.lastFemale,
       sessionName: session.user?.name || undefined,
       reformulatedQuery: parsed.reformulatedQuery,
       telemetry,

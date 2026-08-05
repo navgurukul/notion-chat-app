@@ -77,7 +77,7 @@ export async function tryRagAnswer(
     parsed,
     ctx.history,
     ctx.sessionName,
-    { lastPerson: ctx.lastPerson, lastProject: ctx.lastProject }
+    { lastPerson: ctx.lastPerson, lastProject: ctx.lastProject, lastMale: ctx.lastMale, lastFemale: ctx.lastFemale }
   );
   if (ctx.telemetry) {
     ctx.telemetry.endStep("entity_resolve_ms");

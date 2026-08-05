@@ -123,7 +123,7 @@ function cleanPersonName(value: string | null) {
       .replace(/^(?:did|does|do|is|are|was|were|has|have|had)\s+/i, ""),
   ).trim();
   if (!cleaned) return null;
-  if (/^(what|which|who|when|where|why|how|is|was|are|were|task|tasks|project|projects|work|manager|lead|only|one|there|here|any|some|me|my|he|him|she|her|they|them|its|their|someone|anyone|no\s+one|nobody|everyone|everybody)$/i.test(cleaned)) {
+  if (/^(what|which|who|when|where|why|how|is|was|are|were|task|tasks|project|projects|work|manager|lead|only|one|there|here|any|some|someone|anyone|no\s+one|nobody|everyone|everybody)$/i.test(cleaned)) {
     return null;
   }
   return normalizePersonNameForMatch(cleaned);
