@@ -52,6 +52,8 @@ export type PipelineContext = {
   reformulatedQuery?: string;
   lastProject?: string;
   lastPerson?: string;
+  lastMale?: string;
+  lastFemale?: string;
   sessionName?: string;
   trace?: PipelineTrace;
   telemetry?: any;

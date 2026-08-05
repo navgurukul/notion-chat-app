@@ -240,7 +240,7 @@ async function runColumnMigrations(
   }
 }
 
-const CURRENT_SCHEMA_HASH = "v4_automatic_schema_recovery_guard";
+const CURRENT_SCHEMA_HASH = "v5_dynamic_gender_cache";
 
 export async function ensureSchema() {
   if (schemaReady) return;
@@ -385,6 +385,17 @@ export async function ensureSchema() {
       // FIX (Schema): Run chunk column migrations for existing tables
       // that were created before heading_path/char_count/token_count were added.
       await runColumnMigrations(client, NOTION_CHUNK_COLUMN_MIGRATIONS);
+
+      await safeCreateTable(
+        client,
+        `
+        CREATE TABLE IF NOT EXISTS name_genders (
+          name TEXT PRIMARY KEY,
+          gender TEXT NOT NULL,
+          updated_at TIMESTAMP DEFAULT NOW()
+        );
+      `,
+      );
 
       await safeCreateTable(
         client,

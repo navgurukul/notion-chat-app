@@ -15,6 +15,7 @@ import {
   reformulateSearchQuery,
 } from "@/lib/chat/query-reformulation";
 import { isFollowUpNeedingContext } from "./entity-resolver";
+import { getGenderOfPerson } from "./entity-resolver/person";
 
 const INTENT_KIND_HINTS: Record<string, Set<ParsedQuery["kind"]>> = {
   PERSON_ACTIVITY: new Set([
@@ -171,7 +172,7 @@ export async function resolveQuery(
   question: string,
   history: ChatHistoryItem[] = [],
   sessionName?: string,
-  lastEntities?: { lastPerson?: string; lastProject?: string },
+  lastEntities?: { lastPerson?: string; lastProject?: string; lastMale?: string; lastFemale?: string },
 ): Promise<ParsedQuery> {
   // 1. Fast-path regex checks (greetings/thanks/bye/link)
   const fastPath = tryFastPathRegexRoute(question);
@@ -233,7 +234,8 @@ export async function resolveQuery(
     const reformulated = await reformulateSearchQuery(question, history);
     processedQuestion = reformulated.searchQuery;
     reformulatedQueryText = reformulated.searchQuery;
-    if (reformulated.method === "llm") {
+    const hasPersonPronoun = /\b(he|him|his|she|her|hers|they|them|their)\b/i.test(question);
+    if (reformulated.method === "llm" && !hasPersonPronoun) {
       rulesInputQuestion = reformulated.searchQuery;
     }
   }
@@ -269,19 +271,38 @@ export async function resolveQuery(
     if (!docTitle && refRules.docTitle) {
       docTitle = refRules.docTitle;
     }
-    if (!personName && refRules.personName) {
+    const originalHasPronoun = /\b(he|him|his|she|her|hers|they|them|their|me|my|myself|i)\b/i.test(question);
+    if (!personName && refRules.personName && !originalHasPronoun) {
       personName = refRules.personName;
     }
   }
 
-  if (!personName && lastEntities?.lastPerson && isFollowUpNeedingContext(question, history)) {
-    personName = lastEntities.lastPerson;
+  if (personName && /^(he|him|his|she|her|hers|they|them|their|me|my|myself|i)$/i.test(personName)) {
+    personName = undefined;
+  }
+
+  if (!personName && isFollowUpNeedingContext(question, history)) {
+    const hasMalePronoun = /\b(he|him|his)\b/i.test(question);
+    const hasFemalePronoun = /\b(she|her|hers)\b/i.test(question);
+    if (hasMalePronoun) {
+      personName = lastEntities?.lastMale;
+      if (!personName && lastEntities?.lastPerson && (await getGenderOfPerson(lastEntities.lastPerson)) !== "female") {
+        personName = lastEntities.lastPerson;
+      }
+    } else if (hasFemalePronoun) {
+      personName = lastEntities?.lastFemale;
+      if (!personName && lastEntities?.lastPerson && (await getGenderOfPerson(lastEntities.lastPerson)) !== "male") {
+        personName = lastEntities.lastPerson;
+      }
+    } else {
+      personName = lastEntities?.lastPerson;
+    }
   }
 
   const finalParsed: ParsedQuery = {
     ...parsed,
     ...(docTitle ? { docTitle } : {}),
-    personName: personName || parsed.personName || (lastEntities?.lastPerson && isFollowUpNeedingContext(question, history) ? lastEntities.lastPerson : undefined),
+    personName: personName || parsed.personName,
     raw: question,
     reformulatedQuery: reformulatedQueryText,
   };
