@@ -273,14 +273,14 @@ export async function extractRawEntities(message: string): Promise<{ personName?
  * that are standalone and unrelated to the previous conversation.
  */
 export function isFollowUpNeedingContext(message: string, history: ChatHistoryItem[]): boolean {
-  if (!history || history.length === 0) return false;
-
   const lower = message.trim().toLowerCase();
 
   // Has explicit pronouns referring to people or things
-  if (/\b(he|him|his|she|her|hers|they|them|their|it|its|this|that)\b/i.test(lower)) {
+  if (/\b(he|him|his|she|her|hers|they|them|their|it|its|this|that|me|my|i)\b/i.test(lower)) {
     return true;
   }
+
+  if (!history || history.length === 0) return false;
 
   // Short queries that clearly continue previous topic (2-5 words with follow-up indicators)
   const words = lower.split(/\s+/).filter(Boolean);
@@ -374,7 +374,7 @@ export async function lazyResolveSqlEntities(
   parsed: ParsedQuery,
   history: ChatHistoryItem[] = [],
   sessionName?: string,
-  lastEntities?: { lastPerson?: string; lastProject?: string }
+  lastEntities?: { lastPerson?: string; lastProject?: string; lastMale?: string; lastFemale?: string }
 ): Promise<ParsedQuery> {
   const finalParsed = { ...parsed };
   const rawMessage = parsed.raw || "";
@@ -466,8 +466,9 @@ export async function lazyResolveSqlEntities(
       const extracted = await extractRawEntities(rawMessage);
       rawDoc = extracted.docTitle;
     }
-    // GUARDRAIL: Only fall back to lastEntities.lastProject if the current message is a follow-up needing context
-    if (!rawDoc && needsFollowUpContext && lastEntities?.lastProject) {
+    // GUARDRAIL: Only fall back to lastEntities.lastProject if the current message is a follow-up needing project context
+    const hasProjectPronoun = /\b(it|its|this|that)\b/i.test(rawMessage) || (needsFollowUpContext && !/\b(he|him|his|she|her|hers|they|them|their|me|my|i)\b/i.test(rawMessage));
+    if (!rawDoc && hasProjectPronoun && lastEntities?.lastProject) {
       rawDoc = lastEntities.lastProject;
     }
     if (rawDoc) {
@@ -510,7 +511,7 @@ export async function lazyResolveRagEntities(
   parsed: ParsedQuery,
   history: ChatHistoryItem[] = [],
   sessionName?: string,
-  lastEntities?: { lastPerson?: string; lastProject?: string }
+  lastEntities?: { lastPerson?: string; lastProject?: string; lastMale?: string; lastFemale?: string }
 ): Promise<ParsedQuery> {
   const finalParsed = { ...parsed };
   const rawMessage = parsed.raw || "";
@@ -571,8 +572,9 @@ export async function lazyResolveRagEntities(
   const needsDoc = ["page_about", "project_summary", "risks_for", "onboarding_tasks"].includes(parsed.kind);
   if (needsDoc) {
     let rawDoc = parsed.docTitle;
-    // GUARDRAIL: Only fall back to lastEntities.lastProject if the current message is a follow-up needing context
-    if (!rawDoc && needsFollowUpContext && lastEntities?.lastProject) {
+    // GUARDRAIL: Only fall back to lastEntities.lastProject if the current message is a follow-up needing project context
+    const hasProjectPronoun = /\b(it|its|this|that)\b/i.test(rawMessage) || (needsFollowUpContext && !/\b(he|him|his|she|her|hers|they|them|their|me|my|i)\b/i.test(rawMessage));
+    if (!rawDoc && hasProjectPronoun && lastEntities?.lastProject) {
       rawDoc = lastEntities.lastProject;
     }
     if (!rawDoc) {
