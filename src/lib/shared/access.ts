@@ -1,4 +1,6 @@
-export const KNOWLEDGE_BASE_MANAGER_EMAIL = "tamanna@navgurukul.org";
+export const KNOWLEDGE_BASE_MANAGER_EMAILS = new Set([
+  "laxmiyadav21@navgurukul.org",
+]);
 
 export type SessionEmailLike = {
   user?: {
@@ -11,5 +13,5 @@ export function normalizeEmail(email?: string | null) {
 }
 
 export function hasKnowledgeBaseAccess(session: SessionEmailLike) {
-  return normalizeEmail(session?.user?.email) === KNOWLEDGE_BASE_MANAGER_EMAIL;
+  return KNOWLEDGE_BASE_MANAGER_EMAILS.has(normalizeEmail(session?.user?.email));
 }

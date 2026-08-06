@@ -61,6 +61,22 @@ function validateMessage(raw: unknown) {
   return raw.trim().slice(0, MAX_MESSAGE_LENGTH);
 }
 
+function getSessionDisplayName(session: Session) {
+  const name = session.user?.name?.trim();
+  if (name) return name;
+
+  const email = session.user?.email?.trim().toLowerCase();
+  if (!email) return undefined;
+
+  const localPart = email.split("@")[0] ?? "";
+  if (!localPart) return undefined;
+
+  return localPart
+    .replace(/[._-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .trim();
+}
+
 async function attachSession(
   session: Session,
   rawSessionId: unknown,
@@ -187,6 +203,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
 
   const rawMessage = validateMessage(body.message);
   const history = sanitizeChatHistory(body.history);
+  const sessionDisplayName = getSessionDisplayName(session);
 
   const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   const sessionId = typeof body.sessionId === "string" && body.sessionId.trim() ? body.sessionId.trim() : null;
@@ -196,7 +213,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
 
   try {
     // 1. Fast-path regex routing (smalltalk only)
-    const fastPath = tryFastPathRegexRoute(rawMessage, session.user?.name || undefined);
+    const fastPath = tryFastPathRegexRoute(rawMessage, sessionDisplayName || undefined);
     if (fastPath) {
       telemetry.setExecutionPath("Smalltalk/Fastpath");
       telemetry.setIntent("smalltalk", 1.0, "regex");
@@ -236,6 +253,22 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
 
       response = NextResponse.json({ answer: fastPath.answer, emotion: "neutral", sessionId });
       return response;
+    }
+
+    const identityQuestion = /^(?:who\s+(?:am\s+i|is\s+me)|what\s+is\s+my\s+name|identify\s+me|who\s+do\s+you\s+think\s+i\s+am)[?.!\s]*$/i;
+    if (identityQuestion.test(rawMessage)) {
+      const answer = sessionDisplayName
+        ? `You are **${sessionDisplayName}**.`
+        : "I can’t see a display name for your session yet.";
+
+      const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, "neutral", body.isRegenerate);
+      if (attachedSessionId) {
+        await addChatMessage(attachedSessionId, "bot", answer, "neutral").catch(err =>
+          console.error("[DB Write Error] Failed to save identity bot message:", err),
+        );
+      }
+
+      return NextResponse.json({ answer, emotion: "neutral", sessionId: attachedSessionId });
     }
 
     // 2. Preprocessing
@@ -399,7 +432,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
 
     // 3. Intent classification
     telemetry.startStep("intent_classifier_ms");
-    const parsed = await resolveQuery(finalQuery, history, session.user?.name || undefined, mergedEntities);
+    const parsed = await resolveQuery(finalQuery, history, sessionDisplayName || undefined, mergedEntities);
     telemetry.endStep("intent_classifier_ms");
     telemetry.setIntent(parsed.kind, parsed.confidence, parsed.source);
     if (parsed.source !== "regex") telemetry.incrementLlmCalls();
@@ -412,7 +445,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       lastPerson: mergedEntities.lastPerson,
       lastMale: mergedEntities.lastMale,
       lastFemale: mergedEntities.lastFemale,
-      sessionName: session.user?.name || undefined,
+      sessionName: sessionDisplayName || undefined,
       reformulatedQuery: parsed.reformulatedQuery,
       telemetry,
       isWrongAnswerRetry,

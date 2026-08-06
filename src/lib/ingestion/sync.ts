@@ -121,6 +121,45 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isTransientSyncError(error: unknown) {
+  const message = errorMessage(error).toLowerCase();
+  const code = String((error as { code?: string })?.code ?? "").toUpperCase();
+
+  return (
+    code === "ECONNRESET" ||
+    code === "ETIMEDOUT" ||
+    code === "EAI_AGAIN" ||
+    code === "57P01" ||
+    code === "57P02" ||
+    code === "57P03" ||
+    message.includes("connection terminated unexpectedly") ||
+    message.includes("fetch failed") ||
+    message.includes("getaddrinfo eai_again") ||
+    message.includes("read econnreset") ||
+    message.includes("read etimedout")
+  );
+}
+
+async function withSyncRetry<T>(label: string, operation: () => Promise<T>) {
+  const maxAttempts = 3;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientSyncError(error) || attempt === maxAttempts) break;
+
+      const delayMs = 1000 * 2 ** (attempt - 1);
+      console.warn(`[sync] ${label} failed. Retrying in ${delayMs}ms...`);
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError;
+}
+
 function toVectorLiteral(values: number[] | null) {
   if (!values) return null;
   return `[${values.join(",")}]`;
@@ -504,83 +543,85 @@ async function processOnePage(
   const stats: PageSyncStats = { upserted: 0, skipped: 0, retried: 0, embeddingsFailed: 0 };
 
   try {
-    const notionEditedAt = page?.last_edited_time ?? null;
-    const stored = storedSyncState.get(page.id);
+    await withSyncRetry(`page ${page?.id ?? "unknown"}`, async () => {
+      const notionEditedAt = page?.last_edited_time ?? null;
+      const stored = storedSyncState.get(page.id);
 
-    if (shouldSkipPage(page.id, notionEditedAt, storedSyncState, options, embed)) {
-      stats.skipped = 1;
-      return stats;
-    }
-
-    if (stored && needsEmbeddingRetry(stored.embedding_status)) {
-      stats.retried = 1;
-    }
-
-    const record = await buildPageRecord(notion, page);
-
-    await upsertPageRecord({
-      record,
-      synced_at: runStartedAt,
-      pageEmbedding: null,
-      embeddingStatus: EMBEDDING_STATUS.processing,
-      lastError: null,
-    });
-
-    let pageEmbedFailed = false;
-    let lastError: string | null = null;
-
-    const embedding = embed
-      ? await embedBatch([
-          buildEmbeddingText({
-            title: record.title,
-            owner: record.owner,
-            created_by: record.created_by,
-            last_edited_by: record.last_edited_by,
-            doc_type: record.doc_type,
-            status: record.status,
-            content: record.content,
-          }),
-        ])
-      : [null];
-
-    if (embed && !embedding[0]) {
-      pageEmbedFailed = true;
-      stats.embeddingsFailed += 1;
-      lastError = "Page embedding failed (quota or API error)";
-    }
-
-    let chunkEmbedFailures = 0;
-    try {
-      const chunkResult = await replacePageChunks(record, embed);
-      chunkEmbedFailures = chunkResult.chunkEmbedFailures;
-      if (chunkEmbedFailures > 0) {
-        pageEmbedFailed = true;
-        stats.embeddingsFailed += chunkEmbedFailures;
-        lastError = `${chunkEmbedFailures} chunk embedding(s) failed`;
+      if (shouldSkipPage(page.id, notionEditedAt, storedSyncState, options, embed)) {
+        stats.skipped = 1;
+        return;
       }
-    } catch (chunkError) {
-      pageEmbedFailed = true;
-      lastError = errorMessage(chunkError);
-      console.error(`[sync] Chunk sync failed for ${record.title}:`, chunkError);
-    }
 
-    const embeddingStatus = resolveEmbeddingStatus(embed, pageEmbedFailed);
+      if (stored && needsEmbeddingRetry(stored.embedding_status)) {
+        stats.retried = 1;
+      }
 
-    await upsertPageRecord({
-      record,
-      synced_at: runStartedAt,
-      pageEmbedding: embedding[0],
-      embeddingStatus,
-      lastError: pageEmbedFailed ? lastError : null,
+      const record = await buildPageRecord(notion, page);
+
+      await upsertPageRecord({
+        record,
+        synced_at: runStartedAt,
+        pageEmbedding: null,
+        embeddingStatus: EMBEDDING_STATUS.processing,
+        lastError: null,
+      });
+
+      let pageEmbedFailed = false;
+      let lastError: string | null = null;
+
+      const embedding = embed
+        ? await embedBatch([
+            buildEmbeddingText({
+              title: record.title,
+              owner: record.owner,
+              created_by: record.created_by,
+              last_edited_by: record.last_edited_by,
+              doc_type: record.doc_type,
+              status: record.status,
+              content: record.content,
+            }),
+          ])
+        : [null];
+
+      if (embed && !embedding[0]) {
+        pageEmbedFailed = true;
+        stats.embeddingsFailed += 1;
+        lastError = "Page embedding failed (quota or API error)";
+      }
+
+      let chunkEmbedFailures = 0;
+      try {
+        const chunkResult = await replacePageChunks(record, embed);
+        chunkEmbedFailures = chunkResult.chunkEmbedFailures;
+        if (chunkEmbedFailures > 0) {
+          pageEmbedFailed = true;
+          stats.embeddingsFailed += chunkEmbedFailures;
+          lastError = `${chunkEmbedFailures} chunk embedding(s) failed`;
+        }
+      } catch (chunkError) {
+        pageEmbedFailed = true;
+        lastError = errorMessage(chunkError);
+        console.error(`[sync] Chunk sync failed for ${record.title}:`, chunkError);
+      }
+
+      const embeddingStatus = resolveEmbeddingStatus(embed, pageEmbedFailed);
+
+      await upsertPageRecord({
+        record,
+        synced_at: runStartedAt,
+        pageEmbedding: embedding[0],
+        embeddingStatus,
+        lastError: pageEmbedFailed ? lastError : null,
+      });
+
+      stats.upserted = 1;
+
+      const statusLabel =
+        embeddingStatus === EMBEDDING_STATUS.failed    ? "Synced (embeddings failed)" :
+        embeddingStatus === EMBEDDING_STATUS.pending   ? "Synced (embeddings pending)" :
+                                                         "Synced";
+      console.log(`${statusLabel}: ${record.title}`);
     });
-
-    stats.upserted = 1;
-
-    const statusLabel =
-      embeddingStatus === EMBEDDING_STATUS.failed    ? "Synced (embeddings failed)" :
-      embeddingStatus === EMBEDDING_STATUS.pending   ? "Synced (embeddings pending)" :
-                                                       "Synced";
-    console.log(`${statusLabel}: ${record.title}`);
   } catch (error) {
     const pageId = page?.id;
     const message = errorMessage(error);

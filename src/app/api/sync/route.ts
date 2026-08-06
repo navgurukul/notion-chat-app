@@ -3,7 +3,7 @@ import { isSessionResponse, requireSession } from "@/lib/auth";
 import { getNotionLastSyncRun, query } from "@/lib/db";
 import { syncNotionToPostgres } from "@/lib/ingestion";
 import { createRateLimiter } from "@/lib/shared/rate-limit";
-import { hasKnowledgeBaseAccess } from "@/lib/shared/access";
+import { hasKnowledgeBaseAccess, KNOWLEDGE_BASE_MANAGER_EMAILS} from "@/lib/shared/access";
 
 type LastSyncRow = {
   last_synced_at: string | null;
@@ -16,7 +16,9 @@ const checkSyncRateLimit = createRateLimiter({
 
 function denySyncAccess() {
   return NextResponse.json(
-    { error: "Forbidden: only tamanna@navgurukul.org can sync or rebuild the knowledge base." },
+    {
+      error: `Forbidden: only ${Array.from(KNOWLEDGE_BASE_MANAGER_EMAILS).join(", ")} can sync or rebuild the knowledge base.`,
+    },
     { status: 403 },
   );
 }

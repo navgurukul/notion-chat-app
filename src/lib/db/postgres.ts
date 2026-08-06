@@ -19,6 +19,10 @@ export const pool =
     connectionString: databaseUrl,
   });
 
+pool.on("error", (error) => {
+  console.error("[postgres] Unhandled pool error:", error);
+});
+
 if (process.env.NODE_ENV !== "production") {
   globalForPostgres.pool = pool;
 }
@@ -58,6 +62,11 @@ const CORE_COLUMN_MIGRATIONS: ColumnMigration[] = [
     table: "chat_sessions",
     column: "updated_at",
     definition: "TIMESTAMP DEFAULT NOW()",
+  },
+  {
+    table: "chat_sessions",
+    column: "state",
+    definition: "JSONB DEFAULT '{}'::jsonb",
   },
   {
     table: "chat_messages",
@@ -240,7 +249,7 @@ async function runColumnMigrations(
   }
 }
 
-const CURRENT_SCHEMA_HASH = "v5_dynamic_gender_cache";
+const CURRENT_SCHEMA_HASH = "v6_session_state_jsonb";
 
 export async function ensureSchema() {
   if (schemaReady) return;
@@ -309,6 +318,7 @@ export async function ensureSchema() {
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           user_id UUID REFERENCES users(id) ON DELETE CASCADE,
           title TEXT DEFAULT 'New Chat',
+          state JSONB DEFAULT '{}'::jsonb,
           created_at TIMESTAMP DEFAULT NOW(),
           updated_at TIMESTAMP DEFAULT NOW()
         );
@@ -456,6 +466,12 @@ export async function query<T = unknown>(
     return result.rows as T[];
   } catch (error) {
     const pgError = error as { code?: string };
+    if (pgError.code === "ECONNRESET") {
+      console.warn("[postgres] Connection reset detected. Retrying query once...");
+      const retryResult = await pool.query(text, params);
+      return retryResult.rows as T[];
+    }
+
     // 42P01: undefined_table, 42703: undefined_column
     if (pgError.code === "42P01" || pgError.code === "42703") {
       console.warn(`[postgres] Schema error detected (${pgError.code}). Resetting cache and retrying...`);
