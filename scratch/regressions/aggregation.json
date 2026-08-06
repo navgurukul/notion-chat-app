@@ -1,0 +1,11 @@
+[
+  {
+    "question": "How many total developers are working?",
+    "expectedIntent": "people_list"
+  },
+  {
+    "question": "Which project has the most developers?",
+    "expectedIntent": "project_most_devs"
+  }
+]
+

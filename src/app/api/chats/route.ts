@@ -1,0 +1,64 @@
+import { NextResponse } from "next/server";
+import { isSessionResponse, requireSession } from "@/lib/auth";
+import {
+  createChatSession,
+  getOrCreateUser,
+  listChatSessions,
+  getEmptyChatSession,
+} from "@/lib/chat/store";
+
+export async function GET() {
+  try {
+    const session = await requireSession();
+    if (isSessionResponse(session)) return session;
+
+    const user = await getOrCreateUser(session);
+    const sessions = await listChatSessions(user.id);
+    return NextResponse.json({ sessions });
+  } catch (error) {
+    console.error("List chats API Error:", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to list chats" },
+      { status: 500 },
+    );
+  }
+}
+
+export async function POST() {
+  try {
+    const session = await requireSession();
+
+    if (isSessionResponse(session)) {
+      return session;
+    }
+
+    const user = await getOrCreateUser(session);
+
+    const existingEmptyChat =
+      await getEmptyChatSession(user.id);
+
+    if (existingEmptyChat) {
+      return NextResponse.json({
+        session: existingEmptyChat,
+      });
+    }
+
+    const chat = await createChatSession(user.id);
+
+    return NextResponse.json({
+      session: chat,
+    });
+  } catch (error) {
+    console.error("Create chat API Error:", error);
+
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to create chat",
+      },
+      { status: 500 },
+    );
+  }
+}
