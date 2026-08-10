@@ -1,4 +1,4 @@
-import { resolvePersonName as dbResolvePersonName, getPeopleDirectory } from "@/lib/db/team-members";
+import { resolvePersonName as dbResolvePersonName, getPeopleDirectory } from "@/lib/db";
 import { getJsonCompletion } from "@/lib/ai/openai";
 import { query } from "@/lib/db";
 
@@ -108,7 +108,7 @@ export async function getGenderOfPerson(name: string): Promise<"male" | "female"
     "alima", "amruta", "apeksha", "archana", "ashwini", "chhaya", "dhanshri", "goldy",
     "gunavathi", "ira", "komal", "neelam", "neha", "nikita", "pooja", "poonam", "prachi",
     "pranjal", "pranjali", "priya", "priyanka", "saloni", "sanjna", "sanjana", "sapna", "sheetal",
-    "sugatha", "sukanya", "tamanna", "ujala", "urmila", "vishakha", "laxmi"
+    "sugatha", "sukanya", "tamanna", "ujala", "urmila", "vishakha", "also "
   ]);
   const MALE_NAMES = new Set([
     "aadarsh", "abhishek", "aniket", "anirudh", "arunesh", "gaurav", "mahendra", "mayur",

@@ -1,7 +1,7 @@
 import { NextResponse, NextRequest } from "next/server";
-import { isSessionResponse, requireSession } from "@/lib/auth";
+import { isSessionResponse, requireSession } from "@/lib/auth/session";
 import { getNotionLastSyncRun, query } from "@/lib/db";
-import { syncNotionToPostgres } from "@/lib/ingestion";
+import { syncNotionToPostgres } from "@/lib/ingestion/sync";
 import { createRateLimiter } from "@/lib/shared/rate-limit";
 import { hasKnowledgeBaseAccess, KNOWLEDGE_BASE_MANAGER_EMAILS} from "@/lib/shared/access";
 

@@ -1,2 +1,0 @@
-// Empty scratch file
-export {};

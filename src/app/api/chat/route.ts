@@ -1,6 +1,6 @@
 import "@/lib/dns-hook";
 import { NextRequest, NextResponse } from "next/server";
-import { isSessionResponse, requireSession } from "@/lib/auth";
+import { isSessionResponse, requireSession } from "@/lib/auth/session";
 import { handleChatPost } from "@/lib/chat/handler";
 import { checkRateLimit } from "@/lib/shared/rate-limit";
 

@@ -8,11 +8,11 @@ import {
   updateSessionState,
 } from "@/lib/chat/store";
 import { MAX_MESSAGE_LENGTH } from "@/lib/chat/constants";
-import { sanitizeChatHistory } from "@/lib/chat/history";
 import {
+  sanitizeChatHistory,
   extractReferencedTitle,
   isNotionLinkRequest,
-} from "@/lib/chat/link-lookup";
+} from "@/lib/chat/query-tools";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { resolveQuery } from "@/lib/query/resolve-query";
 import { getGenderOfPerson } from "@/lib/query/entity-resolver/person";

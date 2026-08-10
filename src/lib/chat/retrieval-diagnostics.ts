@@ -1,5 +1,5 @@
 import type { ParsedQuery } from "@/lib/query/types";
-import type { ChunkRetrievalHit, RetrievalConfidenceResult } from "@/lib/rag/retrieval-confidence";
+import type { ChunkRetrievalHit, RetrievalConfidenceResult } from "@/lib/rag";
 
 export type RouteDecision = "sql_hit" | "sql_miss_metadata" | "sql_weak_rag" | "semantic_rag" | "link" | "sql_synthesis_stream";
 

@@ -1,13 +1,13 @@
 import { embedText } from "@/lib/ai/embeddings";
 import { query } from "@/lib/db";
+import { simplifySearchQuery } from "@/lib/shared/search-query";
 import {
   dedupeByTextOverlap,
   isMmrEnabled,
   parsePgVector,
   selectWithMMR,
   type MMRCandidate,
-} from "@/lib/rag/mmr";
-import { simplifySearchQuery } from "@/lib/shared/search-query";
+} from "@/lib/rag";
 
 type ChunkHybridRow = {
   chunk_id: string;

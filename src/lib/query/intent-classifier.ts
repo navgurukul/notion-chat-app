@@ -18,12 +18,15 @@ const ALL_KINDS: QueryKind[] = [
   "team_roster",
   "blocker_list",
   "project_eta",
+  "compare_pages",
   "page_about",
   "project_summary",
   "risks_for",
   "onboarding_tasks",
   "people_list",
   "analytics",
+  "project_most_devs",
+  "project_member_breakdown",
   "semantic",
   "smalltalk",
   "person_project_membership",
@@ -112,6 +115,9 @@ Intent guide:
 - team_roster: who is working on a project (all contributors, not only owner)
 - people_list: directory lists, listing all developers, listing all team members ("Who are all developers?", "List team members")
 - analytics: statistical aggregation queries ("Which project has the most developers?", "project with most assignees")
+- compare_pages: compare two pages, projects, or documents ("compare Oscar MVP and Oscar App")
+- project_most_devs: identify the project with the largest developer count
+- project_member_breakdown: grouped breakdown of projects/teams and member counts
 - assignee_project_check: whether a specific person is working on or associated with a specific project/topic (e.g., "Is Tamanna working on Oscar?", "Does Rahul work on DataPivots?", "Is Amruta part of NavTrack?"). Do NOT use this if the user is asking for a list of projects a person works on without specifying a target project (use worked_on_list instead).
 - person_project_membership: whether a specific person is working on or associated with a specific project/topic (fallback/alias for assignee_project_check).
 - semantic: open-ended why/how, synthesis, or unclear factual inquiries
