@@ -1,5 +1,4 @@
-import { escapeLike, query } from "@/lib/db";
-import { TEAM_MEMBER_WHITELIST, getPeopleDirectory } from "@/lib/db/team-members";
+import { escapeLike, query, getPeopleDirectory, TEAM_MEMBER_WHITELIST } from "@/lib/db";
 import { normalizePersonNameForMatch } from "@/lib/query/normalize";
 
 type ProjectPageRow = {

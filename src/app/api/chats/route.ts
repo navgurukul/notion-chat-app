@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { isSessionResponse, requireSession } from "@/lib/auth";
+import { isSessionResponse, requireSession } from "@/lib/auth/session";
 import {
   createChatSession,
   getOrCreateUser,

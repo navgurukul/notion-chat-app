@@ -4,6 +4,8 @@ export type QueryIntent =
   | "PROJECT_TEAM"
   | "PROJECT_SUMMARY"
   | "PROJECT_STATUS"
+  | "ANALYTICS"
+  | "COMPARISON"
   | "UNKNOWN";
 
 export function detectIntent(query: string): QueryIntent {
@@ -31,6 +33,18 @@ export function detectIntent(query: string): QueryIntent {
 
   if (/status of|progress of|current status/i.test(q)) {
     return "PROJECT_STATUS";
+  }
+
+  if (
+    /compare|difference between|versus|\bvs\b|which\s+is\s+better|how\s+does\s+.*\s+compare/i.test(q)
+  ) {
+    return "COMPARISON";
+  }
+
+  if (
+    /\b(most|least|top|highest|lowest|count|counts|number of|how many|breakdown|group by|rank|ranking|average|avg)\b/i.test(q)
+  ) {
+    return "ANALYTICS";
   }
 
   return "UNKNOWN";

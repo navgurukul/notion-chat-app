@@ -1,4 +1,4 @@
-import { getJsonCompletion, type ChatHistoryItem } from "@/lib/ai";
+import { getJsonCompletion, type ChatHistoryItem } from "@/lib/ai/openai";
 
 export type EmotionAnalysis = {
   emotion: "neutral" | "happy" | "funny" | "sad" | "angry" | "frustrated" | "curious";

@@ -1,5 +1,5 @@
 export const KNOWLEDGE_BASE_MANAGER_EMAILS = new Set([
-  "laxmiyadav21@navgurukul.org",
+  "tamanna@navgurukul.org",
 ]);
 
 export type SessionEmailLike = {

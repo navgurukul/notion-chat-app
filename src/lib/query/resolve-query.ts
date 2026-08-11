@@ -9,11 +9,11 @@ import {
   tryFastPathRegexRoute,
   isAmbiguousQuery,
 } from "@/lib/chat/pipeline/router";
-import { isNotionLinkRequest } from "@/lib/chat/link-lookup";
 import {
+  isNotionLinkRequest,
   shouldReformulate,
   reformulateSearchQuery,
-} from "@/lib/chat/query-reformulation";
+} from "@/lib/chat/query-tools";
 import { isFollowUpNeedingContext } from "./entity-resolver";
 import { getGenderOfPerson } from "./entity-resolver/person";
 
@@ -27,6 +27,8 @@ const INTENT_KIND_HINTS: Record<string, Set<ParsedQuery["kind"]>> = {
   PROJECT_TEAM: new Set(["team_roster", "team_activity"]),
   PROJECT_SUMMARY: new Set(["project_summary", "page_about"]),
   PROJECT_STATUS: new Set(["status_of", "project_eta"]),
+  ANALYTICS: new Set(["analytics", "project_most_devs", "project_member_breakdown", "people_list"]),
+  COMPARISON: new Set(["compare_pages"]),
   UNKNOWN: new Set(),
 };
 
@@ -36,6 +38,8 @@ const INTENT_CONFIDENCE_FLOORS: Record<string, number> = {
   PROJECT_TEAM: 0.8,
   PROJECT_SUMMARY: 0.8,
   PROJECT_STATUS: 0.84,
+  ANALYTICS: 0.84,
+  COMPARISON: 0.88,
   UNKNOWN: 0,
 };
 

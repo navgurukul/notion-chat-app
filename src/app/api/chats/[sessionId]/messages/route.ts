@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isSessionResponse, requireSession } from "@/lib/auth";
+import { isSessionResponse, requireSession } from "@/lib/auth/session";
 import { query } from "@/lib/db";
 import {
   addChatMessage,
