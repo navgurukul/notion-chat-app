@@ -1,5 +1,7 @@
 import { escapeLike, query, getPeopleDirectory, TEAM_MEMBER_WHITELIST } from "@/lib/db";
 import { normalizePersonNameForMatch } from "@/lib/query/normalize";
+import { filterPagesForProjectTopic } from "@/lib/sql/project-scope";
+
 
 type ProjectPageRow = {
   id: string;
@@ -174,7 +176,7 @@ export function topicSearchTokens(scopeTopic: string): string[] {
     .replace(/[^a-z0-9\s-]/g, " ")
     .split(/\s+/)
     .map((t) => t.trim())
-    .filter((t) => t.length >= 3 && !["project", "the", "workspace", "ai"].includes(t));
+.filter((t) => t.length >= 3 && !["project", "the", "workspace", "ai", "notion"].includes(t));
 
   const tokens = new Set(base);
   const lower = scopeTopic.toLowerCase();
@@ -188,29 +190,34 @@ export function topicSearchTokens(scopeTopic: string): string[] {
   return [...tokens];
 }
 
+
 export async function fetchProjectPages(scopeTopic: string): Promise<ProjectPageRow[]> {
   const tokens = topicSearchTokens(scopeTopic);
   if (!tokens.length) return [];
 
   const tokenPatterns = tokens.map((t) => `%${escapeLike(t)}%`);
+
+  // Title match per token (broad recall) — content-wide match dropped;
+  // it was pulling in almost every page in the workspace.
   const tokenConds = tokenPatterns
-    .map(
-      (_, i) => `
-        lower(coalesce(title, '')) LIKE lower($${i + 1}) ESCAPE '\\'
-        OR lower(coalesce(content, '')) LIKE lower($${i + 1}) ESCAPE '\\'
-      `,
-    )
+    .map((_, i) => `lower(coalesce(title, '')) LIKE lower($${i + 1}) ESCAPE '\\'`)
     .join("\n        OR ");
 
-  return query<ProjectPageRow>(
+  const candidates = await query<ProjectPageRow>(
     `
     SELECT id, title, url, owner, created_by, last_edited_by, content
     FROM notion_pages
     WHERE (${tokenConds})
-    LIMIT 80
+    LIMIT 200
     `,
     tokenPatterns,
   );
+
+  // Same title-relevance scoring status_of/project_eta already trust —
+  // keeps team_roster/team_activity from diverging into broader noise.
+  return filterPagesForProjectTopic(scopeTopic, candidates)
+    .map((page) => ({ ...page, content: page.content ?? null }))
+    .slice(0, 80);
 }
 
 function findCanonicalName(input: string, directory: Array<{ name: string; normalized: string }>): string {
