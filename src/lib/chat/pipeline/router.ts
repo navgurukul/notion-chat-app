@@ -1,6 +1,6 @@
 import type { Session } from "next-auth";
 import type { ChatHistoryItem } from "@/lib/ai/openai";
-import { getPeopleDirectory, resolvePersonName } from "@/lib/db/team-members";
+import { getPeopleDirectory, resolvePersonName } from "@/lib/db";
 
 export type SmalltalkType = "greeting" | "thanks" | "bye" | "help" | "identity" | "howAreYou";
 

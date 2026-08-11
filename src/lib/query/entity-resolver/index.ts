@@ -2,7 +2,7 @@ import { ChatHistoryItem } from "@/lib/ai/openai";
 import { resolvePerson, ResolutionQuality, ResolvedPerson } from "./person";
 import { resolveDocument, ResolvedDocument } from "./document";
 import type { ParsedQuery } from "@/lib/query/types";
-import { getPeopleDirectory } from "@/lib/db/team-members";
+import { getPeopleDirectory } from "@/lib/db";
 import { isNoiseTopic } from "@/lib/query/normalize";
 
 export { ResolutionQuality };

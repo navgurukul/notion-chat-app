@@ -2,15 +2,15 @@
  * Build text context for the chat LLM: keyword page prefetch + chunk/vector search.
  */
 import { escapeLike, query } from "@/lib/db";
-import { extractQuestionTerms } from "@/lib/rag/question-terms";
 import { simplifySearchQuery } from "@/lib/shared/search-query";
-import { runHybridChunkRetrieval } from "@/lib/rag/hybrid-search";
 import {
   assessRetrievalConfidence,
+  extractQuestionTerms,
+  runHybridChunkRetrieval,
+  semanticSearch,
   type ChunkRetrievalHit,
   type RetrievalConfidenceResult,
-} from "@/lib/rag/retrieval-confidence";
-import { semanticSearch } from "@/lib/rag/semantic-search";
+} from "@/lib/rag";
 
 type PageRow = {
   id: string;

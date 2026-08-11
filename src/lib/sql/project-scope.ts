@@ -15,11 +15,11 @@ export function isBugOrIncidentTitle(title: string | null | undefined) {
 /**
  * Keep pages that belong to a project topic (hub, MVP, PRD, scoped tasks) — drop noise tickets.
  */
-export function filterPagesForProjectTopic(
+export function filterPagesForProjectTopic<T extends { title?: string | null }>(
   topic: string,
-  pages: Array<NotionPageRow & { content?: string | null }>,
+  pages: T[],
   options?: { minTitleScore?: number },
-) {
+): T[] {
   const minScore = options?.minTitleScore ?? 350;
   const tokens = topic
     .toLowerCase()

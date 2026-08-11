@@ -1,23 +1,19 @@
 import { escapeLike } from "@/lib/db/sql-utils";
 import { embedText } from "@/lib/ai/embeddings";
+import { query } from "@/lib/db";
+import { simplifySearchQuery } from "@/lib/shared/search-query";
 import {
+  dedupeByTextOverlap,
+  explicitTitleFromQuery,
   hasNotionChunks,
   hybridChunkContext,
   hybridChunkContextFromQueries,
-} from "@/lib/rag/hybrid-search";
-import {
-  dedupeByTextOverlap,
   isMmrEnabled,
   parsePgVector,
   selectWithMMR,
-  type MMRCandidate,
-} from "@/lib/rag/mmr";
-import { query } from "@/lib/db";
-import {
-  explicitTitleFromQuery,
   titleCandidates,
-} from "@/lib/rag/search-titles";
-import { simplifySearchQuery } from "@/lib/shared/search-query";
+  type MMRCandidate,
+} from "@/lib/rag";
 
 type SearchRow = {
   id: string;

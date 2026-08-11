@@ -3,8 +3,7 @@
  *
  * Direct SQL query here. If this returns null, the chat pipeline falls back to RAG.
  */
-import { escapeLike, query } from "@/lib/db";
-import { getPeopleDirectory } from "@/lib/db/team-members";
+import { escapeLike, query, getPeopleDirectory } from "@/lib/db";
 import type {
   ActivityRow,
   NotionPageRow,

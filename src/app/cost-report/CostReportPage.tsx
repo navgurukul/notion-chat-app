@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import {
   CHAT_PRICES,
   embeddingMonthlyUsdFromTokens,
@@ -8,28 +9,20 @@ import {
   formatMoney,
 } from "./AwsComputeCost";
 
-const USD_TO_INR = 94.5;
+const FALLBACK_USD_TO_INR = 94.5; // only used until the live rate loads (or if it fails)
 
-function formatMoneyInr(n: number) {
+function formatMoneyInr(n: number, rate: number) {
   if (!Number.isFinite(n)) return "—";
-  return `₹${(n * USD_TO_INR).toFixed(2)}`;
+  return `₹${(n * rate).toFixed(2)}`;
 }
 
-function ThinMoneyRow({ usd }: { usd: number }) {
+function ThinMoneyRow({ usd, rate }: { usd: number; rate: number }) {
   return (
     <div className="text-xs text-white/60 mt-0.5">
-      <span className="mr-2">INR: {formatMoneyInr(usd)}</span>
+      <span className="mr-2">INR: {formatMoneyInr(usd, rate)}</span>
     </div>
   );
 }
-
-
-
-import { useEffect, useMemo, useState } from "react";
-
-
-
-
 
 type Model = {
   id: string;
@@ -54,6 +47,12 @@ const ASSUMPTIONS = {
   avgPromptTokensPerQuestion: 450,
   avgRetrievalContextTokensPerQuestion: 900,
   avgCompletionTokensPerQuestion: 650,
+
+  // Embeddings only run on the user's raw query text, not on the retrieved
+  // context (that context is already-embedded stored data being read back,
+  // not re-embedded). This is intentionally much smaller than the LLM
+  // prompt size above.
+  avgQueryTokensForEmbedding: 60,
 
   // Multiplier assumptions for retries/regenerations.
   avgRetryMultiplier: 1.0,
@@ -115,6 +114,39 @@ export default function CostReportPage() {
   const [users, setUsers] = useState(2);
   const [questionsPerUserPerDay, setQuestionsPerUserPerDay] = useState(10);
 
+  const [usdToInr, setUsdToInr] = useState(FALLBACK_USD_TO_INR);
+  const [usdToInrSource, setUsdToInrSource] = useState<
+    "loading" | "live" | "cache" | "stale-cache" | "fallback"
+  >("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadRate() {
+      try {
+        const res = await fetch("/api/cost-report/exchange-rate");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as {
+          usdToInr: number;
+          source: "live" | "cache" | "stale-cache" | "fallback";
+        };
+        if (cancelled) return;
+        if (Number.isFinite(data.usdToInr)) {
+          setUsdToInr(data.usdToInr);
+          setUsdToInrSource(data.source);
+        }
+      } catch (e) {
+        console.error("Failed to load live exchange rate, using fallback", e);
+        if (!cancelled) setUsdToInrSource("fallback");
+      }
+    }
+
+    loadRate();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const [llmUsage, setLlmUsage] = useState<
     | null
     | {
@@ -145,6 +177,7 @@ export default function CostReportPage() {
       }
   >(null);
   const [llmUsageLoading, setLlmUsageLoading] = useState(true);
+  const [llmUsageError, setLlmUsageError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -152,9 +185,11 @@ export default function CostReportPage() {
     async function load() {
       try {
         setLlmUsageLoading(true);
-        const res = await fetch("/api/cosr-report/llm-usage", {
+        setLlmUsageError(null);
+        const res = await fetch("/api/cost-report/llm-usage", {
           method: "GET",
         });
+        if (res.status === 403) throw new Error("forbidden");
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as {
           modelId: string;
@@ -188,6 +223,11 @@ export default function CostReportPage() {
         console.error("Failed to load LLM usage", e);
         if (cancelled) return;
         setLlmUsage(null);
+        setLlmUsageError(
+          e instanceof Error && e.message === "forbidden"
+            ? "You're not authorized to view this report."
+            : "Couldn't load usage data — please try again.",
+        );
       } finally {
         if (!cancelled) setLlmUsageLoading(false);
       }
@@ -225,6 +265,17 @@ export default function CostReportPage() {
 
   type CostMode = "llm" | "embedding";
   const [costMode, setCostMode] = useState<CostMode>("llm");
+
+  // Infra is a real monthly cost of running this, but there's no way to
+  // derive it from usage data — user enters it directly instead of the
+  // page silently implying it's included when it never was.
+  const [infraMonthlyUsd, setInfraMonthlyUsd] = useState(25);
+
+  // One-time (or "whenever content changes") cost of embedding your stored
+  // Notion content for indexing — separate from the recurring per-query
+  // embedding cost below. Default is a rough placeholder; adjust to your
+  // actual corpus size.
+  const [indexTokens, setIndexTokens] = useState(500_000);
 
 
 
@@ -275,6 +326,30 @@ export default function CostReportPage() {
               </label>
             </div>
           </div>
+
+          {costMode === "embedding" ? (
+            <label className="rounded-xl bg-black/20 border border-white/10 p-4 mb-4 block">
+              <div className="text-xs text-white/55">
+                Content to index — one-time, not monthly (tokens)
+              </div>
+              <div className="mt-1 flex items-center justify-between gap-3">
+                <div className="text-2xl font-bold">{fmtNumber(indexTokens)}</div>
+                <input
+                  aria-label="indexTokens"
+                  className="w-full"
+                  type="range"
+                  min={10_000}
+                  max={5_000_000}
+                  step={10_000}
+                  value={indexTokens}
+                  onChange={(e) => setIndexTokens(Number(e.target.value))}
+                />
+              </div>
+              <div className="text-xs text-white/45 mt-1">
+                Total size of your Notion content, in tokens. This only recurs when you re-index (new/changed pages).
+              </div>
+            </label>
+          ) : null}
 
           <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
 
@@ -379,19 +454,46 @@ export default function CostReportPage() {
                             );
                           }, 0)
                         : embeddingMonthlyUsdFromTokens({
-                            // NOTE: embeddings are expensive for indexing; this report currently models query embeddings + a stored approximation.
+                            // Only the user's query text gets embedded per
+                            // question — the retrieved context is already
+                            // embedded, stored data being read back.
                             inputTokens:
                               users *
                               questionsPerUserPerDay *
-                              ASSUMPTIONS.avgRetrievalContextTokensPerQuestion *
+                              ASSUMPTIONS.avgQueryTokensForEmbedding *
                               30,
                             pricing: OPENAI_EMBEDDING_PRICING,
                           });
 
+                  const oneTimeIndexUsd =
+                    costMode === "embedding"
+                      ? embeddingMonthlyUsdFromTokens({
+                          inputTokens: indexTokens,
+                          pricing: OPENAI_EMBEDDING_PRICING,
+                        })
+                      : 0;
+
                   return (
                     <>
                       <span className="inline-block">{formatMoney(usd)}</span>
-                      <ThinMoneyRow usd={usd} />
+                      <ThinMoneyRow usd={usd} rate={usdToInr} />
+                      {costMode === "embedding" ? (
+                        <div className="text-sm font-normal text-white/60 mt-2">
+                          + one-time indexing: {formatMoney(oneTimeIndexUsd)}{" "}
+                          <span className="text-white/40">
+                            ({formatMoneyInr(oneTimeIndexUsd, usdToInr)}) for ~{fmtNumber(indexTokens)} tokens
+                          </span>
+                        </div>
+                      ) : null}
+                      {infraMonthlyUsd > 0 ? (
+                        <div className="text-sm font-normal text-white/60 mt-1">
+                          + infra: {formatMoney(infraMonthlyUsd)}{" "}
+                          <span className="text-white/40">({formatMoneyInr(infraMonthlyUsd, usdToInr)}) /mo</span>
+                          <span className="mx-2 text-white/30">=</span>
+                          <b className="text-white/85">{formatMoney(usd + infraMonthlyUsd)}</b>{" "}
+                          <span className="text-white/40">total/mo</span>
+                        </div>
+                      ) : null}
                     </>
                   );
                 })()}
@@ -401,7 +503,17 @@ export default function CostReportPage() {
             </div>
             <div className="text-sm text-white/70">
               <div>
-                {costMode === "llm" ? "Sum of selected LLM i/p-o/p costs" : "Embedding cost (query+stored approximation)"}
+                {costMode === "llm"
+                  ? "Sum of selected LLM i/p-o/p costs"
+                  : "Recurring: query embeddings only. Indexing (stored content) is separate & one-time."}
+              </div>
+              <div className="text-xs text-white/40 mt-1">
+                1 USD ≈ ₹{usdToInr.toFixed(2)}{" "}
+                {usdToInrSource === "loading"
+                  ? "(loading live rate…)"
+                  : usdToInrSource === "fallback"
+                    ? "(fallback rate — live fetch failed)"
+                    : "(live rate)"}
               </div>
             </div>
           </div>
@@ -436,13 +548,15 @@ export default function CostReportPage() {
                 <div className="text-2xl font-bold mt-1">
                   {formatMoney(llmUsage.totals.totalUsdEst)}
                 </div>
-                <ThinMoneyRow usd={llmUsage.totals.totalUsdEst} />
+                <ThinMoneyRow usd={llmUsage.totals.totalUsdEst} rate={usdToInr} />
                 <div className="text-xs text-white/60 mt-1">Model priced: {llmUsage.modelId}</div>
 
               </div>
             </div>
           ) : (
-            <div className="mt-3 text-sm text-white/60">No usage data found (or not authorized).</div>
+            <div className="mt-3 text-sm text-white/60">
+              {llmUsageError ?? "No usage data found."}
+            </div>
           )}
 
           {llmUsage && llmUsage.users.length > 0 ? (
@@ -463,7 +577,7 @@ export default function CostReportPage() {
                       <div className="text-right">
                         <div className="text-xs text-white/60">Cost</div>
                         <div className="text-lg font-extrabold">{formatMoney(u.totalUsdEst)}</div>
-                        <ThinMoneyRow usd={u.totalUsdEst} />
+                        <ThinMoneyRow usd={u.totalUsdEst} rate={usdToInr} />
 
                       </div>
                     </div>
@@ -485,10 +599,29 @@ export default function CostReportPage() {
             <li>Avg prompt tokens/question: {ASSUMPTIONS.avgPromptTokensPerQuestion}</li>
             <li>Avg retrieved context tokens/question: {ASSUMPTIONS.avgRetrievalContextTokensPerQuestion}</li>
             <li>Avg completion tokens/question: {ASSUMPTIONS.avgCompletionTokensPerQuestion}</li>
+            <li>Avg query tokens embedded/question: {ASSUMPTIONS.avgQueryTokensForEmbedding} (recurring)</li>
             <li>Average retry/regenerate multiplier: {ASSUMPTIONS.avgRetryMultiplier}×</li>
+            <li>Content indexing is a one-time embedding cost, not monthly — set separately above in Embedding cost mode.</li>
           </ul>
-          <div className="mt-3 text-xs text-white/45">
-            Deployment infra assumed: <b>t3.small EC2 + RDS</b> (monthly placeholders).
+          <div className="mt-4 flex items-center gap-4">
+            <label className="rounded-xl bg-black/20 border border-white/10 p-4 flex-1">
+              <div className="text-xs text-white/55">Infra (EC2 + RDS etc.), monthly USD</div>
+              <div className="mt-1 flex items-center justify-between gap-3">
+                <span className="text-white/70">$</span>
+                <input
+                  aria-label="infraMonthlyUsd"
+                  className="w-full bg-transparent text-2xl font-bold outline-none"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={infraMonthlyUsd}
+                  onChange={(e) => setInfraMonthlyUsd(Math.max(0, Number(e.target.value) || 0))}
+                />
+              </div>
+              <div className="text-xs text-white/45 mt-1">
+                Enter your actual monthly hosting bill — this isn't derived from usage, it's added on top of the API cost below.
+              </div>
+            </label>
           </div>
         </div>
 
@@ -583,5 +716,3 @@ export default function CostReportPage() {
     </div>
   );
 }
-
-
