@@ -238,7 +238,7 @@ export async function resolveQuery(
     const reformulated = await reformulateSearchQuery(question, history);
     processedQuestion = reformulated.searchQuery;
     reformulatedQueryText = reformulated.searchQuery;
-    const hasPersonPronoun = /\b(he|him|his|she|her|hers|they|them|their)\b/i.test(question);
+    const hasPersonPronoun = /\b(he|him|his|she|her|hers|they|them|their|me|my|myself|i)\b/i.test(question);
     if (reformulated.method === "llm" && !hasPersonPronoun) {
       rulesInputQuestion = reformulated.searchQuery;
     }
@@ -286,9 +286,12 @@ export async function resolveQuery(
   }
 
   if (!personName && isFollowUpNeedingContext(question, history)) {
+    const hasFirstPerson = /\b(my|me|myself|i)\b/i.test(question);
     const hasMalePronoun = /\b(he|him|his)\b/i.test(question);
     const hasFemalePronoun = /\b(she|her|hers)\b/i.test(question);
-    if (hasMalePronoun) {
+    if (hasFirstPerson && sessionName) {
+      personName = sessionName;
+    } else if (hasMalePronoun) {
       personName = lastEntities?.lastMale;
       if (!personName && lastEntities?.lastPerson && (await getGenderOfPerson(lastEntities.lastPerson)) !== "female") {
         personName = lastEntities.lastPerson;
