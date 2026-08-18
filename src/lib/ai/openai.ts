@@ -204,6 +204,15 @@ async function createHttpError(response: Response): Promise<HttpError> {
   return new HttpError(response.status, message);
 }
 
+function cleanMessages(messages: { role: string; content: string }[]) {
+  return messages.map(m => ({
+    ...m,
+    content: typeof m.content.toWellFormed === "function" 
+      ? m.content.toWellFormed() 
+      : m.content.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|([^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/g, "$1\uFFFD")
+  }));
+}
+
 function buildMessages(prompt: string, context: string, history: ChatHistoryItem[], options?: SystemPromptOptions) {
   return [
     { role: "system", content: buildSystemPrompt(context, history, options) },
@@ -221,7 +230,7 @@ export async function getChatResponse(
   const apiKey = requireEnv("OPENAI_API_KEY");
   const model = getOpenAIChatModel();
 
-  const messages = buildMessages(prompt, context, history, { userEmotion, queryKind });
+  const messages = cleanMessages(buildMessages(prompt, context, history, { userEmotion, queryKind }));
 
   const result = await withRetry(
     async () => {
@@ -268,10 +277,10 @@ export async function getJsonCompletion(systemPrompt: string, prompt: string) {
         },
         body: JSON.stringify({
           model,
-          messages: [
+          messages: cleanMessages([
             { role: "system", content: systemPrompt },
             { role: "user", content: prompt },
-          ],
+          ]),
           temperature: 0,
           max_tokens: Number(process.env.OPENAI_JSON_MAX_TOKENS || 220),
           response_format: { type: "json_object" },
@@ -316,10 +325,10 @@ export async function getChatStream(
   const model = getOpenAIChatModel();
 
   const systemPrompt = buildSystemPrompt(context, history, { streaming: true, userEmotion, queryKind });
-  const messages = [
+  const messages = cleanMessages([
     { role: "system", content: systemPrompt },
     { role: "user", content: prompt },
-  ];
+  ]);
 
   async function* streamGenerator(): AsyncGenerator<ChatStreamChunk> {
     const response = await withRetry(
@@ -369,7 +378,7 @@ export async function getChatStream(
           const parsed = parseOpenAISseDataLine(line);
           if (!parsed) continue;
 
-          const delta = (parsed as any)?.choices?.[0]?.delta?.content;
+          const delta = (parsed as { choices?: { delta?: { content?: string } }[] })?.choices?.[0]?.delta?.content;
           if (typeof delta === "string" && delta.length > 0) {
             yield createTextChunk(delta);
           }
