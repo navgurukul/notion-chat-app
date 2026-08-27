@@ -37,6 +37,38 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Pr
   });
 }
 
+// Timeout budget for the DB-backed person/document lookups used on the live
+// RAG/SQL resolution paths. 50ms (used elsewhere in this file for
+// resolveAllEntities) was too tight given observed Neon cold-start latency —
+// this is a starting point, tune against real p95s.
+const ENTITY_RESOLVE_TIMEOUT_MS = 300;
+
+// Empty fallbacks returned when a resolution call times out or errors, so callers
+// can treat a timeout the same as a "not found" result rather than crashing.
+// NOTE: verify these match the actual exported shapes of ResolvedPerson /
+// ResolvedDocument from ./person and ./document — adjust fields if they differ.
+const EMPTY_RESOLVED_PERSON: ResolvedPerson = {
+  value: "",
+  quality: ResolutionQuality.NONE,
+  confidence: 0,
+  ambiguous: false,
+  candidates: [],
+} as ResolvedPerson;
+
+const EMPTY_RESOLVED_DOCUMENT: ResolvedDocument = {
+  value: "",
+  url: null,
+  quality: ResolutionQuality.NONE,
+} as ResolvedDocument;
+
+function resolvePersonSafe(name: string): Promise<ResolvedPerson> {
+  return withTimeout(resolvePerson(name), ENTITY_RESOLVE_TIMEOUT_MS, EMPTY_RESOLVED_PERSON);
+}
+
+function resolveDocumentSafe(title: string): Promise<ResolvedDocument> {
+  return withTimeout(resolveDocument(title), ENTITY_RESOLVE_TIMEOUT_MS, EMPTY_RESOLVED_DOCUMENT);
+}
+
 export function resolveDates(message: string): { year?: number; dateRange?: { dateStart: string | null; dateEnd: string | null } } {
   const q = message.toLowerCase();
   const now = new Date();
@@ -96,15 +128,27 @@ export function resolveDates(message: string): { year?: number; dateRange?: { da
     const num1 = parseInt(match4[1], 10);
     const num2 = parseInt(match4[2], 10);
     const yearVal = parseInt(match4[3], 10);
-    let day = num1;
-    let month = num2 - 1;
-    if (num2 > 12) {
+
+    let day: number;
+    let month: number;
+
+    if (num1 > 12) {
+      // First number can't be a month (>12) → must be DD-MM-YYYY.
+      day = num1;
+      month = num2 - 1;
+    } else if (num2 > 12) {
+      // Second number can't be a month (>12) → must be MM-DD-YYYY.
       day = num2;
       month = num1 - 1;
-    } else if (num1 <= 12 && num2 <= 12) {
-      day = num2;
-      month = num1 - 1;
+    } else {
+      // Genuinely ambiguous (both ≤ 12). Default to DD-MM-YYYY since this app
+      // serves an India-based team, where that's the conventional reading —
+      // previously this defaulted to MM-DD-YYYY (US convention), which misread
+      // dates like "05-06-2026" as May 6 instead of 5 June.
+      day = num1;
+      month = num2 - 1;
     }
+
     const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
     const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
     return { year: yearVal, dateRange: { dateStart: start.toISOString(), dateEnd: end.toISOString() } };
@@ -246,7 +290,7 @@ export async function extractRawEntities(message: string): Promise<{ personName?
       const match = message.match(pat);
       if (match?.[1]) {
         const candidate = match[1].trim();
-        if (!isNoiseTopic(candidate) && !/^(the|a|an|my|your|his|her|their|our|its|this|that|these|those|all|any|some|few|many|each|every|no|get|list|show|display|find|who|what|where|when|why|how|which|whose|task|tasks|project|projects|person|name)$/i.test(candidate)) {
+        if (!isNoiseTopic(candidate) && !/^(the|a|an|my|your|his|her|their|our|its|this|that|these|those|all|any|some|few|many|each|every|no|get|list|show|display|find|who|what|where|when|why|how|which|whose|task|tasks|project|projects|person|name|pending|urgent|open|new|recent|old|current|upcoming|overdue)$/i.test(candidate)) {
           personName = candidate;
           break;
         }
@@ -254,10 +298,16 @@ export async function extractRawEntities(message: string): Promise<{ personName?
     }
   }
 
-  const docMatch = message.match(/\b(?:about|status\s+of|on|details\s+of|project)\s+([a-zA-Z][a-zA-Z0-9]+(?:\s+[a-zA-Z0-9]+)?)\b/i);
+  // Doc-title trigger words. "on" was previously included on its own, but it's
+  // an extremely common word ("meeting on Friday", "notes on X") and produced a
+  // lot of false-positive doc titles. Restricted to "notes on"/"page on" so it
+  // still catches genuine references without firing on every sentence with "on".
+  const docMatch = message.match(
+    /\b(?:about|status\s+of|details\s+of|project|notes?\s+on|page\s+on)\s+([a-zA-Z][a-zA-Z0-9]+(?:\s+[a-zA-Z0-9]+)?)\b/i,
+  );
   if (docMatch?.[1]) {
     const candidateDoc = docMatch[1].trim();
-    if (!/^\d{4}$/.test(candidateDoc)) {
+    if (!/^\d{4}$/.test(candidateDoc) && !isNoiseTopic(candidateDoc)) {
       docTitle = candidateDoc;
     }
   }
@@ -282,16 +332,29 @@ export function isFollowUpNeedingContext(message: string, history: ChatHistoryIt
 
   if (!history || history.length === 0) return false;
 
-  // Short queries that clearly continue previous topic (2-5 words with follow-up indicators)
+  // Short queries that continue previous topic without specifying a new topic/noun phrase
   const words = lower.split(/\s+/).filter(Boolean);
-  if (words.length >= 2 && words.length <= 5) {
-    const followUpPatterns = [
-      /^(and|but|or|also|then|so)\b/,
-      /\b(about\s+this|about\s+that|for\s+it|for\s+this|for\s+that)\b/,
-      /\b(what\s+about|how\s+about|tell\s+me\s+more|show\s+details|more\s+details|more\s+info)\b/,
+  if (words.length >= 2 && words.length <= 10) {
+    const followUpPrefixes = [/^(what\s+about|how\s+about|and|but|or|also|then|so)\s+/i];
+    for (const pat of followUpPrefixes) {
+      if (pat.test(lower)) {
+        const remainder = lower.replace(pat, "").replace(/[?.!]/g, "").trim();
+        // If remainder is purely generic follow-up terms / attributes, it needs context
+        const isGenericAttribute = /^(more|more\s+info|more\s+details|details|status|progress|eta|owner|lead|pm|manager|risks|blockers|tasks?)$/i.test(remainder);
+        if (!remainder || isGenericAttribute) {
+          return true;
+        }
+        // If remainder contains an explicit noun/topic (e.g. "Saturday learning", "leave policy"), it's a new topic
+        return false;
+      }
+    }
+
+    const pureFollowUpPhrases = [
+      /^(tell\s+me\s+more|show\s+details|more\s+details|more\s+info|who\s+is\s+the\s+owner|who's\s+the\s+owner|who\s+leads|what's\s+the\s+status|how\s+is\s+it\s+going)\b/i
     ];
-    for (const pattern of followUpPatterns) {
-      if (pattern.test(lower)) return true;
+    const cleanedLower = lower.replace(/[?.!]/g, "").trim();
+    for (const pat of pureFollowUpPhrases) {
+      if (pat.test(cleanedLower)) return true;
     }
   }
 
@@ -304,9 +367,6 @@ export async function resolveAllEntities(
   sessionName?: string,
   lastEntities?: { lastPerson?: string; lastProject?: string }
 ): Promise<{ message: string; entities: ResolvedEntities }> {
-  const startTime = performance.now();
-  const TIMEOUT_MS = 50;
-
   const lastPerson = lastEntities?.lastPerson;
   const { message: pronounResolvedMessage, resolvedPerson, resolvedQuality } = resolvePronouns(message, sessionName, lastPerson);
 
@@ -316,26 +376,24 @@ export async function resolveAllEntities(
   const entities: ResolvedEntities = {};
 
   if (finalPerson) {
-    const pPromise = resolvePerson(finalPerson).then((p) => {
-      if (p.value) {
-        entities.person = {
-          value: p.value,
-          quality: p.quality,
-          confidence: p.confidence,
-          ambiguous: p.ambiguous,
-          candidates: p.candidates
-        };
-      } else if (p.ambiguous) {
-        entities.person = {
-          value: "",
-          quality: p.quality,
-          confidence: p.confidence,
-          ambiguous: p.ambiguous,
-          candidates: p.candidates
-        };
-      }
-    });
-    await withTimeout(pPromise, TIMEOUT_MS, null);
+    const p = await resolvePersonSafe(finalPerson);
+    if (p.value) {
+      entities.person = {
+        value: p.value,
+        quality: p.quality,
+        confidence: p.confidence,
+        ambiguous: p.ambiguous,
+        candidates: p.candidates
+      };
+    } else if (p.ambiguous) {
+      entities.person = {
+        value: "",
+        quality: p.quality,
+        confidence: p.confidence,
+        ambiguous: p.ambiguous,
+        candidates: p.candidates
+      };
+    }
   }
 
   // Only fall back to lastEntities.lastProject if the current message is a follow-up needing context
@@ -344,16 +402,14 @@ export async function resolveAllEntities(
     rawDoc = lastEntities.lastProject;
   }
   if (rawDoc) {
-    const dPromise = resolveDocument(rawDoc).then((d) => {
-      if (d.value) {
-        entities.page = {
-          value: d.value,
-          url: d.url,
-          quality: d.quality
-        };
-      }
-    });
-    await withTimeout(dPromise, TIMEOUT_MS, null);
+    const d = await resolveDocumentSafe(rawDoc);
+    if (d.value) {
+      entities.page = {
+        value: d.value,
+        url: d.url,
+        quality: d.quality
+      };
+    }
   }
 
   const dateInfo = resolveDates(pronounResolvedMessage);
@@ -410,7 +466,9 @@ export async function lazyResolveSqlEntities(
     }
 
     if (rawPerson) {
-      const resolved = await resolvePerson(rawPerson);
+      // Timeout-protected: previously this awaited resolvePerson directly with
+      // no bound, so a slow DB call here could hang the whole SQL-answer path.
+      const resolved = await resolvePersonSafe(rawPerson);
       if (resolved.value) {
         finalParsed.personName = resolved.value;
         finalParsed.resolvedEntities = {
@@ -472,7 +530,8 @@ export async function lazyResolveSqlEntities(
       rawDoc = lastEntities.lastProject;
     }
     if (rawDoc) {
-      const resolved = await resolveDocument(rawDoc);
+      // Timeout-protected (see note above).
+      const resolved = await resolveDocumentSafe(rawDoc);
       if (resolved.value) {
         finalParsed.docTitle = resolved.value;
         finalParsed.resolvedEntities = {
@@ -538,7 +597,9 @@ export async function lazyResolveRagEntities(
   }
 
   if (rawPerson) {
-    const resolved = await resolvePerson(rawPerson);
+    // Timeout-protected: this is the live RAG path (tryRagAnswer → lazyResolveRagEntities),
+    // so a hung DB call here was previously able to stall the entire chat response.
+    const resolved = await resolvePersonSafe(rawPerson);
     if (resolved.value) {
       finalParsed.personName = resolved.value;
       finalParsed.resolvedEntities = {
@@ -582,7 +643,8 @@ export async function lazyResolveRagEntities(
       rawDoc = extracted.docTitle;
     }
     if (rawDoc) {
-      const resolved = await resolveDocument(rawDoc);
+      // Timeout-protected (see note above).
+      const resolved = await resolveDocumentSafe(rawDoc);
       if (resolved.value) {
         finalParsed.docTitle = resolved.value;
         finalParsed.resolvedEntities = {
