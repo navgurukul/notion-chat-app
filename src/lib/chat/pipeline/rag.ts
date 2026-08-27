@@ -63,6 +63,7 @@ export async function tryRagAnswer(
   },
   signal?: AbortSignal,
   userEmotion?: string,
+  expansionPromise?: Promise<any> | null,
 ) {
   if (signal?.aborted) {
     return new Response(null, { status: 499 });

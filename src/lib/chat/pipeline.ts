@@ -12,6 +12,7 @@ import {
   sanitizeChatHistory,
   extractReferencedTitle,
   isNotionLinkRequest,
+  expandSearchQueries,
 } from "@/lib/chat/query-tools";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { resolveQuery } from "@/lib/query/resolve-query";
@@ -81,7 +82,7 @@ async function attachSession(
   session: Session,
   rawSessionId: unknown,
   message: string,
-  userEmotion?: string,
+  userEmotionPromise?: Promise<string> | string,
   isRegenerate = false,
 ): Promise<string | null> {
   if (typeof rawSessionId !== "string" || !rawSessionId.trim()) return null;
@@ -91,9 +92,18 @@ async function attachSession(
   if (!ownsSession) throw new ChatNotFoundError();
 
   if (!isRegenerate) {
-    await addChatMessage(rawSessionId, "user", message, userEmotion).catch(err =>
-      console.error("[DB Write Error] Failed to save user message:", err),
-    );
+    (async () => {
+      try {
+        const resolvedEmotion = userEmotionPromise
+          ? typeof userEmotionPromise === "string"
+            ? userEmotionPromise
+            : await userEmotionPromise
+          : "neutral";
+        await addChatMessage(rawSessionId, "user", message, resolvedEmotion);
+      } catch (err) {
+        console.error("[DB Write Error] Failed to save user message:", err);
+      }
+    })();
   }
   return rawSessionId;
 }
@@ -271,19 +281,11 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       return NextResponse.json({ answer, emotion: "neutral", sessionId: attachedSessionId });
     }
 
-    // 2. Preprocessing
-    telemetry.startStep("emotion_analysis_ms");
-
     // Fast LLM-friendly utility: current date/time (general question)
     // If user asks “today’s date / what date is it” / “current time” etc., answer without Notion retrieval.
     const utilityDateTimeRegex = /\b(today\s*['’]?\s*s\s+date|today\s+date|today\s+is\s+date|what\s+date\s+is\s+it\s+today|what\s+is\s+today\s*['’]?\s*s\s+date|what\s+day\s+is\s+it\s+today|day\s+today|current\s+time|what\s+time\s+is\s+it|time\s+now|current\s+date)\b/i;
 
-    const lastEntities = await extractLastEntityFromHistory(history);
-    const [emotionAnalysis] = await Promise.all([analyzeUserEmotion(rawMessage, history)]);
-    const userEmotion = emotionAnalysis.emotion;
-    telemetry.endStep("emotion_analysis_ms");
-
-    // Utility response bypasses Notion retrieval.
+    // Utility response bypasses Notion retrieval and emotion analysis.
     if (utilityDateTimeRegex.test(rawMessage)) {
       const now = new Date();
       const isoDate = now.toISOString().slice(0, 10);
@@ -294,17 +296,29 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
           ? `Current time is **${time}** (local to the server).`
           : `Today is **${weekday}**, **${isoDate}** (local to the server).`;
 
-      const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion, body.isRegenerate);
+      const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, undefined, body.isRegenerate);
       if (attachedSessionId) {
-        await addChatMessage(attachedSessionId, "bot", answer, userEmotion).catch(err => console.error("[DB Write Error] Failed to save utility bot message:", err));
+        await addChatMessage(attachedSessionId, "bot", answer, "neutral").catch(err => console.error("[DB Write Error] Failed to save utility bot message:", err));
       }
 
-      return NextResponse.json({ answer, emotion: userEmotion, sessionId: attachedSessionId });
+      return NextResponse.json({ answer, emotion: "neutral", sessionId: attachedSessionId });
     }
 
+    // 2. Preprocessing
+    telemetry.startStep("emotion_analysis_ms");
+    const emotionPromise = (async () => {
+      try {
+        const analysis = await analyzeUserEmotion(rawMessage, history);
+        return analysis.emotion;
+      } finally {
+        telemetry.endStep("emotion_analysis_ms");
+      }
+    })();
+
+    const lastEntities = await extractLastEntityFromHistory(history);
     telemetry.incrementLlmCalls();
 
-    const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion, body.isRegenerate);
+    const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, emotionPromise, body.isRegenerate);
 
 
     // merge DB state
@@ -341,6 +355,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
 
     if (correction) {
       if (correction.clarifyingQuestion) {
+        const userEmotion = await emotionPromise;
         return jsonAnswer(attachedSessionId, correction.clarifyingQuestion, userEmotion, signal);
       }
       if (correction.rewrittenMessage) {
@@ -451,6 +466,8 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       isWrongAnswerRetry,
     };
 
+    const userEmotion = await emotionPromise;
+
     // 6. Notion link
     const linkResponse = await tryNotionLinkAnswer(ctx, userEmotion, signal);
     if (linkResponse) {
@@ -510,6 +527,15 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       return response;
     }
 
+    // Start expansion promise in parallel with SQL attempt if expansion is expected
+    const BROAD_RAG_KINDS = new Set(["semantic", "page_about", "project_summary", "risks_for", "topic_list"]);
+    const shouldExpand = BROAD_RAG_KINDS.has(parsed.kind) || !!isWrongAnswerRetry;
+    let expansionPromise: Promise<any> | null = null;
+    if (shouldExpand) {
+      const primaryQuery = parsed.reformulatedQuery || finalQuery;
+      expansionPromise = expandSearchQueries(finalQuery, history, primaryQuery, parsed.kind);
+    }
+
     // 8. SQL
     telemetry.startStep("sql_ms");
     const sqlResponse = await trySqlAnswer(parsed, ctx, userEmotion, signal, {
@@ -545,7 +571,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       dResolveQuery: 0,
       dReformulate: 0,
       dSqlAnswer: 0,
-    }, signal, userEmotion);
+    }, signal, userEmotion, expansionPromise || undefined);
     telemetry.endStep("rag_ms");
     telemetry.setExecutionPath("RAG Fallback");
 

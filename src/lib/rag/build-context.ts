@@ -136,13 +136,11 @@ export async function prefetchPagesFromQuestion(
               (
                 SELECT count(*)::int FROM unnest($1::text[]) AS pat(p)
                 WHERE lower(coalesce(title, '')) LIKE pat.p
-                   OR lower(coalesce(content, '')) LIKE pat.p
               ) * 8
             ) AS rank
           FROM notion_pages
           WHERE
-            (lower(coalesce(title, '')) LIKE ANY($1::text[])
-             OR lower(coalesce(content, '')) LIKE ANY($1::text[]))
+            lower(coalesce(title, '')) LIKE ANY($1::text[])
             AND notion_edited_at >= $5::timestamptz
             AND notion_edited_at < $6::timestamptz
           ORDER BY rank DESC, length(coalesce(title, '')) ASC, title ASC
@@ -159,13 +157,11 @@ export async function prefetchPagesFromQuestion(
               (
                 SELECT count(*)::int FROM unnest($1::text[]) AS pat(p)
                 WHERE lower(coalesce(title, '')) LIKE pat.p
-                   OR lower(coalesce(content, '')) LIKE pat.p
               ) * 8
             ) AS rank
           FROM notion_pages
           WHERE
             lower(coalesce(title, '')) LIKE ANY($1::text[])
-            OR lower(coalesce(content, '')) LIKE ANY($1::text[])
           ORDER BY rank DESC, length(coalesce(title, '')) ASC, title ASC
           LIMIT $4
           `,
@@ -194,13 +190,11 @@ export async function prefetchPagesFromQuestion(
           ? `
             SELECT id, title, url, owner, created_by, status, doc_type, content,
               (
-                CASE WHEN lower(coalesce(title, '')) LIKE $1 ESCAPE '\\' THEN 60 ELSE 0 END +
-                CASE WHEN lower(coalesce(content, '')) LIKE $1 ESCAPE '\\' THEN 20 ELSE 0 END
+                CASE WHEN lower(coalesce(title, '')) LIKE $1 ESCAPE '\\' THEN 60 ELSE 0 END
               ) AS rank
             FROM notion_pages
             WHERE
-              (lower(coalesce(title, '')) LIKE $1 ESCAPE '\\'
-              OR lower(coalesce(content, '')) LIKE $1 ESCAPE '\\')
+              lower(coalesce(title, '')) LIKE $1 ESCAPE '\\'
               AND notion_edited_at >= $2::timestamptz
               AND notion_edited_at < $3::timestamptz
             ORDER BY rank DESC, length(coalesce(title, '')) ASC, title ASC
@@ -209,14 +203,12 @@ export async function prefetchPagesFromQuestion(
           : `
             SELECT id, title, url, owner, created_by, status, doc_type, content,
               (
-                CASE WHEN lower(coalesce(title, '')) LIKE $1 ESCAPE '\\' THEN 60 ELSE 0 END +
-                CASE WHEN lower(coalesce(content, '')) LIKE $1 ESCAPE '\\' THEN 20 ELSE 0 END
+                CASE WHEN lower(coalesce(title, '')) LIKE $1 ESCAPE '\\' THEN 60 ELSE 0 END
               ) AS rank
             FROM notion_pages
             WHERE
               lower(coalesce(title, '')) LIKE $1 ESCAPE '\\'
-              OR lower(coalesce(content, '')) LIKE $1 ESCAPE '\\'
-            ORDER BY rank DESC, notion_edited_at DESC NULLS LAST, length(coalesce(title, '')) ASC, title ASC
+            ORDER BY rank DESC, length(coalesce(title, '')) ASC, title ASC
             LIMIT $2
             `,
         bounds ? [`%${escapeLike(coreTerm)}%`, bounds.start, bounds.end, PREFETCH_LIMIT] : [`%${escapeLike(coreTerm)}%`, PREFETCH_LIMIT],
@@ -241,17 +233,13 @@ export async function prefetchPagesFromQuestion(
               doc_type,
               content,
               (
-                ts_rank(
-                  to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, '')),
-                  plainto_tsquery('english', $1)
-                ) +
                 2 * ts_rank(
                   to_tsvector('english', coalesce(title, '')),
                   plainto_tsquery('english', $1)
                 )
               ) AS rank
             FROM notion_pages
-            WHERE to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, ''))
+            WHERE to_tsvector('english', coalesce(title, ''))
               @@ plainto_tsquery('english', $1)
               AND notion_edited_at >= $2::timestamptz
               AND notion_edited_at < $3::timestamptz
@@ -272,17 +260,13 @@ export async function prefetchPagesFromQuestion(
               doc_type,
               content,
               (
-                ts_rank(
-                  to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, '')),
-                  plainto_tsquery('english', $1)
-                ) +
                 2 * ts_rank(
                   to_tsvector('english', coalesce(title, '')),
                   plainto_tsquery('english', $1)
                 )
               ) AS rank
             FROM notion_pages
-            WHERE to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, ''))
+            WHERE to_tsvector('english', coalesce(title, ''))
               @@ plainto_tsquery('english', $1)
             ORDER BY rank DESC, notion_edited_at DESC NULLS LAST
             LIMIT $2

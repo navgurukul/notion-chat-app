@@ -1,3 +1,5 @@
+import { embeddingsCache } from "@/lib/chat/cache";
+
 const OPENAI_EMBEDDINGS_URL =
   "https://api.openai.com/v1/embeddings";
 
@@ -265,6 +267,11 @@ export async function embedText(
     return null;
   }
 
+  const cached = embeddingsCache.get(trimmed);
+  if (cached) {
+    return cached;
+  }
+
   try {
     const data = await withRetry(
       () => requestEmbeddings(trimmed),
@@ -274,7 +281,11 @@ export async function embedText(
     const embedding =
       data?.data?.[0]?.embedding;
 
-    return validateEmbedding(embedding);
+    const validated = validateEmbedding(embedding);
+    if (validated) {
+      embeddingsCache.set(trimmed, validated);
+    }
+    return validated;
   } catch (error) {
     handleEmbeddingFailure(error, "embedText");
     return null;

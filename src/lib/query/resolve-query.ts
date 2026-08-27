@@ -218,54 +218,67 @@ export async function resolveQuery(
     };
   }
 
-  // 1.5 Early Query Reformulation for follow-up turns
-  let processedQuestion = question;
-  let reformulatedQueryText: string | undefined;
-  // FIX: rules-safe input is kept separate from the reformulated one.
-  // buildContextualSearchQuery's fallback (used when the reformulation LLM
-  // call fails, or QUERY_REFORMULATION=false) returns a multi-line
-  // "Conversation context: ...\n\nCurrent question: ..." block — most of
-  // rules.ts's regexes are ^-anchored and cannot match that shape, so this
-  // fallback firing on a follow-up question (the exact class of message
-  // shouldReformulate() targets) silently broke regex-based intent parsing
-  // for that turn. Only a genuine LLM rewrite (method: "llm") is a clean
-  // standalone question safe to hand to parseQueryByRules; the
-  // contextual_fallback/original text still flows into the LLM classifier
-  // and downstream RAG retrieval via reformulatedQueryText, where extra
-  // prose context is harmless or even helpful.
-  let rulesInputQuestion = question;
-  if (shouldReformulate(question, history)) {
-    const reformulated = await reformulateSearchQuery(question, history);
-    processedQuestion = reformulated.searchQuery;
-    reformulatedQueryText = reformulated.searchQuery;
-    const hasPersonPronoun = /\b(he|him|his|she|her|hers|they|them|their|me|my|myself|i)\b/i.test(question);
-    if (reformulated.method === "llm" && !hasPersonPronoun) {
-      rulesInputQuestion = reformulated.searchQuery;
-    }
-  }
+  // 1.5 Early Query Reformulation check
+  const needsReformulation = shouldReformulate(question, history);
 
-  // 2. Regex rules parsing on the rules-safe question
+  // 2. Regex rules parsing on the original question first
   const rules = applyIntentHint(
-    rulesInputQuestion,
-    withRegexScores(parseQueryByRules(rulesInputQuestion)),
+    question,
+    withRegexScores(parseQueryByRules(question)),
   );
 
   let parsed: ParsedQuery;
   let usedLlm = false;
+  const needsLlm = shouldUseLlm(rules);
 
-  // 3. Skip LLM if rules are confident
-  if (!shouldUseLlm(rules)) {
-    parsed = rules;
-  } else {
-    usedLlm = true;
-    const llmPromise = classifyQueryIntent(processedQuestion);
+  let reformulatedQueryText: string | undefined;
+  let rulesInputQuestion = question;
+
+  if (needsReformulation || needsLlm) {
     const timeoutLimit = process.env.IS_EVALUATION === "true" ? 6000 : 2500;
-    const llm = await withTimeout(llmPromise, timeoutLimit, null);
-    if (!llm) {
-      parsed = rules;
+    const [reformulated, llm] = await Promise.all([
+      needsReformulation
+        ? reformulateSearchQuery(question, history)
+        : Promise.resolve(null),
+      needsLlm
+        ? withTimeout(classifyQueryIntent(question), timeoutLimit, null)
+        : Promise.resolve(null),
+    ]);
+
+    if (reformulated) {
+      reformulatedQueryText = reformulated.searchQuery;
+      const hasPersonPronoun = /\b(he|him|his|she|her|hers|they|them|their|me|my|myself|i)\b/i.test(question);
+      if (reformulated.method === "llm" && !hasPersonPronoun) {
+        rulesInputQuestion = reformulated.searchQuery;
+        // Re-parse rules on the rules-safe reformulated question
+        const updatedRules = applyIntentHint(
+          rulesInputQuestion,
+          withRegexScores(parseQueryByRules(rulesInputQuestion)),
+        );
+        if (llm) {
+          usedLlm = true;
+          parsed = mergeRulesAndLlm(updatedRules, llm);
+        } else {
+          parsed = updatedRules;
+        }
+      } else {
+        if (llm) {
+          usedLlm = true;
+          parsed = mergeRulesAndLlm(rules, llm);
+        } else {
+          parsed = rules;
+        }
+      }
     } else {
-      parsed = mergeRulesAndLlm(rules, llm);
+      if (llm) {
+        usedLlm = true;
+        parsed = mergeRulesAndLlm(rules, llm);
+      } else {
+        parsed = rules;
+      }
     }
+  } else {
+    parsed = rules;
   }
 
   let docTitle = parsed.docTitle;
