@@ -1,5 +1,6 @@
 import { getJsonCompletion, type ChatHistoryItem } from "@/lib/ai/openai";
 import { reformulationCache } from "@/lib/chat/cache";
+import { isFollowUpNeedingContext } from "@/lib/query/entity-resolver";
 import { removeWord } from "@/lib/shared/text-utils";
 import {
   containsPhrase,
@@ -27,6 +28,7 @@ Rules:
 6. Plain text only (no markdown, no quotes around the output).
 7. Keep the query under 200 characters.
 8. Crucial: Do NOT translate, alter, generalize, or paraphrase proper nouns, project names, document titles, or acronyms. For example, "Oscar MVP" must remain exactly "Oscar MVP" (do NOT change to "Oscar project" or "the MVP of Oscar"), and "Zuvy Eval" must remain exactly "Zuvy Eval".
+9. Topic Switches: If the current question introduces a completely new standalone topic or document title (e.g., shifting from "leave policy" to "Saturday learning"), do NOT inherit entities, project titles, or constraints from history. Generate a search query focusing solely on the new topic.
 
 Example 1:
 - History: user asked about "Comp-Off Leave Policy", assistant explained backdated rules.
@@ -37,6 +39,11 @@ Example 2:
 - History: user asked about tasks assigned to Mahendra (e.g. "Bharat FPO Finder").
 - Follow-up: "tell me more about this task"
 - search_query: "Tell me more about the Bharat FPO Finder task."
+
+Example 3:
+- History: user asked about "Comp-Off Leave Policy".
+- Follow-up: "Saturday learning"
+- search_query: "Saturday learning"
 `.trim();
 
 const MULTI_QUERY_SYSTEM_PROMPT = `
@@ -129,6 +136,35 @@ export type ExpandedSearchQueries = {
   queries: string[];
   method: MultiQueryMethod;
 };
+
+// How long we let a reformulation/expansion LLM call run before falling back
+// to the cheap heuristic path. Tune against your observed OpenAI p95 latency.
+const LLM_CALL_TIMEOUT_MS = 3000;
+
+/**
+ * Race a promise against a timeout. Resolves to `null` (instead of rejecting)
+ * on timeout or error, so callers can fall through to their heuristic fallback
+ * without needing a try/catch at every call site.
+ */
+function withLlmTimeout<T>(promise: Promise<T>, timeoutMs: number = LLM_CALL_TIMEOUT_MS): Promise<T | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn(`[query-tools] LLM call timed out after ${timeoutMs}ms`);
+      resolve(null);
+    }, timeoutMs);
+
+    promise
+      .then((res) => {
+        clearTimeout(timer);
+        resolve(res);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        console.warn("[query-tools] LLM call failed:", err);
+        resolve(null);
+      });
+  });
+}
 
 function formatHistoryForReformulation(history: ChatHistoryItem[]) {
   return history
@@ -481,8 +517,9 @@ export async function reformulateSearchQuery(
       `Current user question: ${trimmed}`,
     ].join("\n");
 
-    const raw = await getJsonCompletion(systemPrompt, userPrompt);
-    const reformulated = parseReformulationResponse(raw);
+    // Race against a timeout so a slow/hung OpenAI call can't stall the whole response.
+    const raw = await withLlmTimeout(getJsonCompletion(systemPrompt, userPrompt));
+    const reformulated = raw ? parseReformulationResponse(raw) : null;
 
     if (reformulated) {
       if (process.env.NODE_ENV !== "production") {
@@ -507,10 +544,13 @@ export async function reformulateSearchQuery(
 
 export function shouldReformulate(message: string, history: ChatHistoryItem[]): boolean {
   if (history.length === 0) return false;
-  const msg = message.toLowerCase();
+  const msg = message.toLowerCase().trim();
   const hasPronouns = /\b(he|him|his|she|her|hers|they|them|their|it|this|that|these|those)\b/i.test(msg);
-  const hasEllipsis = /^[?!\s]*(?:what|how|and|tell\s+me|show|list)\s+about\s/i.test(msg) || msg.trim().split(/\s+/).length <= 4;
-  return hasPronouns || hasEllipsis;
+  const isElliptical = /^(more\s+details|more\s+info|tell\s+me\s+more|show\s+details|who\s+is\s+the\s+owner|who's\s+the\s+owner|who\s+leads|what's\s+the\s+status)$/i.test(msg);
+  
+  if (hasPronouns || isElliptical) return true;
+
+  return isFollowUpNeedingContext(message, history);
 }
 
 /**
@@ -565,8 +605,9 @@ export async function expandSearchQueries(
       `Return ${targetCount} search queries in JSON.`,
     ].join("\n");
 
-    const raw = await getJsonCompletion(MULTI_QUERY_SYSTEM_PROMPT, userPrompt);
-    const generated = parseMultiQueryResponse(raw);
+    // Race against a timeout so a slow/hung OpenAI call can't stall the whole response.
+    const raw = await withLlmTimeout(getJsonCompletion(MULTI_QUERY_SYSTEM_PROMPT, userPrompt));
+    const generated = raw ? parseMultiQueryResponse(raw) : null;
 
     if (generated?.length) {
       const withPrimary = normalizeQueries([primary, ...generated]).slice(0, targetCount);

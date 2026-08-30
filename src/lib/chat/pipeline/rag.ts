@@ -68,201 +68,237 @@ export async function tryRagAnswer(
     return new Response(null, { status: 499 });
   }
 
-  // Lazily resolve RAG entities
-  if (ctx.telemetry) {
-    ctx.telemetry.startStep("entity_resolve_ms");
-  }
-  const finalParsed = await lazyResolveRagEntities(
-    parsed,
-    ctx.history,
-    ctx.sessionName,
-    { lastPerson: ctx.lastPerson, lastProject: ctx.lastProject, lastMale: ctx.lastMale, lastFemale: ctx.lastFemale }
-  );
-  if (ctx.telemetry) {
-    ctx.telemetry.endStep("entity_resolve_ms");
-    if (finalParsed.resolvedEntities?.person) {
-      const p = finalParsed.resolvedEntities.person;
-      ctx.telemetry.logEntity("person", p.value, p.quality, p.confidence, p.ambiguous, p.candidates);
-    }
-    if (finalParsed.resolvedEntities?.page) {
-      const p = finalParsed.resolvedEntities.page;
-      ctx.telemetry.logEntity("page", p.value, p.quality, undefined, undefined, undefined, p.url);
-    }
-  }
-
-  if (isMetadataOnlyKind(finalParsed.kind) && finalParsed.kind !== "team_activity") {
-    logChatRoute("sql_miss_metadata", finalParsed, { blocked_rag: true });
-    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(finalParsed), userEmotion, signal);
-  }
-
-  const titleBoost = resolveRagTitleBoost(finalParsed, ctx.message);
-  const explicitPage = isExplicitPageQuestion(ctx.message, finalParsed.docTitle);
-
-  let searchQuery: string;
-  let method = "original";
-  let dReformulate = timings.dReformulate;
-
-  if (explicitPage && titleBoost) {
-    searchQuery = titleBoost;
-  } else if (ctx.reformulatedQuery) {
-    searchQuery = ctx.reformulatedQuery;
-    method = "reformulated";
-  } else if (shouldReformulate(ctx.message, ctx.history)) {
+  // Everything below can throw (LLM calls, DB calls, network hiccups). Wrapping it
+  // means a failure degrades to a friendly message instead of an unhandled 500.
+  try {
+    // Lazily resolve RAG entities
     if (ctx.telemetry) {
-      ctx.telemetry.startStep("reformulation_ms");
-      ctx.telemetry.incrementLlmCalls();
+      ctx.telemetry.startStep("entity_resolve_ms");
     }
-    const reformulated = await reformulateSearchQuery(ctx.message, ctx.history, finalParsed.kind);
+    const finalParsed = await lazyResolveRagEntities(
+      parsed,
+      ctx.history,
+      ctx.sessionName,
+      { lastPerson: ctx.lastPerson, lastProject: ctx.lastProject, lastMale: ctx.lastMale, lastFemale: ctx.lastFemale }
+    );
     if (ctx.telemetry) {
-      ctx.telemetry.endStep("reformulation_ms");
-      ctx.telemetry.setReformulatedQuery(reformulated.searchQuery);
-    }
-    searchQuery = reformulated.searchQuery;
-    method = reformulated.method;
-  } else {
-    searchQuery = ctx.message;
-    method = "original";
-  }
-
-  const lastProject = ctx.lastProject;
-  const lastPerson = ctx.lastPerson;
-
-  const isVagueFollowUp =
-    !finalParsed.docTitle &&
-    !finalParsed.personName &&
-    /\b(this|that|it|more|explain|project|core|detail|in depth|elaborate|tell me more|what about|only for|for \d{4}|in \d{4}|more information|more about|about it)\b/i.test(
-      ctx.message,
-    ) &&
-    ctx.message.trim().split(/\s+/).length < 20;
-
-  if (isVagueFollowUp) {
-    if (lastProject && !titleBoost) {
-      searchQuery = `${lastProject} ${searchQuery}`.trim();
-      method = "history_entity";
-    } else if (lastPerson && !finalParsed.personName) {
-      searchQuery = `${lastPerson} ${searchQuery}`.trim();
-      method = "history_entity";
-    }
-  }
-
-  const shouldExpand = BROAD_RAG_KINDS.has(finalParsed.kind) || !!ctx.isWrongAnswerRetry;
-  if (ctx.telemetry && shouldExpand) {
-    ctx.telemetry.startStep("expansion_ms");
-    ctx.telemetry.incrementLlmCalls();
-  }
-  let searchQueries = shouldExpand
-    ? (await expandSearchQueries(ctx.message, ctx.history, searchQuery)).queries
-    : [searchQuery];
-  if (ctx.telemetry && shouldExpand) {
-    ctx.telemetry.endStep("expansion_ms");
-  }
-  const multiQueryMethod = shouldExpand ? "llm" : "primary_only";
-
-  const hints: string[] = [];
-  if (titleBoost && !explicitPage) hints.push(`Project/Topic: ${titleBoost}`);
-  if (finalParsed.personName?.trim()) hints.push(`Person: ${finalParsed.personName.trim()}`);
-  if (finalParsed.year) hints.push(`Year: ${finalParsed.year}`);
-  if (hints.length && !explicitPage) {
-    const hintBlock = hints.join("\n");
-    searchQueries = searchQueries.map(q => `${q}\n${hintBlock}`);
-  }
-
-  logChatRoute("semantic_rag", finalParsed, {
-    reformulation: method,
-    multi_query: multiQueryMethod,
-    search_queries: searchQueries,
-    history_entity: isVagueFollowUp ? { lastProject, lastPerson } : undefined,
-  });
-
-  if (ctx.telemetry) {
-    ctx.telemetry.startStep("retrieval_ms");
-  }
-  let {
-    context: notionContext,
-    confidence,
-    chunkHits,
-  } = await buildNotionContextWithConfidence(searchQueries, {
-    titleBoost: titleBoost || undefined,
-    year: finalParsed.year,
-    loosenThreshold: !!ctx.isWrongAnswerRetry,
-  });
-
-  if (!confidence.ok) {
-    console.log("[retrieval] confidence low, attempting retry...", { confidence });
-
-    const broaderQueries = searchQueries.map(q => {
-      let cleaned = q.replace(/\b20\d{2}\b/g, "").trim();
-      cleaned = cleaned.replace(/(Person:|Project\/Topic:|Year:)\s*[^\n]+/gi, "").trim();
-      cleaned = cleaned.split("\n").map(l => l.trim()).filter(Boolean).join(" ");
-      return cleaned;
-    }).filter(Boolean);
-
-    if (titleBoost && !broaderQueries.includes(titleBoost)) {
-      broaderQueries.push(titleBoost);
-    }
-
-    if (broaderQueries.length > 0) {
-      console.log("[retrieval] retrying with broader queries:", broaderQueries);
-      const retryResult = await buildNotionContextWithConfidence(broaderQueries, {
-        titleBoost: titleBoost || undefined,
-        loosenThreshold: !!ctx.isWrongAnswerRetry,
-      });
-
-      if (retryResult.confidence.ok || (retryResult.context.trim() && !notionContext.trim())) {
-        console.log("[retrieval] retry successful!", { newConfidence: retryResult.confidence });
-        notionContext = retryResult.context;
-        confidence = retryResult.confidence;
-        chunkHits = retryResult.chunkHits;
+      ctx.telemetry.endStep("entity_resolve_ms");
+      if (finalParsed.resolvedEntities?.person) {
+        const p = finalParsed.resolvedEntities.person;
+        ctx.telemetry.logEntity("person", p.value, p.quality, p.confidence, p.ambiguous, p.candidates);
+      }
+      if (finalParsed.resolvedEntities?.page) {
+        const p = finalParsed.resolvedEntities.page;
+        ctx.telemetry.logEntity("page", p.value, p.quality, undefined, undefined, undefined, p.url);
       }
     }
-  }
-  if (ctx.telemetry) {
-    ctx.telemetry.endStep("retrieval_ms");
-    const vectorHits = chunkHits.filter(h => h.sem_score > 0).length;
-    const ftsHits = chunkHits.filter(h => h.kw_score > 0).length;
-    ctx.telemetry.logRetrieval(vectorHits, ftsHits, chunkHits.length, chunkHits.length, chunkHits.length);
-  }
 
-  logRetrievalDiagnostics(finalParsed, searchQueries, confidence, chunkHits);
+    if (isMetadataOnlyKind(finalParsed.kind) && finalParsed.kind !== "team_activity") {
+      logChatRoute("sql_miss_metadata", finalParsed, { blocked_rag: true });
+      return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(finalParsed), userEmotion, signal);
+    }
 
-  if (!notionContext.trim()) {
+    const rawTitleBoost = resolveRagTitleBoost(finalParsed, ctx.message);
+    const explicitPage = isExplicitPageQuestion(ctx.message, finalParsed.docTitle);
+    const isExplicitTitleMatch = explicitPage || (rawTitleBoost ? ctx.message.toLowerCase().includes(rawTitleBoost.toLowerCase()) : false);
+    const titleBoost = isExplicitTitleMatch ? rawTitleBoost : undefined;
+
+    let searchQuery: string;
+    let method = "original";
+
+    if (explicitPage && titleBoost) {
+      searchQuery = titleBoost;
+    } else if (ctx.reformulatedQuery) {
+      searchQuery = ctx.reformulatedQuery;
+      method = "reformulated";
+    } else if (shouldReformulate(ctx.message, ctx.history)) {
+      if (ctx.telemetry) {
+        ctx.telemetry.startStep("reformulation_ms");
+        ctx.telemetry.incrementLlmCalls();
+      }
+      const reformulated = await reformulateSearchQuery(ctx.message, ctx.history, finalParsed.kind);
+      if (ctx.telemetry) {
+        ctx.telemetry.endStep("reformulation_ms");
+        ctx.telemetry.setReformulatedQuery(reformulated.searchQuery);
+      }
+      searchQuery = reformulated.searchQuery;
+      method = reformulated.method;
+    } else {
+      searchQuery = ctx.message;
+      method = "original";
+    }
+
+    const lastProject = ctx.lastProject;
+    const lastPerson = ctx.lastPerson;
+
+    const isVagueFollowUp =
+      !finalParsed.docTitle &&
+      !finalParsed.personName &&
+      /\b(this|that|it|more|explain|project|core|detail|in depth|elaborate|tell me more|what about|only for|for \d{4}|in \d{4}|more information|more about|about it)\b/i.test(
+        ctx.message,
+      ) &&
+      ctx.message.trim().split(/\s+/).length < 20;
+
+    if (isVagueFollowUp) {
+      if (lastProject && !titleBoost) {
+        searchQuery = `${lastProject} ${searchQuery}`.trim();
+        method = "history_entity";
+      } else if (lastPerson && !finalParsed.personName) {
+        searchQuery = `${lastPerson} ${searchQuery}`.trim();
+        method = "history_entity";
+      }
+    }
+
+    const shouldExpand = BROAD_RAG_KINDS.has(finalParsed.kind) || !!ctx.isWrongAnswerRetry;
+    if (ctx.telemetry && shouldExpand) {
+      ctx.telemetry.startStep("expansion_ms");
+      ctx.telemetry.incrementLlmCalls();
+    }
+    let searchQueries = shouldExpand
+      ? (await expandSearchQueries(ctx.message, ctx.history, searchQuery)).queries
+      : [searchQuery];
+    if (ctx.telemetry && shouldExpand) {
+      ctx.telemetry.endStep("expansion_ms");
+    }
+    const multiQueryMethod = shouldExpand ? "llm" : "primary_only";
+
+    const hints: string[] = [];
+    if (titleBoost && isExplicitTitleMatch) hints.push(`Project/Topic: ${titleBoost}`);
+    if (finalParsed.personName?.trim()) hints.push(`Person: ${finalParsed.personName.trim()}`);
+    if (finalParsed.year) hints.push(`Year: ${finalParsed.year}`);
+    if (hints.length && !explicitPage) {
+      const hintBlock = hints.join("\n");
+      searchQueries = searchQueries.map(q => `${q}\n${hintBlock}`);
+    }
+
+    logChatRoute("semantic_rag", finalParsed, {
+      reformulation: method,
+      multi_query: multiQueryMethod,
+      search_queries: searchQueries,
+      history_entity: isVagueFollowUp ? { lastProject, lastPerson } : undefined,
+    });
+
+    if (ctx.telemetry) {
+      ctx.telemetry.startStep("retrieval_ms");
+    }
+    let {
+      context: notionContext,
+      confidence,
+      chunkHits,
+    } = await buildNotionContextWithConfidence(searchQueries, {
+      titleBoost: titleBoost || undefined,
+      year: finalParsed.year,
+      loosenThreshold: !!ctx.isWrongAnswerRetry,
+    });
+
+    if (process.env.NODE_ENV !== "production" || process.env.DEBUG_RETRIEVAL === "true") {
+      console.log(`[retrieval-trace] Message: "${ctx.message}" | SearchQuery: "${searchQuery}" | TitleBoost: "${titleBoost ?? 'none'}" | ConfidenceOK: ${confidence.ok} | TopHit: "${chunkHits[0]?.title ?? 'none'}" (score: ${chunkHits[0]?.final_score ?? 0})`);
+    }
+
+    if (!confidence.ok) {
+      if (process.env.NODE_ENV !== "production" || process.env.DEBUG_RETRIEVAL === "true") {
+        console.log("[retrieval] confidence low, attempting retry...", { confidence });
+      }
+
+      const broaderQueries = searchQueries.map(q => {
+        let cleaned = q.replace(/\b20\d{2}\b/g, "").trim();
+        cleaned = cleaned.replace(/(Person:|Project\/Topic:|Year:)\s*[^\n]+/gi, "").trim();
+        cleaned = cleaned.split("\n").map(l => l.trim()).filter(Boolean).join(" ");
+        return cleaned;
+      }).filter(Boolean);
+
+      // Only append titleBoost to retry if explicit or vague follow-up
+      if (isExplicitTitleMatch && titleBoost && !broaderQueries.includes(titleBoost)) {
+        broaderQueries.push(titleBoost);
+      }
+
+      if (broaderQueries.length > 0) {
+        if (process.env.NODE_ENV !== "production" || process.env.DEBUG_RETRIEVAL === "true") {
+          console.log("[retrieval] retrying with broader queries:", broaderQueries);
+        }
+        const retryResult = await buildNotionContextWithConfidence(broaderQueries, {
+          titleBoost: titleBoost || undefined,
+          loosenThreshold: !!ctx.isWrongAnswerRetry,
+        });
+
+        // Keep the retry result if:
+        //  - it clears the confidence bar outright, OR
+        //  - the original attempt had nothing at all, OR
+        //  - the retry scored strictly better than the original, even if still
+        //    below the "ok" threshold (previously this case was discarded entirely,
+        //    silently losing a better-but-imperfect match).
+        const retryIsBetter =
+          retryResult.confidence.ok ||
+          (retryResult.context.trim() && !notionContext.trim()) ||
+          (retryResult.context.trim() &&
+            retryResult.confidence.topScore > confidence.topScore);
+
+        if (retryIsBetter) {
+          if (process.env.NODE_ENV !== "production" || process.env.DEBUG_RETRIEVAL === "true") {
+            console.log("[retrieval] retry successful!", { newConfidence: retryResult.confidence });
+          }
+          notionContext = retryResult.context;
+          confidence = retryResult.confidence;
+          chunkHits = retryResult.chunkHits;
+        }
+      }
+    }
+    if (ctx.telemetry) {
+      ctx.telemetry.endStep("retrieval_ms");
+      const vectorHits = chunkHits.filter(h => h.sem_score > 0).length;
+      const ftsHits = chunkHits.filter(h => h.kw_score > 0).length;
+      ctx.telemetry.logRetrieval(vectorHits, ftsHits, chunkHits.length, chunkHits.length, chunkHits.length);
+    }
+
+    logRetrievalDiagnostics(finalParsed, searchQueries, confidence, chunkHits);
+
+    if (!notionContext.trim()) {
+      return jsonAnswer(
+        ctx.sessionId,
+        "I couldn't find matching pages in the synced Notion database. Try **Sync changes** in the sidebar, or rephrase with a project/person/page name from Notion.",
+        userEmotion,
+        signal,
+      );
+    }
+
+    if (!confidence.ok) {
+      return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE, userEmotion, signal);
+    }
+
+    if (ctx.telemetry) {
+      ctx.telemetry.incrementLlmCalls();
+    }
+    return streamOpenAIAnswer(
+      ctx.message,
+      notionContext,
+      ctx.history,
+      ctx.sessionId,
+      finalParsed.kind,
+      signal,
+      {
+        tStart: timings.tStart,
+        normalization: Math.round(timings.dNormalization),
+        intentClassification: Math.round(timings.dResolveQuery),
+        sqlAnswerAttempt: Math.round(timings.dSqlAnswer),
+        queryReformulation: 0,
+        queryExpansion: 0,
+        retrieval: 0,
+        expandedQueryCount: searchQueries.length,
+        contextChars: notionContext.length,
+        topScore: confidence.topScore,
+        avgScore: confidence.avgScore,
+        confidenceOk: confidence.ok,
+        historyEntityUsed: isVagueFollowUp && (!!lastProject || !!lastPerson),
+      },
+      userEmotion,
+    );
+  } catch (error) {
+    console.error("[tryRagAnswer] unhandled retrieval/generation error:", error);
     return jsonAnswer(
       ctx.sessionId,
-      "I couldn't find matching pages in the synced Notion database. Try **Sync changes** in the sidebar, or rephrase with a project/person/page name from Notion.",
+      "Something went wrong while looking that up. Try rephrasing, or try again in a moment.",
       userEmotion,
       signal,
     );
   }
-
-  if (!confidence.ok) {
-    return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE, userEmotion, signal);
-  }
-
-  if (ctx.telemetry) {
-    ctx.telemetry.incrementLlmCalls();
-  }
-  return streamOpenAIAnswer(
-    ctx.message,
-    notionContext,
-    ctx.history,
-    ctx.sessionId,
-    finalParsed.kind,
-    signal,
-    {
-      tStart: timings.tStart,
-      normalization: Math.round(timings.dNormalization),
-      intentClassification: Math.round(timings.dResolveQuery),
-      sqlAnswerAttempt: Math.round(timings.dSqlAnswer),
-      queryReformulation: 0,
-      queryExpansion: 0,
-      retrieval: 0,
-      expandedQueryCount: searchQueries.length,
-      contextChars: notionContext.length,
-      topScore: confidence.topScore,
-      avgScore: confidence.avgScore,
-      confidenceOk: confidence.ok,
-      historyEntityUsed: isVagueFollowUp && (!!lastProject || !!lastPerson),
-    },
-    userEmotion,
-  );
 }

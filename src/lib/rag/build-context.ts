@@ -24,6 +24,17 @@ type PageRow = {
   rank?: number;
 };
 
+// Result of the keyword prefetch stage: the assembled text for the prompt,
+// plus how many distinct pages actually matched. Keeping `count` separate
+// from `text` matters because `text.length` is a character count, not a hit
+// count — passing the former into confidence scoring silently produced
+// wildly inflated "evidence" numbers (a single short page could easily be
+// 1000+ characters).
+type PrefetchResult = {
+  text: string;
+  count: number;
+};
+
 const PREFETCH_LIMIT = 12;
 const BODY_SNIPPET_CHARS = 1200;
 
@@ -94,10 +105,10 @@ function deriveCoreTerm(term: string): string | null {
 export async function prefetchPagesFromQuestion(
   question: string,
   year?: number,
-): Promise<string> {
+): Promise<PrefetchResult> {
   const cleaned = simplifySearchQuery(question);
   const terms = extractQuestionTerms(question);
-  if (!cleaned && !terms.length) return "";
+  if (!cleaned && !terms.length) return { text: "", count: 0 };
   const bounds = yearWindow(year);
 
   const seen = new Set<string>();
@@ -205,7 +216,7 @@ export async function prefetchPagesFromQuestion(
             WHERE
               lower(coalesce(title, '')) LIKE $1 ESCAPE '\\'
               OR lower(coalesce(content, '')) LIKE $1 ESCAPE '\\'
-            ORDER BY rank DESC, length(coalesce(title, '')) ASC, title ASC
+            ORDER BY rank DESC, notion_edited_at DESC NULLS LAST, length(coalesce(title, '')) ASC, title ASC
             LIMIT $2
             `,
         bounds ? [`%${escapeLike(coreTerm)}%`, bounds.start, bounds.end, PREFETCH_LIMIT] : [`%${escapeLike(coreTerm)}%`, PREFETCH_LIMIT],
@@ -244,7 +255,7 @@ export async function prefetchPagesFromQuestion(
               @@ plainto_tsquery('english', $1)
               AND notion_edited_at >= $2::timestamptz
               AND notion_edited_at < $3::timestamptz
-            ORDER BY rank DESC
+            ORDER BY rank DESC, notion_edited_at DESC NULLS LAST
             LIMIT $4
             `,
             [cleaned, bounds.start, bounds.end, PREFETCH_LIMIT],
@@ -273,7 +284,7 @@ export async function prefetchPagesFromQuestion(
             FROM notion_pages
             WHERE to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, ''))
               @@ plainto_tsquery('english', $1)
-            ORDER BY rank DESC
+            ORDER BY rank DESC, notion_edited_at DESC NULLS LAST
             LIMIT $2
             `,
             [cleaned, PREFETCH_LIMIT],
@@ -284,10 +295,10 @@ export async function prefetchPagesFromQuestion(
     }
   }
 
-  if (!merged.length) return "";
+  if (!merged.length) return { text: "", count: 0 };
 
   const sections = merged.map((row) => formatPageSection(row));
-  return sections.join("\n\n---\n\n");
+  return { text: sections.join("\n\n---\n\n"), count: merged.length };
 }
 
 function assembleChatContext(prefetch: string, semantic: string) {
@@ -388,10 +399,11 @@ export async function buildNotionContextWithConfidence(
   const titleBoost = options?.titleBoost?.trim();
   const year = options?.year;
 
-  const [prefetch, hybrid] = await Promise.all([
+  const [prefetchResult, hybrid] = await Promise.all([
     prefetchPagesFromQuestion(titleBoost || primary, year),
     runHybridChunkRetrieval(queries, titleBoost, { year }),
   ]);
+  const { text: prefetch, count: prefetchCount } = prefetchResult;
 
   let semantic = hybrid.context ?? "";
   if (!semantic) {
@@ -411,7 +423,11 @@ export async function buildNotionContextWithConfidence(
     kw_score: row.kw_score,
   }));
 
-  const confidence = assessRetrievalConfidence(chunkHits, prefetch.length, options?.loosenThreshold);
+  // Fixed: pass the actual number of prefetched pages, not prefetch.length
+  // (which was the character count of the joined prefetch text — often in
+  // the thousands — silently distorting whatever weight this was meant to
+  // carry in the confidence calculation).
+  const confidence = assessRetrievalConfidence(chunkHits, prefetchCount, options?.loosenThreshold);
 
   return { context, confidence, chunkHits };
 }

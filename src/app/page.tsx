@@ -123,9 +123,21 @@ export default function ChatPage() {
   const [editingText, setEditingText] = useState("");
   const canManageKnowledgeBase = hasKnowledgeBaseAccess(session);
 
+  const closeSidebarOnMobile = () => {
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
+      setSidebarOpen(false);
+    }
+  };
+
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
+      setSidebarOpen(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -347,6 +359,7 @@ const createNewChat = async () => {
       setActiveSessionId(data.session.id);
       setMessages([]);
       setThinkingByMessage({});
+      closeSidebarOnMobile();
     }
   } catch (error) {
     console.error("Failed to create chat:", error);
@@ -802,6 +815,15 @@ const createNewChat = async () => {
 
   return (
     <div className="flex h-screen bg-[#0a0a0a] text-white overflow-hidden relative">
+      {/* Mobile backdrop overlay for sidebar */}
+      {sidebarOpen && (
+        <div
+          className="md:hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-30 transition-opacity"
+          onClick={() => setSidebarOpen(false)}
+          role="presentation"
+        />
+      )}
+
       {/* Full sync confirmation */}
       {showFullSyncConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -926,7 +948,7 @@ const createNewChat = async () => {
       )}
 
       {/* Sidebar */}
-      <aside className={`${sidebarOpen ? "w-80" : "w-0"} shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out bg-white/5 border-r border-white/10 backdrop-blur-xl flex flex-col`}>
+      <aside className={`${sidebarOpen ? "w-80 max-w-[85vw]" : "w-0"} fixed md:relative inset-y-0 left-0 z-40 md:z-auto shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out bg-[#121212] md:bg-white/5 border-r border-white/10 backdrop-blur-xl flex flex-col`}>
         <div className="p-6 border-b border-white/10">
           {/* Header row: logo + title + toggle button on the far right */}
           <div className="flex items-center gap-3 mb-6">
@@ -1073,6 +1095,7 @@ const createNewChat = async () => {
                     setMessages([]);
                     setThinkingByMessage({});
                     setActiveSessionId(chat.id);
+                    closeSidebarOnMobile();
                   }}
                   className={`flex-1 min-w-0 text-left px-3 py-2 text-sm truncate transition-colors ${
                     activeSessionId === chat.id ? "text-blue-200" : "text-white/55 group-hover:text-white"
@@ -1084,7 +1107,7 @@ const createNewChat = async () => {
                   type="button"
                   onClick={(e) => requestDeleteChat(chat, e)}
                   disabled={isLoadingChats || isLoading}
-                  className="shrink-0 p-2 mr-1 rounded-md text-white/30 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all disabled:opacity-40"
+                  className="shrink-0 p-2 mr-1 rounded-md text-white/30 hover:text-red-400 hover:bg-red-500/10 opacity-70 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 transition-all disabled:opacity-40"
                   title="Delete chat"
                   aria-label={`Delete ${chat.title || "chat"}`}
                 >
@@ -1130,14 +1153,14 @@ const createNewChat = async () => {
         </header>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-8 space-y-8 scroll-smooth antialiased">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 space-y-4 sm:space-y-6 md:space-y-8 scroll-smooth antialiased">
           {!chatsReady || isLoadingChats ? (
             <div className="h-full flex flex-col items-center justify-center text-center">
               <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
               <p className="mt-4 text-sm text-white/40">Loading chat...</p>
             </div>
           ) : messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto">
+            <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto px-4">
               <div className="p-6 rounded-3xl bg-blue-600/10 mb-6">
                 <Bot className="w-12 h-12 text-blue-500" />
               </div>
@@ -1170,15 +1193,15 @@ const createNewChat = async () => {
               return (
                 <div key={idx} className="space-y-2 group/msg">
                   <div
-                    className={`flex gap-4 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}
+                    className={`flex gap-3 sm:gap-4 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}
                   >
-                    <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${msg.role === "user" ? "bg-white text-black" : "bg-blue-600 text-white"
+                    <div className={`flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center ${msg.role === "user" ? "bg-white text-black" : "bg-blue-600 text-white"
                       }`}>
-                      {msg.role === "user" ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
+                      {msg.role === "user" ? <User className="w-4 h-4 sm:w-5 sm:h-5" /> : <Bot className="w-4 h-4 sm:w-5 sm:h-5" />}
                     </div>
 
                     {msg.role === "user" && editingMessageId === msg.id ? (
-                      <div className="flex-1 max-w-[80%] p-4 rounded-2xl bg-white/10 border border-white/10 rounded-tr-none space-y-3">
+                      <div className="flex-1 max-w-[90%] sm:max-w-[80%] p-3.5 sm:p-4 rounded-2xl bg-white/10 border border-white/10 rounded-tr-none space-y-3">
                         <textarea
                           value={editingText}
                           onChange={(e) => setEditingText(e.target.value)}
@@ -1203,8 +1226,8 @@ const createNewChat = async () => {
                         </div>
                       </div>
                     ) : (
-                      <div className="relative max-w-[80%] flex flex-col">
-                        <div className={`p-4 rounded-2xl ${msg.role === "user"
+                      <div className="relative max-w-[88%] sm:max-w-[80%] flex flex-col">
+                        <div className={`p-3.5 sm:p-4 rounded-2xl ${msg.role === "user"
                           ? "bg-white/10 border border-white/10 rounded-tr-none"
                           : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
                           }`}>
@@ -1243,7 +1266,7 @@ const createNewChat = async () => {
                               setEditingMessageId(msg.id!);
                               setEditingText(msg.content);
                             }}
-                            className="absolute -left-10 top-2 p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors"
+                            className="absolute -left-7 sm:-left-10 top-2 p-1 sm:p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors"
                             title="Edit message"
                           >
                             <Pencil className="w-4 h-4" />
@@ -1254,7 +1277,7 @@ const createNewChat = async () => {
                   </div>
 
                   {idx === messages.length - 1 && msg.role === "bot" && msg.id && !isLoading && (
-                    <div className="flex justify-start pl-12 mt-1">
+                    <div className="flex justify-start pl-10 sm:pl-12 mt-1">
                       <button
                         type="button"
                         onClick={handleRegenerate}
@@ -1271,11 +1294,11 @@ const createNewChat = async () => {
             })
           )}
           {isLoading && messages[messages.length - 1]?.role === "user" && (
-            <div className="flex gap-4">
-              <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center">
-                <Bot className="w-5 h-5" />
+            <div className="flex gap-3 sm:gap-4">
+              <div className="flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center">
+                <Bot className="w-4 h-4 sm:w-5 sm:h-5" />
               </div>
-              <div className="p-4 rounded-2xl bg-blue-600/10 border border-blue-500/10 rounded-tl-none">
+              <div className="p-3.5 sm:p-4 rounded-2xl bg-blue-600/10 border border-blue-500/10 rounded-tl-none">
                 <div className="flex gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce [animation-delay:-0.3s]" />
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce [animation-delay:-0.15s]" />
@@ -1288,7 +1311,7 @@ const createNewChat = async () => {
         </div>
 
         {/* Input Area */}
-        <div className="p-8">
+        <div className="p-3 sm:p-4 md:p-6 lg:p-8">
           <form
             onSubmit={handleSend}
             className="max-w-4xl mx-auto relative group"
@@ -1299,13 +1322,13 @@ const createNewChat = async () => {
               onChange={(e) => setInput(e.target.value)}
               disabled={!activeSessionId || isLoadingChats}
               placeholder={activeSessionId ? "Ask anything..." : "Creating chat..."}
-              className="w-full p-4 pr-14 rounded-2xl bg-white/5 border border-white/10 focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.07] transition-all placeholder:text-white/20 text-white"
+              className="w-full p-3.5 sm:p-4 pr-12 sm:pr-14 rounded-2xl bg-white/5 border border-white/10 focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.07] transition-all placeholder:text-white/20 text-white text-sm sm:text-base"
             />
             {isLoading ? (
               <button
                 type="button"
                 onClick={handleStopClick}
-                className={`absolute right-2 top-2 p-2 rounded-xl text-white transition-all duration-200 flex items-center justify-center min-h-[36px] ${
+                className={`absolute right-2 top-2 sm:right-2.5 sm:top-2.5 p-2 rounded-xl text-white transition-all duration-200 flex items-center justify-center min-h-[36px] ${
                   stopConfirmState === "confirm"
                     ? "bg-red-700 hover:bg-red-800 px-3 animate-pulse"
                     : "bg-red-500 hover:bg-red-600"
@@ -1322,7 +1345,7 @@ const createNewChat = async () => {
               <button
                 type="submit"
                 disabled={!input.trim() || !activeSessionId}
-                className="absolute right-2 top-2 p-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 transition-all font-semibold"
+                className="absolute right-2 top-2 sm:right-2.5 sm:top-2.5 p-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 transition-all font-semibold"
                 title="Send message"
               >
                 <Send className="w-5 h-5" />
