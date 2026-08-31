@@ -19,18 +19,12 @@ import { getGenderOfPerson } from "@/lib/query/entity-resolver/person";
 import { analyzeUserEmotion } from "@/lib/chat/emotion";
 import type { ParsedQuery } from "@/lib/query/types";
 import { lookupPageLinkByTitle } from "@/lib/sql/answers";
-import {
-  extractLastEntityFromHistory,
-  jsonAnswer,
-  resolveFirstPerson,
-  tryFastPathRegexRoute,
-} from "./pipeline/router";
+import { extractLastEntityFromHistory, jsonAnswer } from "./pipeline/router";
 import { trySqlAnswer } from "./pipeline/sql";
 import { tryRagAnswer } from "./pipeline/rag";
-import { PipelineContext, LATENCY_BUDGETS } from "./pipeline/timing";
-import { PipelineTelemetry } from "./pipeline/telemetry";
+import { PipelineContext, PipelineTelemetry, LATENCY_BUDGETS } from "./pipeline/telemetry";
 import { detectAndHandleCorrection, isCorrectionMessage } from "./pipeline/correction";
-import { detectSmalltalkType, tryFastPathRegexRoute as smalltalkFastPath } from "./pipeline/router";
+import { detectSmalltalkType, tryFastPathRegexRoute } from "./pipeline/smalltalk";
 import type { ChatHistoryItem } from "@/lib/ai/openai";
 
 export type ChatRequestBody = {
@@ -137,7 +131,7 @@ function countSmalltalkRepeats(history: ChatHistoryItem[], smalltalkType: Return
 }
 
 function buildSmalltalkWarmPoolFallback(type: ReturnType<typeof detectSmalltalkType>, userName?: string, message?: string) {
-  const fast = message ? smalltalkFastPath(message, userName) : null;
+  const fast = message ? tryFastPathRegexRoute(message, userName) : null;
   if (fast && fast.kind === "smalltalk") return fast.answer;
   return type
     ? "Hi! What would you like to check in NavGurukul’s Notion today?"
@@ -556,4 +550,3 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
     telemetry.finish();
   }
 }
-

@@ -371,12 +371,6 @@ export function extractReferencedTitle(message: string, history: ChatHistoryItem
   return null;
 }
 
-export function resolveSemanticSearchQuery(message: string, history: ChatHistoryItem[]) {
-  const title = extractReferencedTitle(message, history);
-  if (title && isNotionLinkRequest(message)) return title;
-  return buildContextualSearchQuery(message, history);
-}
-
 function readQueryCount() {
   const parsed = Number(process.env.MULTI_QUERY_COUNT);
   if (Number.isFinite(parsed) && parsed >= 2 && parsed <= 5) return Math.floor(parsed);

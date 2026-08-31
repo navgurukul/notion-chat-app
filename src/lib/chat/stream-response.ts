@@ -224,6 +224,3 @@ export async function streamOpenAIAnswer(
     },
   });
 }
-
-/** Backward compatibility alias */
-export const streamGeminiAnswer = streamOpenAIAnswer;

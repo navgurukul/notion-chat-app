@@ -1,9 +1,8 @@
 import type { Session } from "next-auth";
 import type { ParsedQuery } from "@/lib/query/types";
-import { PipelineContext } from "./timing";
+import { PipelineContext, logChatRoute, logRetrievalDiagnostics } from "./telemetry";
 import { isMetadataOnlyKind, metadataNotFoundAnswer } from "@/lib/chat/routing-policy";
 import { reformulateSearchQuery, shouldReformulate, expandSearchQueries } from "@/lib/chat/query-tools";
-import { logChatRoute, logRetrievalDiagnostics } from "@/lib/chat/retrieval-diagnostics";
 import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
 import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";

@@ -15,7 +15,10 @@
     "embed:missing": "tsx scripts/embed-missing.ts",
     "verify:chat-routes": "tsx scripts/verify-chat-routes.ts",
     "test:e2e": "tsx scripts/e2e-pipeline-test.ts",
-    "backfill:notion-edited-at": "tsx scripts/backfill-notion-edited-at.ts"
+    "backfill:notion-edited-at": "tsx scripts/backfill-notion-edited-at.ts",
+    "eval": "tsx scripts/evaluate-rag.ts",
+    "eval:retrieval": "tsx scripts/evaluate-retrieval.ts",
+    "eval:faithfulness": "tsx scripts/evaluate-faithfulness.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.971.0",

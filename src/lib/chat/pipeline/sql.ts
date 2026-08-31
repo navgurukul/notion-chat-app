@@ -1,9 +1,14 @@
 import { ParsedQuery } from "@/lib/query/types";
-import { PipelineContext } from "./timing";
+import { PipelineContext } from "./telemetry";
 import { handleMetadataQuery } from "@/lib/sql/answers";
-import { isSqlMissAnswer, isTeamActivityMetadataGap, shouldFallbackToRag } from "@/lib/chat/answer-quality";
-import { isMetadataOnlyKind, metadataNotFoundAnswer } from "@/lib/chat/routing-policy";
-import { logChatRoute } from "@/lib/chat/retrieval-diagnostics";
+import {
+  isMetadataOnlyKind,
+  isSqlMissAnswer,
+  isTeamActivityMetadataGap,
+  metadataNotFoundAnswer,
+  shouldFallbackToRag,
+} from "@/lib/chat/routing-policy";
+import { logChatRoute } from "./telemetry";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { jsonAnswer } from "./router";
 
