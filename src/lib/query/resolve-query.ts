@@ -1,9 +1,6 @@
-import { parseQueryByRules } from "@/lib/query/rules";
-import { classifyQueryIntent } from "./intent-classifier";
-import { detectIntent } from "./intent";
-import { logQueryRouting } from "./telemetry";
+import { parseQueryByRules, withRegexScores, NOISY_ENTITY } from "@/lib/query/rules";
+import { classifyQueryIntent, detectIntent, logQueryRouting } from "./intent";
 import type { ParsedQuery } from "./types";
-import { withRegexScores, NOISY_ENTITY } from "./rule-confidence";
 import type { ChatHistoryItem } from "@/lib/ai/openai";
 import {
   tryFastPathRegexRoute,
@@ -14,8 +11,7 @@ import {
   shouldReformulate,
   reformulateSearchQuery,
 } from "@/lib/chat/query-tools";
-import { isFollowUpNeedingContext } from "./entity-resolver";
-import { getGenderOfPerson } from "./entity-resolver/person";
+import { isFollowUpNeedingContext, getGenderOfPerson } from "./entity-resolver";
 
 const INTENT_KIND_HINTS: Record<string, Set<ParsedQuery["kind"]>> = {
   PERSON_ACTIVITY: new Set([

@@ -15,7 +15,7 @@ import {
 } from "@/lib/chat/query-tools";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { resolveQuery } from "@/lib/query/resolve-query";
-import { getGenderOfPerson } from "@/lib/query/entity-resolver/person";
+import { getGenderOfPerson } from "@/lib/query/entity-resolver";
 import { analyzeUserEmotion } from "@/lib/chat/emotion";
 import type { ParsedQuery } from "@/lib/query/types";
 import { lookupPageLinkByTitle } from "@/lib/sql/answers";

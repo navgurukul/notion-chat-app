@@ -1,6 +1,5 @@
-import { ChatHistoryItem } from "@/lib/ai/openai";
-import { resolvePerson } from "@/lib/query/entity-resolver/person";
-import { resolveDocument } from "@/lib/query/entity-resolver/document";
+import type { ChatHistoryItem } from "@/lib/ai/openai";
+import { resolvePerson, resolveDocument } from "@/lib/query/entity-resolver";
 import { reformulationCache, sqlMetadataCache } from "@/lib/chat/cache";
 import { getSessionState, updateSessionState, listChatMessages } from "@/lib/chat/store";
 
