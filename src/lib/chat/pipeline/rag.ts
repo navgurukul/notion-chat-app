@@ -97,6 +97,12 @@ export async function tryRagAnswer(
       return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(finalParsed), userEmotion, signal);
     }
 
+    if (finalParsed.resolvedEntities?.person?.ambiguous && finalParsed.resolvedEntities.person.candidates.length > 0) {
+      const candidatesList = finalParsed.resolvedEntities.person.candidates.map((c: string) => `**${c}**`).join(" or ");
+      const clarAnswer = `I found multiple possible matches for that person. Did you mean ${candidatesList}?`;
+      return jsonAnswer(ctx.sessionId, clarAnswer, userEmotion, signal);
+    }
+
     const rawTitleBoost = resolveRagTitleBoost(finalParsed, ctx.message);
     const explicitPage = isExplicitPageQuestion(ctx.message, finalParsed.docTitle);
     const isExplicitTitleMatch = explicitPage || (rawTitleBoost ? ctx.message.toLowerCase().includes(rawTitleBoost.toLowerCase()) : false);

@@ -18,12 +18,14 @@ export type ResolvedPerson = {
   confidence: number;
   ambiguous: boolean;
   candidates: string[];
+  timedOut?: boolean;
 };
 
 export type ResolvedDocument = {
   value: string | null;
   url: string | null;
   quality: ResolutionQuality;
+  timedOut?: boolean;
 };
 
 export type ResolvedEntity<T> = {
@@ -47,8 +49,13 @@ type DocCacheEntry = {
 };
 
 const docCache = new Map<string, DocCacheEntry>();
-const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_CACHE_SIZE = 1000;
+
+export function clearEntityCaches() {
+  docCache.clear();
+  inMemoryGenderCache.clear();
+}
 
 function getCacheKey(topic: string): string {
   return topic.toLowerCase().replace(/\s+/g, " ").trim();
@@ -278,13 +285,6 @@ export async function getGenderOfPerson(name: string): Promise<"male" | "female"
     const parsed = JSON.parse(jsonText) as { gender?: string };
     const detected: "male" | "female" = parsed.gender?.toLowerCase() === "female" ? "female" : "male";
 
-    await query(
-      `INSERT INTO name_genders (name, gender) 
-       VALUES ($1, $2) 
-       ON CONFLICT (name) DO UPDATE SET gender = EXCLUDED.gender`,
-      [firstName, detected]
-    ).catch(err => console.error("[postgres] failed to save to name_genders:", err));
-
     inMemoryGenderCache.set(firstName, detected);
     return detected;
   } catch (error) {
@@ -319,12 +319,14 @@ const EMPTY_RESOLVED_PERSON: ResolvedPerson = {
   confidence: 0,
   ambiguous: false,
   candidates: [],
+  timedOut: true,
 } as ResolvedPerson;
 
 const EMPTY_RESOLVED_DOCUMENT: ResolvedDocument = {
   value: "",
   url: null,
   quality: ResolutionQuality.NONE,
+  timedOut: true,
 } as ResolvedDocument;
 
 function resolvePersonSafe(name: string): Promise<ResolvedPerson> {

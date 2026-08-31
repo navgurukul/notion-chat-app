@@ -105,11 +105,12 @@ function applyIntentHint(question: string, rules: ParsedQuery): ParsedQuery {
 function mergeRulesAndLlm(rules: ParsedQuery, llm: ParsedQuery): ParsedQuery {
   const smalltalkOverride = llm.kind === "smalltalk" && llm.confidence >= 0.5;
 
+  // Regex wins outright only if regex confidence is high AND (LLM agrees OR LLM is unconfident < 0.5)
   const rulesWinsOutright =
     !smalltalkOverride &&
     rules.confidence >= HIGH_CONFIDENCE &&
     !hasBrokenEntities(rules) &&
-    (rules.kind === llm.kind || llm.confidence < rules.confidence - 0.1);
+    (rules.kind === llm.kind || llm.confidence < 0.5);
 
   if (rulesWinsOutright) {
     return {
@@ -121,7 +122,7 @@ function mergeRulesAndLlm(rules: ParsedQuery, llm: ParsedQuery): ParsedQuery {
 
   const mergedKind = smalltalkOverride
     ? "smalltalk"
-    : llm.confidence >= rules.confidence || llm.confidence >= 0.72
+    : llm.confidence >= rules.confidence || llm.confidence >= 0.65
       ? llm.kind
       : rules.kind;
   const confidence = Math.max(llm.confidence, rules.confidence);
@@ -308,6 +309,7 @@ export async function resolveQuery(
     personName: personName || parsed.personName,
     raw: question,
     reformulatedQuery: reformulatedQueryText,
+    lowConfidence: parsed.confidence < 0.60,
   };
 
   logQueryRouting(question, rules, finalParsed, usedLlm);

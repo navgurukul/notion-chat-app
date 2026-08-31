@@ -65,8 +65,12 @@ type ClassifiedIntent = { intent: QueryKind; confidence: number };
 type CacheEntry = { value: ParsedQuery | null; expiry: number };
 
 const intentCache = new Map<string, CacheEntry>();
-const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_CACHE_SIZE = 1000;
+
+export function clearQueryCaches() {
+  intentCache.clear();
+}
 
 function cleanCache() {
   const now = Date.now();
