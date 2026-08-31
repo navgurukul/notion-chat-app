@@ -1,9 +1,8 @@
 import type { Session } from "next-auth";
 import type { ParsedQuery } from "@/lib/query/types";
-import { PipelineContext } from "./timing";
+import { PipelineContext, logChatRoute, logRetrievalDiagnostics } from "./telemetry";
 import { isMetadataOnlyKind, metadataNotFoundAnswer } from "@/lib/chat/routing-policy";
-import { reformulateSearchQuery, shouldReformulate, expandSearchQueries } from "@/lib/chat/query-tools";
-import { logChatRoute, logRetrievalDiagnostics } from "@/lib/chat/retrieval-diagnostics";
+import { reformulateSearchQuery, shouldReformulate, expandSearchQueries, reformulateAndExpand } from "@/lib/chat/query-tools";
 import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
 import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
@@ -98,34 +97,48 @@ export async function tryRagAnswer(
       return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(finalParsed), userEmotion, signal);
     }
 
+    if (finalParsed.resolvedEntities?.person?.ambiguous && finalParsed.resolvedEntities.person.candidates.length > 0) {
+      const candidatesList = finalParsed.resolvedEntities.person.candidates.map((c: string) => `**${c}**`).join(" or ");
+      const clarAnswer = `I found multiple possible matches for that person. Did you mean ${candidatesList}?`;
+      return jsonAnswer(ctx.sessionId, clarAnswer, userEmotion, signal);
+    }
+
     const rawTitleBoost = resolveRagTitleBoost(finalParsed, ctx.message);
     const explicitPage = isExplicitPageQuestion(ctx.message, finalParsed.docTitle);
     const isExplicitTitleMatch = explicitPage || (rawTitleBoost ? ctx.message.toLowerCase().includes(rawTitleBoost.toLowerCase()) : false);
     const titleBoost = isExplicitTitleMatch ? rawTitleBoost : undefined;
 
+    const hasExplicitTarget = Boolean(finalParsed.docTitle || finalParsed.personName);
+    const shouldExpand =
+      (BROAD_RAG_KINDS.has(finalParsed.kind) || !!ctx.isWrongAnswerRetry) && !hasExplicitTarget;
+
     let searchQuery: string;
+    let searchQueries: string[];
     let method = "original";
+    let multiQueryMethod = "primary_only";
 
     if (explicitPage && titleBoost) {
       searchQuery = titleBoost;
-    } else if (ctx.reformulatedQuery) {
-      searchQuery = ctx.reformulatedQuery;
-      method = "reformulated";
-    } else if (shouldReformulate(ctx.message, ctx.history)) {
+      searchQueries = [titleBoost];
+    } else {
       if (ctx.telemetry) {
         ctx.telemetry.startStep("reformulation_ms");
         ctx.telemetry.incrementLlmCalls();
       }
-      const reformulated = await reformulateSearchQuery(ctx.message, ctx.history, finalParsed.kind);
+      const unified = await reformulateAndExpand(
+        ctx.message,
+        ctx.history,
+        finalParsed.kind,
+        !shouldExpand
+      );
       if (ctx.telemetry) {
         ctx.telemetry.endStep("reformulation_ms");
-        ctx.telemetry.setReformulatedQuery(reformulated.searchQuery);
+        ctx.telemetry.setReformulatedQuery(unified.searchQuery);
       }
-      searchQuery = reformulated.searchQuery;
-      method = reformulated.method;
-    } else {
-      searchQuery = ctx.message;
-      method = "original";
+      searchQuery = unified.searchQuery;
+      searchQueries = unified.queries;
+      method = unified.reformulationMethod;
+      multiQueryMethod = unified.multiQueryMethod;
     }
 
     const lastProject = ctx.lastProject;
@@ -148,19 +161,6 @@ export async function tryRagAnswer(
         method = "history_entity";
       }
     }
-
-    const shouldExpand = BROAD_RAG_KINDS.has(finalParsed.kind) || !!ctx.isWrongAnswerRetry;
-    if (ctx.telemetry && shouldExpand) {
-      ctx.telemetry.startStep("expansion_ms");
-      ctx.telemetry.incrementLlmCalls();
-    }
-    let searchQueries = shouldExpand
-      ? (await expandSearchQueries(ctx.message, ctx.history, searchQuery)).queries
-      : [searchQuery];
-    if (ctx.telemetry && shouldExpand) {
-      ctx.telemetry.endStep("expansion_ms");
-    }
-    const multiQueryMethod = shouldExpand ? "llm" : "primary_only";
 
     const hints: string[] = [];
     if (titleBoost && isExplicitTitleMatch) hints.push(`Project/Topic: ${titleBoost}`);

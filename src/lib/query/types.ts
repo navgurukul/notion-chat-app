@@ -46,6 +46,7 @@ export type ParsedQuery = {
   dateRange?: { dateStart: string | null; dateEnd: string | null };
   resolvedEntities?: any;
   reformulatedQuery?: string;
+  lowConfidence?: boolean;
 };
 
 export type ClassifiedIntent = {

@@ -1,5 +1,5 @@
 import type { NotionPageRow } from "@/lib/shared/notion-types";
-import { scoreTitleForTopic, titlesReferToSameTopic } from "@/lib/query/topic-resolution";
+import { scoreTitleForTopic, titlesReferToSameTopic } from "@/lib/query/normalize";
 
 /** Bug/incident tickets that mention a project name but are not project status rows. */
 export function isBugOrIncidentTitle(title: string | null | undefined) {

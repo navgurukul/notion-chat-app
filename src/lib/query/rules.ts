@@ -1,12 +1,11 @@
 /**
- * Rule-based question classifier (legacy regex patterns).
+ * Rule-based question classifier (legacy regex patterns) & confidence scoring.
  *
- * New code should prefer `@/lib/shared/text-utils` (plain string helpers) or the LLM
- * classifier in `intent-classifier.ts`. Regex here is only for fast routing fallbacks.
- *
- * Flow: `resolve-query.ts` tries these rules first, then LLM when confidence is low.
+ * Absorbed rule-confidence.ts so that regex parsing and score evaluation
+ * live together in a single module.
  */
 export type { ParsedQuery, QueryKind, QuerySource } from "@/lib/query/types";
+import type { ParsedQuery, QueryKind } from "@/lib/query/types";
 
 import {
   extractCrossDocSummaryTopic,
@@ -16,13 +15,15 @@ import {
   normalizePersonNameForMatch,
   stripYearSuffixFromPerson,
   isNoiseTopic,
+  stripDocWords,
+  cleanExtractedTitle,
 } from "@/lib/query/normalize";
 
-export { isNoiseTopic };
+export { isNoiseTopic, cleanExtractedTitle };
 
 export { extractCrossDocSummaryTopic, extractYearFromQuestion, isCrossDocSummaryQuestion };
 
-type RulesQuery = Omit<import("@/lib/query/types").ParsedQuery, "confidence" | "source">;
+type RulesQuery = Omit<ParsedQuery, "confidence" | "source">;
 
 function withYear(question: string, partial: Omit<RulesQuery, "raw" | "year">): RulesQuery {
   const year = extractYearFromQuestion(question);
@@ -34,7 +35,6 @@ const PEOPLE_WORDS = ["developers", "developer", "devs", "dev", "engineers", "en
 const LIST_WORDS = ["list", "show", "display", "get"];
 const COUNT_WORDS = ["how many", "number of", "total", "count"];
 
-/** Build a case-insensitive regex that matches any of the given keywords. */
 function keywordsPattern(words: string[], flags = "i"): RegExp {
   const sorted = [...words].sort((a, b) => b.length - a.length);
   const joined = sorted.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
@@ -70,45 +70,6 @@ function cleanComparePageTitle(value: string) {
       "",
     )
     .trim();
-}
-
-const TRAILING_META_WORDS = /\s+(?:details?|info|information|about|spec|specs|specification|requirements?|prd)$/i;
-
-export function cleanExtractedTitle(title: string): string {
-  let cleaned = title.trim();
-  cleaned = cleaned.replace(/[?!.,;]+/g, "").replace(/\s+/g, " ").trim();
-
-  const canonicalPatterns = [
-    /\bemployee\s+information\s+policy$/i,
-    /\binformation\s+policy$/i,
-    /\bproduct\s+requirements\s+document$/i,
-    /\brequirements\s+document$/i,
-    /\bprd\s+template$/i,
-    /\bapi\s+specification$/i,
-    /\bsecurity\s+requirements$/i,
-  ];
-
-  const isProtected = canonicalPatterns.some((pattern) => pattern.test(cleaned));
-
-  if (!isProtected) {
-    cleaned = cleaned.replace(TRAILING_META_WORDS, "").trim();
-  }
-
-  return cleaned;
-}
-
-function stripDocWords(value: string) {
-  const step1 = value
-    .replace(
-      /\b(page|doc|document|docs|pages|project|projects|task|tasks|work|worked|assigned|assign|assignee|given|got|to|the|a|an|all|every|some|any|only|one|feature|features)\b/gi,
-      "",
-    )
-    .replace(/^(what|which|who|where|when|why|how|was|is)\s+/i, "")
-    .replace(/'s\b/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  return cleanExtractedTitle(step1);
 }
 
 function cleanPersonName(value: string | null) {
@@ -228,7 +189,6 @@ function parseActivityQuery(question: string, q: string): RulesQuery | null {
   return null;
 }
 
-/** Title before a dash, e.g. "Structuring the Product Team — What's the core idea?" */
 function extractLeadingPageTitle(question: string) {
   if (/^\s*compare\b/i.test(question)) return null;
   const match = question.match(
@@ -240,7 +200,6 @@ function extractLeadingPageTitle(question: string) {
   return title.length >= 8 ? title : null;
 }
 
-/** "Compare Oscar MVP and Oscar App — what's the difference?" */
 export function extractCompareTitles(question: string): { a: string; b: string } | null {
   const match = question.match(
     /\bcompare\s+(.+?)\s+and\s+(.+?)(?:\s*[—–-]|\s*[,;]|\s+what\b|\s+what'?s\b|\?|$)/i,
@@ -252,7 +211,6 @@ export function extractCompareTitles(question: string): { a: string; b: string }
   return { a, b };
 }
 
-/** Rule-based intent parse (legacy). Prefer {@link resolveQuery} in the chat API. */
 export function parseQueryByRules(question: string): RulesQuery {
   const qn = preprocessQuestion(question);
   const q = normalize(qn);
@@ -274,7 +232,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // Person-project membership checks
   const membershipRegex = /^(?:is|does|are)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:working\s+on|work\s+on|part\s+of|contributing\s+to|associated\s+with)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i;
   const membershipRegex2 = /^(?:is|are)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:on|in)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i;
   const membershipRegex3 = /^(?:is|does|are)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:the\s+)?(?:owner|manager|pm|lead)\s+(?:of|for|on)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i;
@@ -294,7 +251,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // People discovery patterns
   if (
     /^who\s+works\s+where[.?!]?\s*$/i.test(q) ||
     /^who\s+works?\s+on\s+what[.?!]?\s*$/i.test(q)
@@ -341,7 +297,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "project_most_devs", raw: question, parserConfidence: 0.95 };
   }
 
-  // project_member_breakdown: Group-by-project with member count and names
   const memberBreakdownPatterns = [
     /\b(?:show|list|get|display|give)\s+(?:all\s+)?(?:projects?|teams?)\s+(?:with\s+)?(?:members?|people|team\s+members?|team\s+size|member\s+count)\b/i,
     /\b(?:project|team|project\s+wise)\s*(?:members?|people|member\s+count|team\s+size|strength)\b/i,
@@ -361,7 +316,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "project_manager_of", docTitle: docTitle ?? undefined, raw: question };
   }
 
-  // Implicit assigned list matching
   if (
     /^(?:show|list|get|display|what are the)\s+(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)(?:\s+(?:assigned\s+)?to\s+me)?(?:\?|$)/i.test(q) ||
     /\bassigned\s+(?:tasks?|issues?|tickets?|bugs?|work\s+items?)(?:\?|$)/i.test(q)
@@ -373,7 +327,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     };
   }
 
-  // Person-project scoped tasks
   const tasksAssignedToPersonInProjectMatch = question.match(
     /\b(?:which|what)\s+(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:are\s+)?assigned\s+to\s+(.+?)\s+in\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
   );
@@ -391,7 +344,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // Person-only assigned tasks with optional year
   const tasksAssignedToYearMatch = question.match(
     /\b(?:which|what)\s+(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:are\s+)?assigned\s+to\s+(.+?)(?:\s+in\s+(?:the\s+)?(?:year\s+)?(20\d{2}))?(?:\?|$)/i,
   );
@@ -411,7 +363,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // "assigned to X" shortcut
   const assignedToDirectMatch = question.match(
     /^(?:show\s+)?assigned\s+to\s+([A-Za-z][A-Za-z'.-]*(?:\s+[A-Za-z][A-Za-z'.-]*){0,2})(?:\?|$)/i
   );
@@ -427,7 +378,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // "show/list assigned tasks/projects for/to X"
   const showTasksMatch = q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|project\s+names?)\s+(?:assigned\s+)?(?:to|for|of)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i)
     ?? q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})'s\s+(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|project\s+names?)/i);
   if (showTasksMatch) {
@@ -442,7 +392,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // "what is/are X working on?"
   const workingOnMatch = q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\b/i)
     ?? q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)\s+(?:is|are|has|have)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\b/i)
     ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)?\s*(?:currently\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
@@ -460,7 +409,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // Plan queries
   const planMatch = question.match(
     /\b(?:weekly|monthly|today|yesterday|daily)?\s*plans?\s+(?:for|of)\s+([A-Za-z][A-Za-z'.-]*(?:\s+[A-Za-z][A-Za-z'.-]*){0,2})(?:\?|$)/i
   ) ?? question.match(
@@ -479,7 +427,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // "Who is assigned to / working on X?"
   if (
     /\bwho\s+(?:is\s+)?assigned\s+to\b/i.test(q) ||
     /\bwho\s+(?:is\s+)?working\s+on\b/i.test(q) ||
@@ -503,7 +450,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // "assigned to [person] in/for [project]"
   const personAssignedTopicMatch = question.match(
     /(?:assigned|assign|given)\s+to\s+(.+?)\s+(?:for|in|on|about|related to)\s+(.+?)(?:\?|$)/i,
   );
@@ -521,7 +467,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // owner list
   if (
     /\b(all|list|show)\b.*\b(docs?|documents?|pages?)\b.*\bowned by\b/i.test(q) ||
     /\b(?:pages?|docs?|documents?)\s+owned\s+by\b/i.test(q) ||
@@ -536,7 +481,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "owner_list", personName: cleanPersonName(personName) ?? undefined, raw: question };
   }
 
-  // created-by list
   if (
     /\b(all|list|show)\b.*\b(docs?|documents?|pages?)\b.*\bcreated by\b/i.test(q) ||
     /\bdocs?\s+created\s+by\b/i.test(q)
@@ -545,7 +489,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "created_by_list", personName: personName ?? undefined, raw: question };
   }
 
-  // worked-on list patterns
   if (
     /\b(mostly|most)\s+active\b/i.test(q) ||
     /\b(?:give me|show|list|provide)?\s*(?:data|docs?|tasks?|projects?)?\s*(?:of|about|related to)?\s*\w+.*\bthat\s+\w+.*\b(worked|workd|working|works|work)\b/i.test(q) ||
@@ -566,7 +509,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     return withYear(question, { kind: "worked_on_list", personName: cleanPersonName(personName) ?? undefined });
   }
 
-  // "Which project does Souvik own?"
   const personOwnsProjectsMatch = question.match(
     /\b(?:which|what)\s+projects?\s+(?:does|do)\s+(.+?)\s+own\b/i,
   );
@@ -577,7 +519,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // "Which project is Souvik the owner of?"
   const personIsOwnerOfMatch = question.match(
     /\b(?:which|what)\s+projects?\s+(?:is|are)\s+(.+?)\s+the\s+owner\s+of/i,
   );
@@ -596,7 +537,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // owner of
   if (
     /\bwho\s+(is\s+the\s+)?owner\s+of\b/i.test(q) ||
     /\bowner\s+of\b/i.test(q) ||
@@ -611,7 +551,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "owner_of", docTitle: docTitle ?? undefined, raw: question };
   }
 
-  // created-by of
   if (/\bwho\s+created\b/i.test(q) || /\bcreator\s+of\b/i.test(q) || /\bwho\s+(?:made|wrote|authored)\b/i.test(q)) {
     const docTitle = extractAfter(question, [
       /who\s+created\s+(?:the\s+)?(.+)$/i,
@@ -621,7 +560,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "created_by_of", docTitle: docTitle ?? undefined, raw: question, parserConfidence: 0.95 };
   }
 
-  // type of
   if (/\bwhat\s+(type|kind)\s+(is|of)\b/i.test(q) || /\btype\s+of\b/i.test(q)) {
     const docTitle = extractAfter(question, [
       /what\s+(?:type|kind)\s+is\s+(?:the\s+)?(.+)$/i,
@@ -631,7 +569,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "type_of", docTitle: docTitle ?? undefined, raw: question };
   }
 
-  // blockers
   if (/\bblockers?\b/i.test(q)) {
     const workspaceWide =
       /\b(?:navgurukul|ng)\b/i.test(q) && /\bworkspace\b/i.test(q);
@@ -649,7 +586,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     };
   }
 
-  // ETA
   if (
     /\b(eta|estimated completion|completion date|target date)\b/i.test(q) ||
     /\bwhen\s+will\b.+\b(?:complete|done|ready|ship)\b/i.test(q)
@@ -664,7 +600,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // status of
   if (
     /\b(?:current\s+)?progress\s+on\b/i.test(q) ||
     /\bhow\s+is\s+.+\s+(?:progress|going)\b/i.test(q) ||
@@ -743,7 +678,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "semantic", docTitle: topic, raw: question };
   }
 
-  // summarize / purpose of a page
   if (
     /\b(summarize|summar(?:y|ize|ry)|summary\s+of|provide\s+(?:a\s+)?summar|give\s+(?:me\s+)?(?:a\s+)?summar)\b/i.test(q) ||
     /\bwhat\s+is\b.+\bfor(?:\?|$)/i.test(q) ||
@@ -771,7 +705,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // page details shortcut
   if (/\b(?:tell\s+me\s+more\s+about|more\s+about|details|info|information)\s+(?:of|about|for|on)?\s*(.+?)(?:\?|$)/i.test(q) || /^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i.test(q)) {
     const match = question.match(/\b(?:tell\s+me\s+more\s+about|more\s+about|details|info|information)\s+(?:of|about|for|on)?\s*(.+?)(?:\?|$)/i) ?? question.match(/^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i);
     const doc = stripDocWords(match?.[1] || "");
@@ -780,7 +713,6 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  // topic list
   if (
     /\b(all|every|list|show|give me|provide)\b.{0,30}\b(data|docs?|documents?|pages?|tasks?|info|information|details?|related)\b/i.test(
       q,
@@ -803,7 +735,6 @@ export function parseQueryByRules(question: string): RulesQuery {
   return { kind: "semantic", raw: question };
 }
 
-/** "summarize datapivot ai project", "overview of Oscar" */
 export function extractProjectSummaryTopic(question: string) {
   const q = question.trim();
   if (/\bsummarize\s+what\b/i.test(q) || /\bwhat\b.+\bis\s+for\b/i.test(q)) {
@@ -839,3 +770,129 @@ export function extractProjectSummaryTopic(question: string) {
 
 /** @deprecated Prefer {@link resolveQuery} from `@/lib/query/resolve-query`. */
 export { parseQueryByRules as parseQuery };
+
+// ─── Rule Confidence Scoring ──────────────────────────────────────────────
+
+export enum RuleConfidence {
+  HIGH = 0.90,
+  MEDIUM = 0.60,
+  LOW = 0.45
+}
+
+const HIGH_PRECISION_KINDS = new Set<QueryKind>([
+  "assigned_to_of",
+  "status_of",
+  "project_manager_of",
+  "owner_of",
+  "created_by_of",
+  "type_of",
+  "compare_pages",
+  "onboarding_tasks",
+  "blocker_list",
+  "project_eta",
+  "team_activity",
+  "team_roster",
+  "people_list",
+  "analytics"
+]);
+
+const NEEDS_PERSON = new Set<QueryKind>([
+  "owner_list",
+  "created_by_list",
+  "assigned_list",
+  "worked_on_list",
+  "activity_summary",
+]);
+
+const NEEDS_TITLE = new Set<QueryKind>([
+  "owner_of",
+  "created_by_of",
+  "assigned_to_of",
+  "project_manager_of",
+  "topic_list",
+  "type_of",
+  "status_of",
+  "page_about",
+  "project_summary",
+  "team_activity",
+  "team_roster",
+  "blocker_list",
+  "project_eta",
+  "risks_for",
+]);
+
+export const NOISY_ENTITY = /^(is|was|are|were|only|one|what|who|which|task|tasks|project|projects|work|manager|lead)$/i;
+
+function entityQuality(parsed: Omit<ParsedQuery, "confidence" | "source">) {
+  let score = 1;
+  if (parsed.personName && (parsed.personName.length < 2 || NOISY_ENTITY.test(parsed.personName))) {
+    score -= 0.45;
+  }
+  if (parsed.docTitle && (parsed.docTitle.length < 2 || NOISY_ENTITY.test(parsed.docTitle))) {
+    score -= 0.45;
+  }
+  return Math.max(0, score);
+}
+
+export function scoreRegexParse(
+  parsed: Omit<ParsedQuery, "confidence" | "source">,
+): number {
+  const entity = entityQuality(parsed);
+
+  if (parsed.parserConfidence !== undefined) {
+    return parsed.parserConfidence * entity;
+  }
+
+  if (parsed.kind === "semantic") return 0.15;
+
+  if (NEEDS_PERSON.has(parsed.kind) && !parsed.personName?.trim()) {
+    return 0.05;
+  }
+  if (NEEDS_TITLE.has(parsed.kind) && !parsed.docTitle?.trim()) {
+    return 0.05;
+  }
+
+  if (entity < 0.6) return 0.35;
+
+  if (HIGH_PRECISION_KINDS.has(parsed.kind)) {
+    const needsTitle = [
+      "assigned_to_of",
+      "status_of",
+      "project_manager_of",
+      "owner_of",
+      "created_by_of",
+      "type_of",
+      "compare_pages",
+      "project_eta",
+      "team_activity",
+      "team_roster",
+    ].includes(parsed.kind);
+    if (needsTitle && !parsed.docTitle?.trim()) return 0.4;
+    if (parsed.kind === "compare_pages" && !parsed.compareTitleB?.trim()) return 0.4;
+    return RuleConfidence.HIGH * entity;
+  }
+
+  if (parsed.kind === "assigned_list" && parsed.personName) return RuleConfidence.HIGH * entity;
+  if (parsed.kind === "activity_summary" && parsed.personName) return RuleConfidence.HIGH * entity;
+  if (parsed.kind === "page_about" && parsed.docTitle && parsed.docTitle.length >= 6) {
+    return RuleConfidence.MEDIUM * entity;
+  }
+  if (parsed.kind === "project_summary" && parsed.docTitle) return RuleConfidence.MEDIUM * entity;
+  if (parsed.kind === "risks_for" && parsed.docTitle) return RuleConfidence.MEDIUM * entity;
+
+  if (parsed.kind === "worked_on_list" || parsed.kind === "topic_list") {
+    return RuleConfidence.LOW * entity;
+  }
+
+  return RuleConfidence.MEDIUM * entity;
+}
+
+export function withRegexScores(
+  parsed: Omit<ParsedQuery, "confidence" | "source">,
+): ParsedQuery {
+  return {
+    ...parsed,
+    confidence: scoreRegexParse(parsed),
+    source: "regex",
+  };
+}

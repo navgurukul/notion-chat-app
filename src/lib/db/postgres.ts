@@ -1,4 +1,5 @@
 import "@/lib/dns-hook";
+import dns from "dns";
 import { Pool, type PoolClient } from "pg";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -13,11 +14,14 @@ const globalForPostgres = globalThis as unknown as {
   schemaPromise: Promise<void> | null | undefined;
 };
 
+const poolConfig: any = {
+  connectionString: databaseUrl,
+  lookup: dns.lookup,
+};
+
 export const pool =
   globalForPostgres.pool ??
-  new Pool({
-    connectionString: databaseUrl,
-  });
+  new Pool(poolConfig);
 
 pool.on("error", (error) => {
   console.error("[postgres] Unhandled pool error:", error);

@@ -1,7 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth/options";
+import { getToken } from "next-auth/jwt";
 import { hasNavgurukulDomainAccess } from "@/lib/shared/navgurukul-domain";
 
 export const config = {
@@ -11,15 +10,14 @@ export const config = {
 };
 
 export async function middleware(req: NextRequest) {
-  // Allow static assets and NextAuth endpoints via matcher negative lookahead.
-
-  const session = await getServerSession(authOptions);
-  if (!session) {
+  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
+  if (!token) {
     // If user is not authenticated, redirect to login page.
     return NextResponse.redirect(new URL("/login", req.url));
   }
 
-  const ok = hasNavgurukulDomainAccess({ user: { email: session.user?.email } });
+  const email = token.email as string | undefined;
+  const ok = hasNavgurukulDomainAccess({ user: { email } });
   if (!ok) {
     return NextResponse.json(
       { error: "Forbidden: only @navgurukul.org users can access this app." },
@@ -29,4 +27,3 @@ export async function middleware(req: NextRequest) {
 
   return NextResponse.next();
 }
-

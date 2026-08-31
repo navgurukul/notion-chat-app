@@ -1,11 +1,32 @@
-import { ChatHistoryItem } from "@/lib/ai/openai";
-import { resolvePerson, ResolutionQuality, ResolvedPerson } from "./person";
-import { resolveDocument, ResolvedDocument } from "./document";
+import { query, resolvePersonName as dbResolvePersonName, getPeopleDirectory } from "@/lib/db";
+import { getJsonCompletion, ChatHistoryItem } from "@/lib/ai/openai";
+import { isNoiseTopic, stripDocWords } from "@/lib/query/normalize";
 import type { ParsedQuery } from "@/lib/query/types";
-import { getPeopleDirectory } from "@/lib/db";
-import { isNoiseTopic } from "@/lib/query/normalize";
 
-export { ResolutionQuality };
+// ─── Resolution Quality & Types ──────────────────────────────────────────
+
+export enum ResolutionQuality {
+  EXACT = "EXACT",
+  FIRST_NAME = "FIRST_NAME",
+  PARTIAL = "PARTIAL",
+  NONE = "NONE"
+}
+
+export type ResolvedPerson = {
+  value: string | null;
+  quality: ResolutionQuality;
+  confidence: number;
+  ambiguous: boolean;
+  candidates: string[];
+  timedOut?: boolean;
+};
+
+export type ResolvedDocument = {
+  value: string | null;
+  url: string | null;
+  quality: ResolutionQuality;
+  timedOut?: boolean;
+};
 
 export type ResolvedEntity<T> = {
   value: T;
@@ -20,7 +41,260 @@ export type ResolvedEntities = {
   dateRange?: ResolvedEntity<{ dateStart: string | null; dateEnd: string | null }>;
 };
 
-// Simple timeout utility
+// ─── Document Resolution ──────────────────────────────────────────────────
+
+type DocCacheEntry = {
+  value: ResolvedDocument;
+  expiry: number;
+};
+
+const docCache = new Map<string, DocCacheEntry>();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_CACHE_SIZE = 1000;
+
+export function clearEntityCaches() {
+  docCache.clear();
+  inMemoryGenderCache.clear();
+}
+
+function getCacheKey(topic: string): string {
+  return topic.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function cleanDocCache() {
+  const now = Date.now();
+  for (const [key, entry] of docCache.entries()) {
+    if (now > entry.expiry) {
+      docCache.delete(key);
+    }
+  }
+}
+
+function computeMatchScore(topic: string, title: string): { score: number; quality: ResolutionQuality } {
+  const tLow = topic.toLowerCase().trim();
+  const titleLow = title.toLowerCase().trim();
+
+  if (tLow === titleLow) {
+    return { score: 1.00, quality: ResolutionQuality.EXACT };
+  }
+
+  const tNorm = tLow.replace(/[?!.,;]+/g, "").replace(/\s+/g, " ");
+  const titleNorm = titleLow.replace(/[?!.,;]+/g, "").replace(/\s+/g, " ");
+  if (tNorm === titleNorm) {
+    return { score: 0.97, quality: ResolutionQuality.EXACT };
+  }
+
+  if (titleNorm.startsWith(tNorm)) {
+    return { score: 0.94, quality: ResolutionQuality.PARTIAL };
+  }
+
+  const escaped = tNorm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const wordRegex = new RegExp(`\\b${escaped}\\b`, "i");
+  if (wordRegex.test(titleNorm)) {
+    return { score: 0.85, quality: ResolutionQuality.PARTIAL };
+  }
+
+  const tTokens = new Set(tNorm.split(/\s+/).filter(tok => tok.length > 2));
+  const titleTokens = new Set(titleNorm.split(/\s+/).filter(tok => tok.length > 2));
+  if (tTokens.size > 0 && titleTokens.size > 0) {
+    let intersection = 0;
+    for (const tok of tTokens) {
+      if (titleTokens.has(tok)) intersection++;
+    }
+    const overlap = intersection / Math.max(tTokens.size, titleTokens.size);
+    if (overlap >= 0.5) {
+      return { score: 0.80 * overlap, quality: ResolutionQuality.PARTIAL };
+    }
+  }
+
+  return { score: 0.0, quality: ResolutionQuality.NONE };
+}
+
+export async function resolveDocument(topic: string): Promise<ResolvedDocument> {
+  const trimmed = topic.trim();
+  if (trimmed.length < 2 || isNoiseTopic(trimmed)) {
+    return { value: null, url: null, quality: ResolutionQuality.NONE };
+  }
+
+  const cacheKey = getCacheKey(trimmed);
+  cleanDocCache();
+  const cached = docCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiry) {
+    return cached.value;
+  }
+
+  const pages = await query<{ title: string | null; url: string | null }>(
+    `SELECT title, url FROM notion_pages WHERE title IS NOT NULL AND trim(title) <> ''`
+  );
+
+  let bestMatch: { title: string; url: string | null; score: number; quality: ResolutionQuality } | null = null;
+
+  const matchAgainst = (searchTopic: string) => {
+    for (const page of pages) {
+      if (!page.title) continue;
+      const { score, quality } = computeMatchScore(searchTopic, page.title);
+      if (score >= 0.80 && (!bestMatch || score > bestMatch.score)) {
+        bestMatch = { title: page.title, url: page.url, score, quality };
+      }
+    }
+  };
+
+  matchAgainst(trimmed);
+
+  if (!bestMatch) {
+    const stripped = stripDocWords(trimmed);
+    if (stripped !== trimmed && stripped.length >= 2) {
+      matchAgainst(stripped);
+    }
+  }
+
+  const result: ResolvedDocument = bestMatch
+    ? { value: (bestMatch as any).title, url: (bestMatch as any).url, quality: (bestMatch as any).quality }
+    : { value: null, url: null, quality: ResolutionQuality.NONE };
+
+  if (docCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = docCache.keys().next().value;
+    if (firstKey !== undefined) docCache.delete(firstKey);
+  }
+  docCache.set(cacheKey, { value: result, expiry: Date.now() + CACHE_TTL_MS });
+
+  return result;
+}
+
+// ─── Person Resolution & Gender Lookup ────────────────────────────────────
+
+export async function resolvePerson(input: string): Promise<ResolvedPerson> {
+  const name = input.trim();
+  if (!name || name.length < 2) {
+    return { value: null, quality: ResolutionQuality.NONE, confidence: 0.0, ambiguous: false, candidates: [] };
+  }
+
+  await getPeopleDirectory();
+  const res = await dbResolvePersonName(name);
+
+  if (res.exact) {
+    const dir = await getPeopleDirectory();
+    let normalizedInput = name.toLowerCase();
+    if (normalizedInput === "sanjana") {
+      normalizedInput = "sanjna";
+    }
+
+    const exactMatch = dir.find((p) => p.normalized === normalizedInput);
+    if (exactMatch) {
+      return {
+        value: res.exact,
+        quality: ResolutionQuality.EXACT,
+        confidence: 1.0,
+        ambiguous: false,
+        candidates: []
+      };
+    }
+
+    const firstNameMatches = dir.filter((p) => {
+      const firstName = p.normalized.split(/\s+/)[0];
+      return firstName === normalizedInput;
+    });
+    if (firstNameMatches.length === 1 && firstNameMatches[0].name === res.exact) {
+      return {
+        value: res.exact,
+        quality: ResolutionQuality.FIRST_NAME,
+        confidence: 0.9,
+        ambiguous: false,
+        candidates: []
+      };
+    }
+
+    return {
+      value: res.exact,
+      quality: ResolutionQuality.PARTIAL,
+      confidence: 0.5,
+      ambiguous: false,
+      candidates: []
+    };
+  }
+
+  if (res.candidates.length > 0) {
+    return {
+      value: null,
+      quality: ResolutionQuality.PARTIAL,
+      confidence: 0.5,
+      ambiguous: true,
+      candidates: res.candidates
+    };
+  }
+
+  return {
+    value: null,
+    quality: ResolutionQuality.NONE,
+    confidence: 0.0,
+    ambiguous: false,
+    candidates: []
+  };
+}
+
+const inMemoryGenderCache = new Map<string, "male" | "female">();
+
+export async function getGenderOfPerson(name: string): Promise<"male" | "female"> {
+  const firstName = name.trim().toLowerCase().split(/\s+/)[0];
+  if (!firstName) return "male";
+
+  if (inMemoryGenderCache.has(firstName)) {
+    return inMemoryGenderCache.get(firstName)!;
+  }
+
+  const FEMALE_NAMES = new Set([
+    "alima", "amruta", "apeksha", "archana", "ashwini", "chhaya", "dhanshri", "goldy",
+    "gunavathi", "ira", "komal", "neelam", "neha", "nikita", "pooja", "poonam", "prachi",
+    "pranjal", "pranjali", "priya", "priyanka", "saloni", "sanjna", "sanjana", "sapna", "sheetal",
+    "sugatha", "sukanya", "tamanna", "ujala", "urmila", "vishakha", "also "
+  ]);
+  const MALE_NAMES = new Set([
+    "aadarsh", "abhishek", "aniket", "anirudh", "arunesh", "gaurav", "mahendra", "mayur",
+    "nasir", "mukul", "narendra", "nilesh", "numan", "parichay", "piyush", "prabhat", "priyomjeet",
+    "puran", "rohit", "saksham", "santosh", "saquib", "shailesh", "souvik", "suraj", "vinit"
+  ]);
+
+  if (FEMALE_NAMES.has(firstName)) {
+    inMemoryGenderCache.set(firstName, "female");
+    return "female";
+  }
+  if (MALE_NAMES.has(firstName)) {
+    inMemoryGenderCache.set(firstName, "male");
+    return "male";
+  }
+
+  try {
+    const dbResult = await query<{ gender: string }>(
+      "SELECT gender FROM name_genders WHERE name = $1 LIMIT 1",
+      [firstName]
+    );
+    if (dbResult.length > 0) {
+      const g = dbResult[0].gender === "female" ? "female" : "male";
+      inMemoryGenderCache.set(firstName, g);
+      return g;
+    }
+  } catch (error) {
+    console.error("[postgres] failed to lookup name_genders:", error);
+  }
+
+  try {
+    const systemPrompt = `Identify the typical gender of the given first name (often Indian or International). Return JSON: { "gender": "male" | "female" }`;
+    const userPrompt = `Name: ${firstName}`;
+    const raw = await getJsonCompletion(systemPrompt, userPrompt);
+    const jsonText = raw.trim().match(/\{[\s\S]*\}/)?.[0] ?? raw;
+    const parsed = JSON.parse(jsonText) as { gender?: string };
+    const detected: "male" | "female" = parsed.gender?.toLowerCase() === "female" ? "female" : "male";
+
+    inMemoryGenderCache.set(firstName, detected);
+    return detected;
+  } catch (error) {
+    console.error("[LLM] gender lookup failed for name:", firstName, error);
+    return "male";
+  }
+}
+
+// ─── Timeouts & Helpers ───────────────────────────────────────────────────
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
@@ -37,28 +311,22 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Pr
   });
 }
 
-// Timeout budget for the DB-backed person/document lookups used on the live
-// RAG/SQL resolution paths. 50ms (used elsewhere in this file for
-// resolveAllEntities) was too tight given observed Neon cold-start latency —
-// this is a starting point, tune against real p95s.
 const ENTITY_RESOLVE_TIMEOUT_MS = 300;
 
-// Empty fallbacks returned when a resolution call times out or errors, so callers
-// can treat a timeout the same as a "not found" result rather than crashing.
-// NOTE: verify these match the actual exported shapes of ResolvedPerson /
-// ResolvedDocument from ./person and ./document — adjust fields if they differ.
 const EMPTY_RESOLVED_PERSON: ResolvedPerson = {
   value: "",
   quality: ResolutionQuality.NONE,
   confidence: 0,
   ambiguous: false,
   candidates: [],
+  timedOut: true,
 } as ResolvedPerson;
 
 const EMPTY_RESOLVED_DOCUMENT: ResolvedDocument = {
   value: "",
   url: null,
   quality: ResolutionQuality.NONE,
+  timedOut: true,
 } as ResolvedDocument;
 
 function resolvePersonSafe(name: string): Promise<ResolvedPerson> {
@@ -69,6 +337,8 @@ function resolveDocumentSafe(title: string): Promise<ResolvedDocument> {
   return withTimeout(resolveDocument(title), ENTITY_RESOLVE_TIMEOUT_MS, EMPTY_RESOLVED_DOCUMENT);
 }
 
+// ─── Date & Pronoun Resolution ────────────────────────────────────────────
+
 export function resolveDates(message: string): { year?: number; dateRange?: { dateStart: string | null; dateEnd: string | null } } {
   const q = message.toLowerCase();
   const now = new Date();
@@ -77,7 +347,6 @@ export function resolveDates(message: string): { year?: number; dateRange?: { da
   let dateEnd: string | null = null;
   let year: number | undefined;
 
-  // Support explicit dates: e.g. "23 july 2026", "july 23, 2026", "2026-07-23", "23-07-2026"
   const months = "january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec";
   const MONTH_MAP: Record<string, number> = {
     january: 0, jan: 0, february: 1, feb: 1, march: 2, mar: 2, april: 3, apr: 3, may: 4,
@@ -85,7 +354,6 @@ export function resolveDates(message: string): { year?: number; dateRange?: { da
     october: 9, oct: 9, november: 10, nov: 10, december: 11, dec: 11
   };
 
-  // 1. "23 july 2026" or "23rd july 2026"
   const pattern1 = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${months})\\s+(20\\d{2})\\b`, "i");
   const match1 = q.match(pattern1);
   if (match1) {
@@ -97,7 +365,6 @@ export function resolveDates(message: string): { year?: number; dateRange?: { da
     return { year: yearVal, dateRange: { dateStart: start.toISOString(), dateEnd: end.toISOString() } };
   }
 
-  // 2. "july 23, 2026" or "july 23 2026"
   const pattern2 = new RegExp(`\\b(${months})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?\\s+(20\\d{2})\\b`, "i");
   const match2 = q.match(pattern2);
   if (match2) {
@@ -109,7 +376,6 @@ export function resolveDates(message: string): { year?: number; dateRange?: { da
     return { year: yearVal, dateRange: { dateStart: start.toISOString(), dateEnd: end.toISOString() } };
   }
 
-  // 3. "2026-07-23" or "2026/07/23"
   const pattern3 = /\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/;
   const match3 = q.match(pattern3);
   if (match3) {
@@ -121,7 +387,6 @@ export function resolveDates(message: string): { year?: number; dateRange?: { da
     return { year: yearVal, dateRange: { dateStart: start.toISOString(), dateEnd: end.toISOString() } };
   }
 
-  // 4. "23-07-2026" or "23/07/2026" or "10/31/2025"
   const pattern4 = /\b(\d{1,2})\s*[-/]\s*(\d{1,2})\s*[-/]\s*(20\d{2})\b/;
   const match4 = q.match(pattern4);
   if (match4) {
@@ -133,18 +398,12 @@ export function resolveDates(message: string): { year?: number; dateRange?: { da
     let month: number;
 
     if (num1 > 12) {
-      // First number can't be a month (>12) → must be DD-MM-YYYY.
       day = num1;
       month = num2 - 1;
     } else if (num2 > 12) {
-      // Second number can't be a month (>12) → must be MM-DD-YYYY.
       day = num2;
       month = num1 - 1;
     } else {
-      // Genuinely ambiguous (both ≤ 12). Default to DD-MM-YYYY since this app
-      // serves an India-based team, where that's the conventional reading —
-      // previously this defaulted to MM-DD-YYYY (US convention), which misread
-      // dates like "05-06-2026" as May 6 instead of 5 June.
       day = num1;
       month = num2 - 1;
     }
@@ -240,7 +499,6 @@ export function resolvePronouns(
   let resolvedPerson: string | undefined;
   let resolvedQuality = ResolutionQuality.NONE;
 
-  // First-person pronouns
   const firstPersonRegex = /\b(my|me|myself|i)\b/i;
   if (sessionName && firstPersonRegex.test(text)) {
     resolvedPerson = sessionName;
@@ -248,7 +506,6 @@ export function resolvePronouns(
     text = text.replace(/\b(my|me|myself|i)\b/gi, sessionName);
   }
 
-  // Third-person pronouns
   const thirdPersonRegex = /\b(he|him|his|she|her|hers|they|them|their)\b/i;
   if (lastPerson && thirdPersonRegex.test(text)) {
     resolvedPerson = lastPerson;
@@ -260,16 +517,13 @@ export function resolvePronouns(
 }
 
 export async function extractRawEntities(message: string): Promise<{ personName?: string; docTitle?: string; compareTitleB?: string }> {
-  const words = message.trim().split(/\s+/);
-  
   let personName: string | undefined;
   let docTitle: string | undefined;
   let compareTitleB: string | undefined;
 
-  // 1. Case-insensitive whitelisted matching from the people directory
   const dir = await getPeopleDirectory();
   const sortedDir = [...dir].sort((a, b) => b.normalized.length - a.normalized.length);
-  
+
   const lowerMessage = message.toLowerCase();
   for (const person of sortedDir) {
     const escaped = person.normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -298,10 +552,6 @@ export async function extractRawEntities(message: string): Promise<{ personName?
     }
   }
 
-  // Doc-title trigger words. "on" was previously included on its own, but it's
-  // an extremely common word ("meeting on Friday", "notes on X") and produced a
-  // lot of false-positive doc titles. Restricted to "notes on"/"page on" so it
-  // still catches genuine references without firing on every sentence with "on".
   const docMatch = message.match(
     /\b(?:about|status\s+of|details\s+of|project|notes?\s+on|page\s+on)\s+([a-zA-Z][a-zA-Z0-9]+(?:\s+[a-zA-Z0-9]+)?)\b/i,
   );
@@ -315,36 +565,25 @@ export async function extractRawEntities(message: string): Promise<{ personName?
   return { personName, docTitle, compareTitleB };
 }
 
-/**
- * Check if the current message actually NEEDS entity context from history.
- * Only returns true when the query has pronouns, or is a short contextual follow-up
- * that clearly refers to a previously mentioned entity without explicitly naming it.
- * This prevents incorrectly injecting `lastPerson`/`lastProject` into queries
- * that are standalone and unrelated to the previous conversation.
- */
 export function isFollowUpNeedingContext(message: string, history: ChatHistoryItem[]): boolean {
   const lower = message.trim().toLowerCase();
 
-  // Has explicit pronouns referring to people or things
   if (/\b(he|him|his|she|her|hers|they|them|their|it|its|this|that|me|my|i)\b/i.test(lower)) {
     return true;
   }
 
   if (!history || history.length === 0) return false;
 
-  // Short queries that continue previous topic without specifying a new topic/noun phrase
   const words = lower.split(/\s+/).filter(Boolean);
   if (words.length >= 2 && words.length <= 10) {
     const followUpPrefixes = [/^(what\s+about|how\s+about|and|but|or|also|then|so)\s+/i];
     for (const pat of followUpPrefixes) {
       if (pat.test(lower)) {
         const remainder = lower.replace(pat, "").replace(/[?.!]/g, "").trim();
-        // If remainder is purely generic follow-up terms / attributes, it needs context
         const isGenericAttribute = /^(more|more\s+info|more\s+details|details|status|progress|eta|owner|lead|pm|manager|risks|blockers|tasks?)$/i.test(remainder);
         if (!remainder || isGenericAttribute) {
           return true;
         }
-        // If remainder contains an explicit noun/topic (e.g. "Saturday learning", "leave policy"), it's a new topic
         return false;
       }
     }
@@ -371,7 +610,7 @@ export async function resolveAllEntities(
   const { message: pronounResolvedMessage, resolvedPerson, resolvedQuality } = resolvePronouns(message, sessionName, lastPerson);
 
   const raw = await extractRawEntities(pronounResolvedMessage);
-  
+
   let finalPerson = resolvedPerson || raw.personName;
   const entities: ResolvedEntities = {};
 
@@ -396,7 +635,6 @@ export async function resolveAllEntities(
     }
   }
 
-  // Only fall back to lastEntities.lastProject if the current message is a follow-up needing context
   let rawDoc = raw.docTitle;
   if (!rawDoc && lastEntities?.lastProject && isFollowUpNeedingContext(message, history)) {
     rawDoc = lastEntities.lastProject;
@@ -436,7 +674,6 @@ export async function lazyResolveSqlEntities(
   const rawMessage = parsed.raw || "";
   const needsFollowUpContext = isFollowUpNeedingContext(rawMessage, history);
 
-  // 1. Resolve Person for SQL intents that need a person
   const needsPerson = [
     "assigned_list",
     "worked_on_list",
@@ -460,14 +697,11 @@ export async function lazyResolveSqlEntities(
     if (!rawPerson && sessionName && /\b(me|my|myself|i)\b/i.test(rawMessage)) {
       rawPerson = sessionName;
     }
-    // GUARDRAIL: Only fall back to lastEntities.lastPerson if the current message is a follow-up needing context
     if (!rawPerson && needsFollowUpContext && lastEntities?.lastPerson) {
       rawPerson = lastEntities.lastPerson;
     }
 
     if (rawPerson) {
-      // Timeout-protected: previously this awaited resolvePerson directly with
-      // no bound, so a slow DB call here could hang the whole SQL-answer path.
       const resolved = await resolvePersonSafe(rawPerson);
       if (resolved.value) {
         finalParsed.personName = resolved.value;
@@ -499,7 +733,6 @@ export async function lazyResolveSqlEntities(
     }
   }
 
-  // 2. Resolve Document for SQL intents that need a document
   const needsDoc = [
     "owner_of",
     "created_by_of",
@@ -524,13 +757,11 @@ export async function lazyResolveSqlEntities(
       const extracted = await extractRawEntities(rawMessage);
       rawDoc = extracted.docTitle;
     }
-    // GUARDRAIL: Only fall back to lastEntities.lastProject if the current message is a follow-up needing project context
     const hasProjectPronoun = /\b(it|its|this|that)\b/i.test(rawMessage) || (needsFollowUpContext && !/\b(he|him|his|she|her|hers|they|them|their|me|my|i)\b/i.test(rawMessage));
     if (!rawDoc && hasProjectPronoun && lastEntities?.lastProject) {
       rawDoc = lastEntities.lastProject;
     }
     if (rawDoc) {
-      // Timeout-protected (see note above).
       const resolved = await resolveDocumentSafe(rawDoc);
       if (resolved.value) {
         finalParsed.docTitle = resolved.value;
@@ -546,7 +777,6 @@ export async function lazyResolveSqlEntities(
     }
   }
 
-  // 3. Resolve Date/Year
   const dateInfo = resolveDates(rawMessage);
   if (dateInfo.year) {
     finalParsed.year = dateInfo.year;
@@ -576,7 +806,6 @@ export async function lazyResolveRagEntities(
   const rawMessage = parsed.raw || "";
   const needsFollowUpContext = isFollowUpNeedingContext(rawMessage, history);
 
-  // 1. Resolve Person
   let rawPerson = parsed.personName;
   if (!rawPerson) {
     const extracted = await extractRawEntities(rawMessage);
@@ -591,14 +820,11 @@ export async function lazyResolveRagEntities(
   if (!rawPerson && sessionName && /\b(me|my|myself|i)\b/i.test(rawMessage)) {
     rawPerson = sessionName;
   }
-  // GUARDRAIL: Only fall back to lastEntities.lastPerson if the current message is a follow-up needing context
   if (!rawPerson && needsFollowUpContext && lastEntities?.lastPerson) {
     rawPerson = lastEntities.lastPerson;
   }
 
   if (rawPerson) {
-    // Timeout-protected: this is the live RAG path (tryRagAnswer → lazyResolveRagEntities),
-    // so a hung DB call here was previously able to stall the entire chat response.
     const resolved = await resolvePersonSafe(rawPerson);
     if (resolved.value) {
       finalParsed.personName = resolved.value;
@@ -629,11 +855,9 @@ export async function lazyResolveRagEntities(
     }
   }
 
-  // 2. Resolve Document
   const needsDoc = ["page_about", "project_summary", "risks_for", "onboarding_tasks"].includes(parsed.kind);
   if (needsDoc) {
     let rawDoc = parsed.docTitle;
-    // GUARDRAIL: Only fall back to lastEntities.lastProject if the current message is a follow-up needing project context
     const hasProjectPronoun = /\b(it|its|this|that)\b/i.test(rawMessage) || (needsFollowUpContext && !/\b(he|him|his|she|her|hers|they|them|their|me|my|i)\b/i.test(rawMessage));
     if (!rawDoc && hasProjectPronoun && lastEntities?.lastProject) {
       rawDoc = lastEntities.lastProject;
@@ -643,7 +867,6 @@ export async function lazyResolveRagEntities(
       rawDoc = extracted.docTitle;
     }
     if (rawDoc) {
-      // Timeout-protected (see note above).
       const resolved = await resolveDocumentSafe(rawDoc);
       if (resolved.value) {
         finalParsed.docTitle = resolved.value;
@@ -659,7 +882,6 @@ export async function lazyResolveRagEntities(
     }
   }
 
-  // 3. Resolve Date/Year
   const dateInfo = resolveDates(rawMessage);
   if (dateInfo.year) {
     finalParsed.year = dateInfo.year;
