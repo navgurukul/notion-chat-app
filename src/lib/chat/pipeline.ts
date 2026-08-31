@@ -19,12 +19,11 @@ import { getGenderOfPerson } from "@/lib/query/entity-resolver";
 import { analyzeUserEmotion } from "@/lib/chat/emotion";
 import type { ParsedQuery } from "@/lib/query/types";
 import { lookupPageLinkByTitle } from "@/lib/sql/answers";
-import { extractLastEntityFromHistory, jsonAnswer } from "./pipeline/router";
-import { trySqlAnswer } from "./pipeline/sql";
-import { tryRagAnswer } from "./pipeline/rag";
-import { PipelineContext, PipelineTelemetry, LATENCY_BUDGETS } from "./pipeline/telemetry";
-import { detectAndHandleCorrection, isCorrectionMessage } from "./pipeline/correction";
-import { detectSmalltalkType, tryFastPathRegexRoute } from "./pipeline/smalltalk";
+import { extractLastEntityFromHistory, jsonAnswer, detectSmalltalkType, tryFastPathRegexRoute } from "./smalltalk";
+import { trySqlAnswer } from "./sql-answer";
+import { tryRagAnswer } from "./rag-answer";
+import { PipelineContext, PipelineTelemetry, LATENCY_BUDGETS } from "./telemetry";
+import { detectAndHandleCorrection, isCorrectionMessage } from "./correction";
 import type { ChatHistoryItem } from "@/lib/ai/openai";
 
 export type ChatRequestBody = {
