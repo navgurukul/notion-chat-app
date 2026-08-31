@@ -370,4 +370,3 @@ export function formatDetailedListItem(
 
   return lines.join("\n");
 }
-
