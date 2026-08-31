@@ -620,3 +620,102 @@ export async function expandSearchQueries(
     method: "fallback",
   };
 }
+
+const UNIFIED_REFORMULATE_EXPAND_SYSTEM_PROMPT = `
+You process user questions for NavGurukul's workplace Notion workspace (HRMS, leave policies, projects, onboarding, team docs).
+
+Return JSON only:
+{
+  "search_query": "standalone primary search query",
+  "search_queries": ["query variant 1", "query variant 2", "query variant 3"]
+}
+
+Rules:
+1. "search_query": Use conversation history to resolve pronouns ("it", "they", "this task", "that project") into their actual entity names from history. Must be a standalone search query.
+2. "search_queries": Generate 2 to 3 short query variations from different angles (synonyms, related page titles, policy names, acronyms).
+3. Do NOT translate or paraphrase proper nouns or project names (e.g. "Oscar MVP" stays "Oscar MVP").
+4. If the question is standalone, return it cleaned up.
+5. Do not answer the question — return only search strings in JSON.
+`.trim();
+
+export type UnifiedSearchQuery = {
+  searchQuery: string;
+  queries: string[];
+  reformulationMethod: QueryReformulationMethod;
+  multiQueryMethod: MultiQueryMethod;
+};
+
+export async function reformulateAndExpand(
+  message: string,
+  history: ChatHistoryItem[],
+  intentKind?: string,
+  skipExpansion: boolean = false
+): Promise<UnifiedSearchQuery> {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return { searchQuery: trimmed, queries: [trimmed], reformulationMethod: "original", multiQueryMethod: "disabled" };
+  }
+
+  const needsReformulation = shouldReformulate(trimmed, history);
+
+  if (!needsReformulation && skipExpansion) {
+    return { searchQuery: trimmed, queries: [trimmed], reformulationMethod: "original", multiQueryMethod: "disabled" };
+  }
+
+  if (!needsReformulation) {
+    const expanded = await expandSearchQueries(trimmed, history, trimmed, intentKind);
+    return {
+      searchQuery: trimmed,
+      queries: expanded.queries,
+      reformulationMethod: "original",
+      multiQueryMethod: expanded.method,
+    };
+  }
+
+  if (skipExpansion) {
+    const reformulated = await reformulateSearchQuery(trimmed, history, intentKind);
+    return {
+      searchQuery: reformulated.searchQuery,
+      queries: [reformulated.searchQuery],
+      reformulationMethod: reformulated.method,
+      multiQueryMethod: "disabled",
+    };
+  }
+
+  try {
+    const systemPrompt = UNIFIED_REFORMULATE_EXPAND_SYSTEM_PROMPT + getReformulationIntentInstruction(intentKind);
+    const userPrompt = [
+      "Conversation history:",
+      formatHistoryForReformulation(history),
+      "",
+      `Current user question: ${trimmed}`,
+    ].join("\n");
+
+    const raw = await withLlmTimeout(getJsonCompletion(systemPrompt, userPrompt));
+    if (raw) {
+      const jsonText = raw.trim().match(/\{[\s\S]*\}/)?.[0] ?? raw;
+      const parsed = JSON.parse(jsonText) as { search_query?: string; search_queries?: string[] };
+
+      const searchQuery = parsed.search_query?.trim() || buildContextualSearchQuery(trimmed, history);
+      const rawQueries = Array.isArray(parsed.search_queries) ? parsed.search_queries : [];
+      const queries = normalizeQueries([searchQuery, ...rawQueries]).slice(0, readQueryCount());
+
+      return {
+        searchQuery,
+        queries: queries.length > 0 ? queries : [searchQuery],
+        reformulationMethod: "llm",
+        multiQueryMethod: "llm",
+      };
+    }
+  } catch (error) {
+    console.warn("[query-tools] unified reformulate and expand failed, falling back:", error);
+  }
+
+  const fallbackReform = await reformulateSearchQuery(trimmed, history, intentKind);
+  return {
+    searchQuery: fallbackReform.searchQuery,
+    queries: [fallbackReform.searchQuery],
+    reformulationMethod: fallbackReform.method,
+    multiQueryMethod: "fallback",
+  };
+}

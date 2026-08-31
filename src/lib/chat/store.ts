@@ -264,15 +264,30 @@ export type ConversationState = {
   pendingClarification?: PendingClarification;
 };
 
+// Note: Single-instance in-memory cache assumption. If deploying multi-region or on multi-instance serverless,
+// replace Map with Redis / Upstash to avoid stale session states across instances.
+const sessionStateCache = new Map<string, { state: ConversationState; expiry: number }>();
+const STATE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 export async function getSessionState(sessionId: string): Promise<ConversationState | null> {
+  const cached = sessionStateCache.get(sessionId);
+  if (cached && Date.now() < cached.expiry) {
+    return cached.state;
+  }
+
   const rows = await query<{ state: ConversationState | null }>(
     "SELECT state FROM chat_sessions WHERE id = $1 LIMIT 1",
     [sessionId],
   );
-  return rows[0]?.state ?? null;
+  const state = rows[0]?.state ?? null;
+  if (state) {
+    sessionStateCache.set(sessionId, { state, expiry: Date.now() + STATE_TTL_MS });
+  }
+  return state;
 }
 
 export async function updateSessionState(sessionId: string, state: ConversationState): Promise<void> {
+  sessionStateCache.set(sessionId, { state, expiry: Date.now() + STATE_TTL_MS });
   await query(
     "UPDATE chat_sessions SET state = $2, updated_at = now() WHERE id = $1",
     [sessionId, JSON.stringify(state)],

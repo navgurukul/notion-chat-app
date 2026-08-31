@@ -266,16 +266,11 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
     }
 
     // 2. Preprocessing
-    telemetry.startStep("emotion_analysis_ms");
+    const lastEntities = await extractLastEntityFromHistory(history);
+    let userEmotion = "neutral";
 
     // Fast LLM-friendly utility: current date/time (general question)
-    // If user asks “today’s date / what date is it” / “current time” etc., answer without Notion retrieval.
     const utilityDateTimeRegex = /\b(today\s*['’]?\s*s\s+date|today\s+date|today\s+is\s+date|what\s+date\s+is\s+it\s+today|what\s+is\s+today\s*['’]?\s*s\s+date|what\s+day\s+is\s+it\s+today|day\s+today|current\s+time|what\s+time\s+is\s+it|time\s+now|current\s+date)\b/i;
-
-    const lastEntities = await extractLastEntityFromHistory(history);
-    const [emotionAnalysis] = await Promise.all([analyzeUserEmotion(rawMessage, history)]);
-    const userEmotion = emotionAnalysis.emotion;
-    telemetry.endStep("emotion_analysis_ms");
 
     // Utility response bypasses Notion retrieval.
     if (utilityDateTimeRegex.test(rawMessage)) {
