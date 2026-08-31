@@ -5,7 +5,7 @@ import type { ChatHistoryItem } from "@/lib/ai/openai";
 import {
   tryFastPathRegexRoute,
   isAmbiguousQuery,
-} from "@/lib/chat/pipeline/router";
+} from "@/lib/chat/smalltalk";
 import {
   isNotionLinkRequest,
   shouldReformulate,

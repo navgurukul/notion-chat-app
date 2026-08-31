@@ -1,6 +1,6 @@
 import type { ChatHistoryItem } from "@/lib/ai/openai";
 import { getPeopleDirectory, resolvePersonName } from "@/lib/db";
-import { addChatMessage } from "@/lib/chat/store";
+import { addChatMessage } from "./store";
 import { NextResponse } from "next/server";
 
 export type SmalltalkType = "greeting" | "thanks" | "bye" | "help" | "identity" | "howAreYou";

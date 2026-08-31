@@ -6,7 +6,7 @@ import { reformulateSearchQuery, shouldReformulate, expandSearchQueries, reformu
 import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
 import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
-import { jsonAnswer } from "./router";
+import { jsonAnswer } from "./smalltalk";
 
 const BROAD_RAG_KINDS = new Set<ParsedQuery["kind"]>([
   "semantic",

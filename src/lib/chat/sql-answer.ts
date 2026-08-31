@@ -10,7 +10,7 @@ import {
 } from "@/lib/chat/routing-policy";
 import { logChatRoute } from "./telemetry";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
-import { jsonAnswer } from "./router";
+import { jsonAnswer } from "./smalltalk";
 
 export function isSynthesisRequest(message: string): boolean {
   if (/\b(role|job|responsibilit|position|designation|title|summariz|summary|overview|analy[sz]|explain|opinion|think)\b/i.test(message)) {
