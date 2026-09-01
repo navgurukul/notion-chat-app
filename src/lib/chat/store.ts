@@ -16,6 +16,7 @@ export type ChatMessageRow = {
   role: "user" | "bot";
   content: string;
   emotion?: string;
+  feedback?: string | null;
   created_at: string;
 };
 
@@ -127,9 +128,9 @@ export async function ensureSessionBelongsToUser(sessionId: string, userId: stri
 export async function listChatMessages(sessionId: string, limit = CHAT_HISTORY_LIMIT) {
   return query<ChatMessageRow>(
     `
-    SELECT id, session_id, role, content, emotion, created_at::text
+    SELECT id, session_id, role, content, emotion, feedback, created_at::text
     FROM (
-      SELECT id, session_id, role, content, emotion, created_at
+      SELECT id, session_id, role, content, emotion, feedback, created_at
       FROM chat_messages
       WHERE session_id = $1
       ORDER BY created_at DESC, role ASC
@@ -146,7 +147,7 @@ export async function addChatMessage(sessionId: string, role: "user" | "bot", co
     `
     INSERT INTO chat_messages (session_id, role, content, emotion)
     VALUES ($1, $2, $3, $4)
-    RETURNING id, session_id, role, content, emotion, created_at::text
+    RETURNING id, session_id, role, content, emotion, feedback, created_at::text
     `,
     [sessionId, role, content, emotion ?? null],
   );
@@ -167,6 +168,13 @@ export async function addChatMessage(sessionId: string, role: "user" | "bot", co
   }
 
   return rows[0];
+}
+
+export async function updateMessageFeedback(messageId: string, feedback: string | null) {
+  await query(
+    "UPDATE chat_messages SET feedback = $1 WHERE id = $2",
+    [feedback, messageId]
+  );
 }
 
 export async function clearChatMessages(sessionId: string) {
