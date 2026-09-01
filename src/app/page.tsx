@@ -671,20 +671,25 @@ const createNewChat = async () => {
     if (isLoading || !activeSessionId || !newContent.trim()) return;
     setEditingMessageId(null);
 
-    const targetIdx = messages.findIndex((m) => m.id === messageId);
+    const targetIdx = messages.findIndex(
+      (m, i) => m.id === messageId || `user-${i}` === messageId
+    );
     if (targetIdx === -1) return;
 
-    try {
-      const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${messageId}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error("Failed to delete message history");
-
-      const historyUpToEdited = messages.slice(0, targetIdx);
-      await executeChatFlow(newContent, historyUpToEdited);
-    } catch (error) {
-      console.error("Failed to edit message:", error);
+    const targetMsg = messages[targetIdx];
+    if (targetMsg?.id) {
+      try {
+        const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${targetMsg.id}`, {
+          method: "DELETE",
+        });
+        if (!response.ok) throw new Error("Failed to delete message history");
+      } catch (error) {
+        console.error("Failed to edit message:", error);
+      }
     }
+
+    const historyUpToEdited = messages.slice(0, targetIdx);
+    await executeChatFlow(newContent, historyUpToEdited);
   };
 
   const handleRegenerate = async () => {
@@ -697,10 +702,12 @@ const createNewChat = async () => {
     if (secondLastMsg.role !== "user") return;
 
     try {
-      const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${lastMsg.id}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error("Failed to delete message for regeneration");
+      if (lastMsg.id) {
+        const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${lastMsg.id}`, {
+          method: "DELETE",
+        });
+        if (!response.ok) throw new Error("Failed to delete message for regeneration");
+      }
 
       await executeChatFlow(secondLastMsg.content, undefined, true);
     } catch (error) {
@@ -708,12 +715,32 @@ const createNewChat = async () => {
     }
   };
 
-  const handleFeedback = async (messageId: string, feedback: "good" | "bad" | null) => {
-    try {
-      setMessages((prev) =>
-        prev.map((msg) => (msg.id === messageId ? { ...msg, feedback } : msg))
-      );
+  const handleFeedback = async (targetMsg: Message, feedback: "good" | "bad" | null, idx: number) => {
+    let messageId = targetMsg.id;
 
+    setMessages((prev) =>
+      prev.map((msg, i) => (i === idx || (messageId && msg.id === messageId) ? { ...msg, feedback } : msg))
+    );
+
+    if (!activeSessionId) return;
+
+    if (!messageId) {
+      await syncMessagesFromSession(activeSessionId);
+      setMessages((latestMessages) => {
+        const found = latestMessages[idx];
+        if (found?.id) {
+          fetch(`/api/chats/${activeSessionId}/messages`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messageId: found.id, feedback }),
+          }).catch((err) => console.error("Error setting feedback:", err));
+        }
+        return latestMessages;
+      });
+      return;
+    }
+
+    try {
       const response = await fetch(`/api/chats/${activeSessionId}/messages`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -728,9 +755,9 @@ const createNewChat = async () => {
     }
   };
 
-  const handleCopy = (messageId: string, text: string) => {
+  const handleCopy = (identifier: string, text: string) => {
     navigator.clipboard.writeText(text);
-    setCopiedMessageId(messageId);
+    setCopiedMessageId(identifier);
     setTimeout(() => {
       setCopiedMessageId(null);
     }, 2000);
@@ -1226,7 +1253,7 @@ const createNewChat = async () => {
                   <div
                     className={`flex w-full ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                   >
-                    {msg.role === "user" && editingMessageId === msg.id ? (
+                    {msg.role === "user" && (editingMessageId === msg.id || editingMessageId === `user-${idx}`) ? (
                       <div className="flex-1 max-w-[90%] sm:max-w-[80%] p-3.5 sm:p-4 rounded-2xl bg-white/10 border border-white/10 rounded-tr-none space-y-3">
                         <textarea
                           value={editingText}
@@ -1244,7 +1271,7 @@ const createNewChat = async () => {
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleEditMessage(msg.id!, editingText)}
+                            onClick={() => handleEditMessage(msg.id || `user-${idx}`, editingText)}
                             className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-semibold text-white transition-colors"
                           >
                             Save & Submit
@@ -1252,8 +1279,8 @@ const createNewChat = async () => {
                         </div>
                       </div>
                     ) : (
-                      <div className="relative max-w-[88%] sm:max-w-[80%] flex flex-col">
-                        <div className={`p-3.5 sm:p-4 rounded-2xl ${msg.role === "user"
+                      <div className="relative max-w-[88%] sm:max-w-[80%] flex flex-col items-end">
+                        <div className={`w-full p-3.5 sm:p-4 rounded-2xl ${msg.role === "user"
                           ? "bg-white/10 border border-white/10 rounded-tr-none"
                           : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
                           }`}>
@@ -1285,45 +1312,70 @@ const createNewChat = async () => {
                           )}
                         </div>
 
-                         {msg.role === "user" && msg.id && !isLoading && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingMessageId(msg.id!);
-                              setEditingText(msg.content);
-                            }}
-                            className="absolute -left-7 sm:-left-10 top-2 p-1 sm:p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors"
-                            title="Edit message"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
+                        {/* Action buttons for user query */}
+                        {msg.role === "user" && (
+                          <div className="flex items-center gap-1.5 mt-1 px-1 justify-end">
+                            {/* Copy user query */}
+                            <button
+                              type="button"
+                              onClick={() => handleCopy(msg.id || `user-${idx}`, msg.content)}
+                              className="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors relative group"
+                            >
+                              {copiedMessageId === (msg.id || `user-${idx}`) ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 rounded bg-[#1a1a1a] border border-white/10 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg">
+                                {copiedMessageId === (msg.id || `user-${idx}`) ? "Copied!" : "Copy query"}
+                              </span>
+                            </button>
+
+                            {/* Edit user query */}
+                            {!isLoading && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingMessageId(msg.id || `user-${idx}`);
+                                  setEditingText(msg.content);
+                                }}
+                                className="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors relative group"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                                <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 rounded bg-[#1a1a1a] border border-white/10 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg">
+                                  Edit query
+                                </span>
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
                   </div>
 
-                  {msg.role === "bot" && msg.id && !isLoading && (
+                  {/* Action buttons for bot response */}
+                  {msg.role === "bot" && msg.content.trim() && !(isLoading && idx === messages.length - 1) && (
                     <div className="flex items-center gap-1.5 mt-1 px-1">
                       {/* Copy response */}
                       <button
                         type="button"
-                        onClick={() => handleCopy(msg.id!, msg.content)}
+                        onClick={() => handleCopy(msg.id || `bot-${idx}`, msg.content)}
                         className="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors relative group"
                       >
-                        {copiedMessageId === msg.id ? (
+                        {copiedMessageId === (msg.id || `bot-${idx}`) ? (
                           <Check className="w-3.5 h-3.5 text-emerald-400" />
                         ) : (
                           <Copy className="w-3.5 h-3.5" />
                         )}
                         <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 rounded bg-[#1a1a1a] border border-white/10 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg">
-                          {copiedMessageId === msg.id ? "Copied!" : "Copy response"}
+                          {copiedMessageId === (msg.id || `bot-${idx}`) ? "Copied!" : "Copy response"}
                         </span>
                       </button>
 
-                      {/* Thumbs up */}
+                      {/* Thumbs up (Good response) */}
                       <button
                         type="button"
-                        onClick={() => handleFeedback(msg.id!, msg.feedback === "good" ? null : "good")}
+                        onClick={() => handleFeedback(msg, msg.feedback === "good" ? null : "good", idx)}
                         className={`p-1.5 rounded-lg transition-colors relative group ${
                           msg.feedback === "good"
                             ? "text-emerald-400 bg-emerald-500/10"
@@ -1336,10 +1388,10 @@ const createNewChat = async () => {
                         </span>
                       </button>
 
-                      {/* Thumbs down */}
+                      {/* Thumbs down (Bad response) */}
                       <button
                         type="button"
-                        onClick={() => handleFeedback(msg.id!, msg.feedback === "bad" ? null : "bad")}
+                        onClick={() => handleFeedback(msg, msg.feedback === "bad" ? null : "bad", idx)}
                         className={`p-1.5 rounded-lg transition-colors relative group ${
                           msg.feedback === "bad"
                             ? "text-rose-400 bg-rose-500/10"
@@ -1353,7 +1405,7 @@ const createNewChat = async () => {
                       </button>
 
                       {/* Regenerate (last message only) */}
-                      {idx === messages.length - 1 && (
+                      {idx === messages.length - 1 && !isLoading && (
                         <button
                           type="button"
                           onClick={handleRegenerate}
