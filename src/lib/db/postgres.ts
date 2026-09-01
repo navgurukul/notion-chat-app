@@ -1,4 +1,5 @@
 import "@/lib/dns-hook";
+import dns from "dns";
 import { Pool, type PoolClient } from "pg";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -13,11 +14,14 @@ const globalForPostgres = globalThis as unknown as {
   schemaPromise: Promise<void> | null | undefined;
 };
 
+const poolConfig: any = {
+  connectionString: databaseUrl,
+  lookup: dns.lookup,
+};
+
 export const pool =
   globalForPostgres.pool ??
-  new Pool({
-    connectionString: databaseUrl,
-  });
+  new Pool(poolConfig);
 
 pool.on("error", (error) => {
   console.error("[postgres] Unhandled pool error:", error);
@@ -71,6 +75,11 @@ const CORE_COLUMN_MIGRATIONS: ColumnMigration[] = [
   {
     table: "chat_messages",
     column: "emotion",
+    definition: "TEXT",
+  },
+  {
+    table: "chat_messages",
+    column: "feedback",
     definition: "TEXT",
   },
 ];
@@ -249,7 +258,7 @@ async function runColumnMigrations(
   }
 }
 
-const CURRENT_SCHEMA_HASH = "v6_session_state_jsonb";
+const CURRENT_SCHEMA_HASH = "v7_message_feedback";
 
 export async function ensureSchema() {
   if (schemaReady) return;
@@ -340,6 +349,7 @@ export async function ensureSchema() {
           role TEXT NOT NULL,
           content TEXT NOT NULL,
           emotion TEXT,
+          feedback TEXT,
           created_at TIMESTAMP DEFAULT NOW()
         );
       `,

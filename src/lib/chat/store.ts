@@ -16,6 +16,7 @@ export type ChatMessageRow = {
   role: "user" | "bot";
   content: string;
   emotion?: string;
+  feedback?: string | null;
   created_at: string;
 };
 
@@ -45,6 +46,16 @@ if (process.env.NODE_ENV !== "production") {
   globalForUserCache.userCache = userCache;
 }
 
+const MAX_USER_CACHE_SIZE = 1000;
+
+function setCachedUser(email: string, id: string) {
+  if (userCache.size >= MAX_USER_CACHE_SIZE) {
+    const oldest = userCache.keys().next().value;
+    if (oldest !== undefined) userCache.delete(oldest);
+  }
+  userCache.set(email, id);
+}
+
 export async function getOrCreateUser(session: Session | null) {
   const email = requireUserEmail(session);
 
@@ -60,7 +71,7 @@ export async function getOrCreateUser(session: Session | null) {
   );
   if (existing.length > 0) {
     const userId = existing[0].id;
-    userCache.set(email, userId);
+    setCachedUser(email, userId);
     return { id: userId };
   }
 
@@ -81,7 +92,7 @@ export async function getOrCreateUser(session: Session | null) {
 
   const user = rows[0];
   if (user) {
-    userCache.set(email, user.id);
+    setCachedUser(email, user.id);
   }
   return user;
 }
@@ -127,9 +138,9 @@ export async function ensureSessionBelongsToUser(sessionId: string, userId: stri
 export async function listChatMessages(sessionId: string, limit = CHAT_HISTORY_LIMIT) {
   return query<ChatMessageRow>(
     `
-    SELECT id, session_id, role, content, emotion, created_at::text
+    SELECT id, session_id, role, content, emotion, feedback, created_at::text
     FROM (
-      SELECT id, session_id, role, content, emotion, created_at
+      SELECT id, session_id, role, content, emotion, feedback, created_at
       FROM chat_messages
       WHERE session_id = $1
       ORDER BY created_at DESC, role ASC
@@ -146,7 +157,7 @@ export async function addChatMessage(sessionId: string, role: "user" | "bot", co
     `
     INSERT INTO chat_messages (session_id, role, content, emotion)
     VALUES ($1, $2, $3, $4)
-    RETURNING id, session_id, role, content, emotion, created_at::text
+    RETURNING id, session_id, role, content, emotion, feedback, created_at::text
     `,
     [sessionId, role, content, emotion ?? null],
   );
@@ -167,6 +178,13 @@ export async function addChatMessage(sessionId: string, role: "user" | "bot", co
   }
 
   return rows[0];
+}
+
+export async function updateMessageFeedback(messageId: string, feedback: string | null) {
+  await query(
+    "UPDATE chat_messages SET feedback = $1 WHERE id = $2",
+    [feedback, messageId]
+  );
 }
 
 export async function clearChatMessages(sessionId: string) {
@@ -264,15 +282,30 @@ export type ConversationState = {
   pendingClarification?: PendingClarification;
 };
 
+// Note: Single-instance in-memory cache assumption. If deploying multi-region or on multi-instance serverless,
+// replace Map with Redis / Upstash to avoid stale session states across instances.
+const sessionStateCache = new Map<string, { state: ConversationState; expiry: number }>();
+const STATE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 export async function getSessionState(sessionId: string): Promise<ConversationState | null> {
+  const cached = sessionStateCache.get(sessionId);
+  if (cached && Date.now() < cached.expiry) {
+    return cached.state;
+  }
+
   const rows = await query<{ state: ConversationState | null }>(
     "SELECT state FROM chat_sessions WHERE id = $1 LIMIT 1",
     [sessionId],
   );
-  return rows[0]?.state ?? null;
+  const state = rows[0]?.state ?? null;
+  if (state) {
+    sessionStateCache.set(sessionId, { state, expiry: Date.now() + STATE_TTL_MS });
+  }
+  return state;
 }
 
 export async function updateSessionState(sessionId: string, state: ConversationState): Promise<void> {
+  sessionStateCache.set(sessionId, { state, expiry: Date.now() + STATE_TTL_MS });
   await query(
     "UPDATE chat_sessions SET state = $2, updated_at = now() WHERE id = $1",
     [sessionId, JSON.stringify(state)],

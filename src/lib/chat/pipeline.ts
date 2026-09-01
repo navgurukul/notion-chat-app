@@ -15,22 +15,15 @@ import {
 } from "@/lib/chat/query-tools";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { resolveQuery } from "@/lib/query/resolve-query";
-import { getGenderOfPerson } from "@/lib/query/entity-resolver/person";
+import { getGenderOfPerson } from "@/lib/query/entity-resolver";
 import { analyzeUserEmotion } from "@/lib/chat/emotion";
 import type { ParsedQuery } from "@/lib/query/types";
 import { lookupPageLinkByTitle } from "@/lib/sql/answers";
-import {
-  extractLastEntityFromHistory,
-  jsonAnswer,
-  resolveFirstPerson,
-  tryFastPathRegexRoute,
-} from "./pipeline/router";
-import { trySqlAnswer } from "./pipeline/sql";
-import { tryRagAnswer } from "./pipeline/rag";
-import { PipelineContext, LATENCY_BUDGETS } from "./pipeline/timing";
-import { PipelineTelemetry } from "./pipeline/telemetry";
-import { detectAndHandleCorrection, isCorrectionMessage } from "./pipeline/correction";
-import { detectSmalltalkType, tryFastPathRegexRoute as smalltalkFastPath } from "./pipeline/router";
+import { extractLastEntityFromHistory, jsonAnswer, detectSmalltalkType, tryFastPathRegexRoute } from "./smalltalk";
+import { trySqlAnswer } from "./sql-answer";
+import { tryRagAnswer } from "./rag-answer";
+import { PipelineContext, PipelineTelemetry, LATENCY_BUDGETS } from "./telemetry";
+import { detectAndHandleCorrection, isCorrectionMessage } from "./correction";
 import type { ChatHistoryItem } from "@/lib/ai/openai";
 
 export type ChatRequestBody = {
@@ -137,7 +130,7 @@ function countSmalltalkRepeats(history: ChatHistoryItem[], smalltalkType: Return
 }
 
 function buildSmalltalkWarmPoolFallback(type: ReturnType<typeof detectSmalltalkType>, userName?: string, message?: string) {
-  const fast = message ? smalltalkFastPath(message, userName) : null;
+  const fast = message ? tryFastPathRegexRoute(message, userName) : null;
   if (fast && fast.kind === "smalltalk") return fast.answer;
   return type
     ? "Hi! What would you like to check in NavGurukul’s Notion today?"
@@ -272,16 +265,11 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
     }
 
     // 2. Preprocessing
-    telemetry.startStep("emotion_analysis_ms");
+    const lastEntities = await extractLastEntityFromHistory(history);
+    let userEmotion = "neutral";
 
     // Fast LLM-friendly utility: current date/time (general question)
-    // If user asks “today’s date / what date is it” / “current time” etc., answer without Notion retrieval.
     const utilityDateTimeRegex = /\b(today\s*['’]?\s*s\s+date|today\s+date|today\s+is\s+date|what\s+date\s+is\s+it\s+today|what\s+is\s+today\s*['’]?\s*s\s+date|what\s+day\s+is\s+it\s+today|day\s+today|current\s+time|what\s+time\s+is\s+it|time\s+now|current\s+date)\b/i;
-
-    const lastEntities = await extractLastEntityFromHistory(history);
-    const [emotionAnalysis] = await Promise.all([analyzeUserEmotion(rawMessage, history)]);
-    const userEmotion = emotionAnalysis.emotion;
-    telemetry.endStep("emotion_analysis_ms");
 
     // Utility response bypasses Notion retrieval.
     if (utilityDateTimeRegex.test(rawMessage)) {
@@ -301,8 +289,6 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
 
       return NextResponse.json({ answer, emotion: userEmotion, sessionId: attachedSessionId });
     }
-
-    telemetry.incrementLlmCalls();
 
     const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion, body.isRegenerate);
 
@@ -556,4 +542,3 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
     telemetry.finish();
   }
 }
-

@@ -1,0 +1,152 @@
+[
+  {
+    "id": "q001",
+    "query": "What is the AI Art Challenge app?",
+    "expected_page_titles": [
+      "AI art challenge"
+    ],
+    "expected_answer_claims": [
+      "AI Art Challenge is a gamified AI prompting learning app targeting students aged 16 to 24"
+    ]
+  },
+  {
+    "id": "q002",
+    "query": "What is the bug with View Submissions in Admin?",
+    "expected_page_titles": [
+      "ADMIN – “View Submissions” Always Shows First Chapter’s Coding Submissions"
+    ],
+    "expected_answer_claims": [
+      "In Admin Course Submissions Practice Problems each card always shows the first chapter coding submissions"
+    ]
+  },
+  {
+    "id": "q003",
+    "query": "What does Notion Onboarding by Claude contain?",
+    "expected_page_titles": [
+      "Notion Onboarding by Claude"
+    ],
+    "expected_answer_claims": [
+      "Contains structured databases for managing employee onboarding and offboarding processes inspired by Horilla HR module"
+    ]
+  },
+  {
+    "id": "q004",
+    "query": "What are the STT options compared for journals?",
+    "expected_page_titles": [
+      "Create mvp with STT"
+    ],
+    "expected_answer_claims": [
+      "Recommends Whisper when journals are long and accuracy matters, and Google STT for simple web usage"
+    ]
+  },
+  {
+    "id": "q005",
+    "query": "Who owns the task for Role Based Routing?",
+    "expected_page_titles": [
+      "Role Based Routing (FE)"
+    ],
+    "expected_answer_claims": [
+      "Tamanna is the owner of Role Based Routing task"
+    ]
+  },
+  {
+    "id": "q006",
+    "query": "What is the policy for Leave Allocation Automation?",
+    "expected_page_titles": [
+      "Leave Allocation Automation"
+    ],
+    "expected_answer_claims": [
+      "Automated leave allocation triggers when a new employee's data is fully populated on the PnC source sheet"
+    ]
+  },
+  {
+    "id": "q007",
+    "query": "Who is working on student batch reassignment API refactor?",
+    "expected_page_titles": [
+      "Refactor student batch reassignment API to use a custom hook"
+    ],
+    "expected_answer_claims": [
+      "Ujala Ujala is the assigned owner for refactoring the student batch reassignment API to use a custom hook"
+    ]
+  },
+  {
+    "id": "q008",
+    "query": "What is the Sound system Ella ticket about?",
+    "expected_page_titles": [
+      "Sound system: Ella"
+    ],
+    "expected_answer_claims": [
+      "Contains V1 sound research document link and zip file instructions for sound effects"
+    ]
+  },
+  {
+    "id": "q009",
+    "query": "What are the sub-tasks for Article Component Fixes?",
+    "expected_page_titles": [
+      "Article Component Fixes"
+    ],
+    "expected_answer_claims": [
+      "Fix PDF upload status size, fix delete/cancel functionality, and display only PDF name"
+    ]
+  },
+  {
+    "id": "q010",
+    "query": "Who owns the task for Admin Side Calendar Module?",
+    "expected_page_titles": [
+      "Admin Side - Calendar Module (UI Implementation & API Integration)"
+    ],
+    "expected_answer_claims": [
+      "Ujala Ujala is the owner of Admin Side Calendar Module ticket"
+    ]
+  },
+  {
+    "id": "q011",
+    "query": "What is the issue with full-page loading screen on web?",
+    "expected_page_titles": [
+      "Web - Full-page loading screen hides the entire layout while switching tabs"
+    ],
+    "expected_answer_claims": [
+      "Chhaya Verma is assigned to the bug where full-page loading screen hides the layout while switching tabs"
+    ]
+  },
+  {
+    "id": "q012",
+    "query": "What is documented in the Career Listing Page?",
+    "expected_page_titles": [
+      "Career Listing Page"
+    ],
+    "expected_answer_claims": [
+      "Design documentation for the career listing page that sits between the homepage CTA and career detail page"
+    ]
+  },
+  {
+    "id": "q013",
+    "query": "What is required in the Admin Side Sessions Module?",
+    "expected_page_titles": [
+      "Admin Side– Sessions Module (UI Implementation & API Integration)"
+    ],
+    "expected_answer_claims": [
+      "Implements Sessions section under Mentor module accessible via Navbar Mentors dropdown Sessions"
+    ]
+  },
+  {
+    "id": "q014",
+    "query": "What is described in the WISE RFP document?",
+    "expected_page_titles": [
+      "WISE RFP"
+    ],
+    "expected_answer_claims": [
+      "Executive summary covering digital literacy work with WEP and value proposition"
+    ]
+  },
+  {
+    "id": "q015",
+    "query": "What is the feature request for Add Policy Notes in New Leave Request Modal?",
+    "expected_page_titles": [
+      "Add Policy Notes in New Leave Request Modal"
+    ],
+    "expected_answer_claims": [
+      "Shows an inline policy note box below Leave Type dropdown when a leave type with policy note is selected"
+    ]
+  }
+]

@@ -22,18 +22,19 @@ import {
   formatDisplayLink,
   stripNotionBodyRaw,
 } from "@/lib/sql/format-display";
-import { buildPersonMatchParams, personColumnMatchSql, personColumnsMatchSql } from "@/lib/sql/person-filter";
-import { extractPeopleFromContent, splitPersonField } from "@/lib/sql/team-roster";
 import {
+  extractPeopleFromContent,
+  splitPersonField,
   filterPagesForProjectTopic,
   primaryTopicToken,
-} from "@/lib/sql/project-scope";
-import {
   aggregatePeopleOnProject,
   extractProjectScopeTopic,
   fetchProjectPages,
 } from "@/lib/sql/team-roster";
 import {
+  buildPersonMatchParams,
+  personColumnMatchSql,
+  personColumnsMatchSql,
   calculateActivityScore,
   findPersonActivityRows,
 } from "@/lib/sql/activity";

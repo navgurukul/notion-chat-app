@@ -13,8 +13,32 @@ export async function analyzeUserEmotion(
   const fallback: EmotionAnalysis = {
     emotion: "neutral",
     isFunny: false,
-    explanation: "Fallback default due to classification failure.",
+    explanation: "Fast-path pre-filter.",
   };
+
+  const lower = message.trim().toLowerCase();
+
+  // 1. Fast regex pre-filters (0ms latency, zero LLM calls)
+  if (/\b(thanks|thank you|great|awesome|good job|super|perfect|nice|wonderful|yay|cool)\b/i.test(lower)) {
+    return { emotion: "happy", isFunny: false, explanation: "Positive feedback/gratitude detected via fast-path." };
+  }
+
+  if (/\b(haha+ |hehe+ |lol|rofl|funny|joke|jk)\b/i.test(lower)) {
+    return { emotion: "funny", isFunny: true, explanation: "Laughter/humor detected via fast-path." };
+  }
+
+  if (/\b(frustrat|annoy|bug|broken|slow|terrible|horrible|useless|stuck|not working|error)\b/i.test(lower)) {
+    return { emotion: "frustrated", isFunny: false, explanation: "Frustration detected via fast-path." };
+  }
+
+  // 2. Standard work queries (task, owner, status, who, what, list, etc.) -> default instantly to neutral
+  const isStandardWorkQuery =
+    /\b(task|tasks|owner|who|what|where|status|list|assigned|working|project|page|doc|document|member|developer|show|find|get)\b/i.test(lower) ||
+    lower.split(/\s+/).length <= 15;
+
+  if (isStandardWorkQuery) {
+    return fallback;
+  }
 
   try {
     const systemPrompt = `
@@ -52,7 +76,7 @@ Latest User Message:
 "${message}"
     `.trim();
 
-    // Call JSON completion with a timeout of 1.5 seconds to avoid slowing down the response
+    // Call JSON completion with a timeout of 3.5 seconds to avoid slowing down the response
     const analysisPromise = getJsonCompletion(systemPrompt, prompt);
     const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500));
 

@@ -1,11 +1,12 @@
-import type { Session } from "next-auth";
 import type { ChatHistoryItem } from "@/lib/ai/openai";
 import { getPeopleDirectory, resolvePersonName } from "@/lib/db";
+import { addChatMessage } from "./store";
+import { NextResponse } from "next/server";
 
 export type SmalltalkType = "greeting" | "thanks" | "bye" | "help" | "identity" | "howAreYou";
 
-const greetingRegex = /^(hi|hello|hey|greetings|good\s+morning|good\s+afternoon|good\s+evening|hey\s+there|hello\s+assistant|good\s+day)$/i;
-const thanksRegex = /^(thanks|thank\s+you|ty|thank\s+you\s+so\s+much|great\s+thanks|thanks\s+a\s+lot)$/i;
+const greetingRegex = /^(hi|hello|hey|greetings|good\s+morning|good\s+afternoon|good\s+evening)$/i;
+const thanksRegex = /^(thanks|thank\s+you|ty|thank\s+you\s+so\s+much)$/i;
 const byeRegex = /^(bye|goodbye|see\s+you|talk\s+later|bye\s+now)$/i;
 const helpRegex = /^(help|what\s+can\s+you\s+do|how\s+to\s+use|how\s+do\s+i\s+use\s+this)$/i;
 const botIdentityRegex = /^(who\s+are\s+you|what\s+is\s+your\s+name|who\s+created\s+you|are\s+you\s+a\s+bot|what\s+are\s+you)$/i;
@@ -141,29 +142,6 @@ export function isAmbiguousQuery(message: string, history: ChatHistoryItem[] = [
   return false;
 }
 
-export async function resolveFirstPerson(
-  message: string,
-  session: Session,
-): Promise<{ message: string; ambiguous?: string[]; resolvedName?: string }> {
-  const hasPronoun = /\b(me|my|myself|I)\b/i.test(message);
-  if (!hasPronoun) return { message };
-
-  const fullName = session?.user?.name?.trim();
-  if (!fullName) return { message };
-
-  const { exact, candidates } = await resolvePersonName(fullName);
-
-  if (candidates.length > 1) {
-    return { message, ambiguous: candidates };
-  }
-
-  const resolvedName = exact ?? fullName.split(/\s+/)[0];
-  return {
-    message: message.replace(/\b(me|my|myself|I)\b/gi, resolvedName),
-    resolvedName,
-  };
-}
-
 export async function findPersonInText(text: string): Promise<string | null> {
   try {
     const dir = await getPeopleDirectory();
@@ -193,33 +171,6 @@ export async function findPersonInText(text: string): Promise<string | null> {
     console.warn("[chat] findPersonInText failed:", error);
   }
   return null;
-}
-
-export function isFollowUpQuery(message: string, history: ChatHistoryItem[]): boolean {
-  if (history.length === 0) return false;
-
-  const lower = message.toLowerCase().trim();
-
-  if (/\b(it|this|that|they|them|he|him|she|her|his|its|their|the project|the policy|the page|the document)\b/i.test(lower)) {
-    return true;
-  }
-
-  if (
-    /^(only\s+)?(today|this\s+week|this\s+month|this\s+year|yesterday|tomorrow|last\s+week|last\s+month|last\s+year)('s)?\s+(task|tasks|project|projects|work|docs|pages)?$/i.test(lower) ||
-    /^(for\s+)?(this\s+month|this\s+year|this\s+week|today|yesterday|last\s+year|last\s+month|20\d{2})$/i.test(lower) ||
-    /^(what\s+about\s+)?(20\d{2}|this\s+year|last\s+year)$/i.test(lower) ||
-    /^(any\s+)?blockers\??$/i.test(lower) ||
-    /^(who\s+is\s+)?(owner|assignee|manager|lead)\??$/i.test(lower) ||
-    /^(status|progress|eta)\??$/i.test(lower)
-  ) {
-    return true;
-  }
-
-  if (lower.split(/\s+/).length <= 4) {
-    return true;
-  }
-
-  return false;
 }
 
 export async function extractLastEntityFromHistory(history: ChatHistoryItem[]): Promise<{
@@ -328,9 +279,6 @@ export async function extractLastEntityFromHistory(history: ChatHistoryItem[]): 
   return { lastProject, lastPerson };
 }
 
-import { addChatMessage } from "@/lib/chat/store";
-import { NextResponse } from "next/server";
-
 export async function jsonAnswer(sessionId: string | null, answer: string, emotion?: string, signal?: AbortSignal) {
   if (signal?.aborted) {
     return new Response(null, { status: 499 });
@@ -340,4 +288,3 @@ export async function jsonAnswer(sessionId: string | null, answer: string, emoti
   }
   return NextResponse.json({ answer, emotion });
 }
-
