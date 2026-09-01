@@ -15,7 +15,11 @@ export class SimpleCache<T> {
 
   set(key: string, value: T): void {
     if (this.cache.size >= this.maxSize) {
-      this.cache.clear();
+      // Evict the single oldest entry (Map preserves insertion order) instead
+      // of wiping the entire cache — a full clear on every overflow caused
+      // sudden cold-cache latency spikes under load.
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey !== undefined) this.cache.delete(oldestKey);
     }
     this.cache.set(key, {
       value,

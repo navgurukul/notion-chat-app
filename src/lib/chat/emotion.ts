@@ -76,7 +76,7 @@ Latest User Message:
 "${message}"
     `.trim();
 
-    // Call JSON completion with a timeout of 1.5 seconds to avoid slowing down the response
+    // Call JSON completion with a timeout of 3.5 seconds to avoid slowing down the response
     const analysisPromise = getJsonCompletion(systemPrompt, prompt);
     const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500));
 

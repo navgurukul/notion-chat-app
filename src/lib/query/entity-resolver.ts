@@ -123,9 +123,33 @@ export async function resolveDocument(topic: string): Promise<ResolvedDocument> 
     return cached.value;
   }
 
-  const pages = await query<{ title: string | null; url: string | null }>(
-    `SELECT title, url FROM notion_pages WHERE title IS NOT NULL AND trim(title) <> ''`
+  const stripped = stripDocWords(trimmed);
+  const searchTerms = Array.from(new Set([trimmed, stripped].filter((w) => w && w.length >= 2)));
+  const likePatterns = searchTerms.map((term) => `%${term.replace(/[%_\\]/g, "\\$&")}%`);
+
+  let pages = await query<{ title: string | null; url: string | null }>(
+    `SELECT title, url FROM notion_pages
+     WHERE title IS NOT NULL AND trim(title) <> ''
+       AND (${likePatterns.map((_, i) => `title ILIKE $${i + 1}`).join(" OR ")})
+     LIMIT 100`,
+    likePatterns,
   );
+
+  if (pages.length === 0) {
+    try {
+      pages = await query<{ title: string | null; url: string | null }>(
+        `SELECT title, url FROM notion_pages
+         WHERE title IS NOT NULL AND trim(title) <> ''
+           AND similarity(title, $1) > 0.15
+         ORDER BY similarity(title, $1) DESC
+         LIMIT 30`,
+        [trimmed],
+      );
+    } catch {
+      // Fallback if pg_trgm extension is not installed
+      pages = [];
+    }
+  }
 
   let bestMatch: { title: string; url: string | null; score: number; quality: ResolutionQuality } | null = null;
 
@@ -174,10 +198,7 @@ export async function resolvePerson(input: string): Promise<ResolvedPerson> {
 
   if (res.exact) {
     const dir = await getPeopleDirectory();
-    let normalizedInput = name.toLowerCase();
-    if (normalizedInput === "sanjana") {
-      normalizedInput = "sanjna";
-    }
+    const normalizedInput = name.toLowerCase();
 
     const exactMatch = dir.find((p) => p.normalized === normalizedInput);
     if (exactMatch) {
@@ -232,11 +253,11 @@ export async function resolvePerson(input: string): Promise<ResolvedPerson> {
   };
 }
 
-const inMemoryGenderCache = new Map<string, "male" | "female">();
+const inMemoryGenderCache = new Map<string, "male" | "female" | "unknown">();
 
-export async function getGenderOfPerson(name: string): Promise<"male" | "female"> {
+export async function getGenderOfPerson(name: string): Promise<"male" | "female" | "unknown"> {
   const firstName = name.trim().toLowerCase().split(/\s+/)[0];
-  if (!firstName) return "male";
+  if (!firstName) return "unknown";
 
   if (inMemoryGenderCache.has(firstName)) {
     return inMemoryGenderCache.get(firstName)!;
@@ -246,7 +267,7 @@ export async function getGenderOfPerson(name: string): Promise<"male" | "female"
     "alima", "amruta", "apeksha", "archana", "ashwini", "chhaya", "dhanshri", "goldy",
     "gunavathi", "ira", "komal", "neelam", "neha", "nikita", "pooja", "poonam", "prachi",
     "pranjal", "pranjali", "priya", "priyanka", "saloni", "sanjna", "sanjana", "sapna", "sheetal",
-    "sugatha", "sukanya", "tamanna", "ujala", "urmila", "vishakha", "also "
+    "sugatha", "sukanya", "tamanna", "ujala", "urmila", "vishakha"
   ]);
   const MALE_NAMES = new Set([
     "aadarsh", "abhishek", "aniket", "anirudh", "arunesh", "gaurav", "mahendra", "mayur",
@@ -278,18 +299,20 @@ export async function getGenderOfPerson(name: string): Promise<"male" | "female"
   }
 
   try {
-    const systemPrompt = `Identify the typical gender of the given first name (often Indian or International). Return JSON: { "gender": "male" | "female" }`;
+    const systemPrompt = `Identify the typical gender of the given first name (often Indian or International). Return JSON: { "gender": "male" | "female" | "unknown" }`;
     const userPrompt = `Name: ${firstName}`;
     const raw = await getJsonCompletion(systemPrompt, userPrompt);
     const jsonText = raw.trim().match(/\{[\s\S]*\}/)?.[0] ?? raw;
     const parsed = JSON.parse(jsonText) as { gender?: string };
-    const detected: "male" | "female" = parsed.gender?.toLowerCase() === "female" ? "female" : "male";
+    const lower = parsed.gender?.toLowerCase();
+    const detected: "male" | "female" | "unknown" =
+      lower === "female" ? "female" : lower === "male" ? "male" : "unknown";
 
-    inMemoryGenderCache.set(firstName, detected);
+    if (detected !== "unknown") inMemoryGenderCache.set(firstName, detected);
     return detected;
   } catch (error) {
     console.error("[LLM] gender lookup failed for name:", firstName, error);
-    return "male";
+    return "unknown";
   }
 }
 

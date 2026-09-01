@@ -45,6 +45,16 @@ if (process.env.NODE_ENV !== "production") {
   globalForUserCache.userCache = userCache;
 }
 
+const MAX_USER_CACHE_SIZE = 1000;
+
+function setCachedUser(email: string, id: string) {
+  if (userCache.size >= MAX_USER_CACHE_SIZE) {
+    const oldest = userCache.keys().next().value;
+    if (oldest !== undefined) userCache.delete(oldest);
+  }
+  userCache.set(email, id);
+}
+
 export async function getOrCreateUser(session: Session | null) {
   const email = requireUserEmail(session);
 
@@ -60,7 +70,7 @@ export async function getOrCreateUser(session: Session | null) {
   );
   if (existing.length > 0) {
     const userId = existing[0].id;
-    userCache.set(email, userId);
+    setCachedUser(email, userId);
     return { id: userId };
   }
 
@@ -81,7 +91,7 @@ export async function getOrCreateUser(session: Session | null) {
 
   const user = rows[0];
   if (user) {
-    userCache.set(email, user.id);
+    setCachedUser(email, user.id);
   }
   return user;
 }

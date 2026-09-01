@@ -290,8 +290,6 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       return NextResponse.json({ answer, emotion: userEmotion, sessionId: attachedSessionId });
     }
 
-    telemetry.incrementLlmCalls();
-
     const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion, body.isRegenerate);
 
 

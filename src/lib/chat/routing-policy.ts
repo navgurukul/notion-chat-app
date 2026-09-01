@@ -17,7 +17,6 @@ export const METADATA_ONLY_KINDS = new Set<QueryKind>([
   "assigned_to_of",
   "assigned_list",
   "worked_on_list",
-  // "status_of",
   "type_of",
   "blocker_list",
   "compare_pages",
@@ -59,10 +58,7 @@ export function metadataNotFoundAnswer(parsed: ParsedQuery): string {
       return title
         ? `No assignee found for **${title}** in synced Notion data. Use **Sync changes** if assignments changed recently.`
         : "I couldn't find a task or page name to look up.";
-    // case "status_of":
-    //   return title
-    //     ? `No synced Notion pages matched **${title}** for status. Try the exact project/page name or **Sync changes**.`
-    //     : "No page or project name found for status lookup.";
+
     case "blocker_list":
       return "No blockers matched your filters in synced Notion data. Try narrowing by project name or use **Sync changes**.";
     case "compare_pages":

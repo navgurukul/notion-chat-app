@@ -1,5 +1,6 @@
 import { escapeLike, query, getPeopleDirectory, TEAM_MEMBER_WHITELIST } from "@/lib/db";
 import {
+  findCanonicalName,
   normalizePersonNameForMatch,
   scoreTitleForTopic,
   titlesReferToSameTopic,
@@ -223,44 +224,7 @@ export async function fetchProjectPages(scopeTopic: string): Promise<ProjectPage
     .slice(0, 80);
 }
 
-function findCanonicalName(input: string, directory: Array<{ name: string; normalized: string }>): string {
-  const q = input.trim().toLowerCase();
-  if (!q) return input;
 
-  // 1. Exact match
-  const exact = directory.find((p) => p.normalized === q);
-  if (exact) return exact.name;
-
-  // 2. First name match: if input is a single word and matches the first name of a person in directory
-  const words = q.split(/\s+/);
-  if (words.length === 1) {
-    const firstNameMatches = directory.filter((p) => {
-      const firstName = p.normalized.split(/\s+/)[0];
-      return firstName === q;
-    });
-    if (firstNameMatches.length === 1) {
-      return firstNameMatches[0].name;
-    }
-  }
-
-  // 3. If a person record in the directory has a first name that matches the input's first name exactly
-  const inputFirstName = words[0];
-  const firstNameMatches = directory.filter((p) => {
-    const firstName = p.normalized.split(/\s+/)[0];
-    return firstName === inputFirstName;
-  });
-  if (firstNameMatches.length === 1) {
-    return firstNameMatches[0].name;
-  }
-
-  // 4. Partial match
-  const partialMatches = directory.filter((p) => p.normalized.includes(q));
-  if (partialMatches.length === 1) {
-    return partialMatches[0].name;
-  }
-
-  return input;
-}
 
 export async function aggregatePeopleOnProject(pages: ProjectPageRow[]): Promise<ProjectMember[]> {
   const directory = await getPeopleDirectory();
