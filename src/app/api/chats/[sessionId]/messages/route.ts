@@ -9,6 +9,7 @@ import {
   ensureSessionBelongsToUser,
   getOrCreateUser,
   listChatMessages,
+  updateMessageFeedback,
 } from "@/lib/chat/store";
 import { sqlMetadataCache } from "@/lib/chat/cache";
 
@@ -102,6 +103,30 @@ export async function DELETE(req: NextRequest, context: RouteContext) {
     console.error("Clear/Delete chat messages API Error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to clear/delete chat messages" },
+      { status: 500 },
+    );
+  }
+}
+
+export async function PATCH(req: NextRequest, context: RouteContext) {
+  try {
+    const owned = await requireOwnedSession(context);
+    if ("error" in owned) return owned.error;
+
+    const { messageId, feedback } = await req.json();
+    if (typeof messageId !== "string" || !messageId) {
+      return NextResponse.json({ error: "Invalid messageId" }, { status: 400 });
+    }
+    if (feedback !== null && feedback !== "good" && feedback !== "bad") {
+      return NextResponse.json({ error: "Invalid feedback value" }, { status: 400 });
+    }
+
+    await updateMessageFeedback(messageId, feedback);
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    console.error("Update message feedback API Error:", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to update feedback" },
       { status: 500 },
     );
   }

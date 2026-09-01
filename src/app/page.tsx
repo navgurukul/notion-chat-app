@@ -3,7 +3,7 @@
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
-import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw } from "lucide-react";
+import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw, ThumbsUp, ThumbsDown, Copy, Check } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { hasKnowledgeBaseAccess } from "@/lib/shared/access";
@@ -18,6 +18,7 @@ interface Message {
   role: "user" | "bot";
   content: string;
   emotion?: string;
+  feedback?: "good" | "bad" | null;
 }
 
 const emotionConfig: Record<string, { label: string; adjective: string; emoji: string; classes: string }> = {
@@ -121,6 +122,7 @@ export default function ChatPage() {
   const [stopConfirmState, setStopConfirmState] = useState<"idle" | "confirm">("idle");
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const canManageKnowledgeBase = hasKnowledgeBaseAccess(session);
 
   const closeSidebarOnMobile = () => {
@@ -220,6 +222,7 @@ export default function ChatPage() {
       role: message.role,
       content: message.content,
       emotion: message.emotion,
+      feedback: message.feedback,
     }));
 
     setMessages((prev) => {
@@ -703,6 +706,34 @@ const createNewChat = async () => {
     } catch (error) {
       console.error("Failed to regenerate response:", error);
     }
+  };
+
+  const handleFeedback = async (messageId: string, feedback: "good" | "bad" | null) => {
+    try {
+      setMessages((prev) =>
+        prev.map((msg) => (msg.id === messageId ? { ...msg, feedback } : msg))
+      );
+
+      const response = await fetch(`/api/chats/${activeSessionId}/messages`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId, feedback }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to save feedback");
+      }
+    } catch (error) {
+      console.error("Error setting feedback:", error);
+    }
+  };
+
+  const handleCopy = (messageId: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedMessageId(messageId);
+    setTimeout(() => {
+      setCopiedMessageId(null);
+    }, 2000);
   };
 
   const handleLogout = async () => {
@@ -1193,13 +1224,8 @@ const createNewChat = async () => {
               return (
                 <div key={idx} className="space-y-2 group/msg">
                   <div
-                    className={`flex gap-3 sm:gap-4 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}
+                    className={`flex w-full ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                   >
-                    <div className={`flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center ${msg.role === "user" ? "bg-white text-black" : "bg-blue-600 text-white"
-                      }`}>
-                      {msg.role === "user" ? <User className="w-4 h-4 sm:w-5 sm:h-5" /> : <Bot className="w-4 h-4 sm:w-5 sm:h-5" />}
-                    </div>
-
                     {msg.role === "user" && editingMessageId === msg.id ? (
                       <div className="flex-1 max-w-[90%] sm:max-w-[80%] p-3.5 sm:p-4 rounded-2xl bg-white/10 border border-white/10 rounded-tr-none space-y-3">
                         <textarea
@@ -1276,17 +1302,69 @@ const createNewChat = async () => {
                     )}
                   </div>
 
-                  {idx === messages.length - 1 && msg.role === "bot" && msg.id && !isLoading && (
-                    <div className="flex justify-start pl-10 sm:pl-12 mt-1">
+                  {msg.role === "bot" && msg.id && !isLoading && (
+                    <div className="flex items-center gap-1.5 mt-1 px-1">
+                      {/* Copy response */}
                       <button
                         type="button"
-                        onClick={handleRegenerate}
-                        className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border border-white/10 bg-white/5 text-white/60 hover:text-white hover:bg-white/10 transition-colors font-medium"
-                        title="Regenerate response"
+                        onClick={() => handleCopy(msg.id!, msg.content)}
+                        className="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors relative group"
                       >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Regenerate</span>
+                        {copiedMessageId === msg.id ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                        <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 rounded bg-[#1a1a1a] border border-white/10 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg">
+                          {copiedMessageId === msg.id ? "Copied!" : "Copy response"}
+                        </span>
                       </button>
+
+                      {/* Thumbs up */}
+                      <button
+                        type="button"
+                        onClick={() => handleFeedback(msg.id!, msg.feedback === "good" ? null : "good")}
+                        className={`p-1.5 rounded-lg transition-colors relative group ${
+                          msg.feedback === "good"
+                            ? "text-emerald-400 bg-emerald-500/10"
+                            : "text-white/45 hover:text-white hover:bg-white/10"
+                        }`}
+                      >
+                        <ThumbsUp className="w-3.5 h-3.5" />
+                        <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 rounded bg-[#1a1a1a] border border-white/10 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg">
+                          Good response
+                        </span>
+                      </button>
+
+                      {/* Thumbs down */}
+                      <button
+                        type="button"
+                        onClick={() => handleFeedback(msg.id!, msg.feedback === "bad" ? null : "bad")}
+                        className={`p-1.5 rounded-lg transition-colors relative group ${
+                          msg.feedback === "bad"
+                            ? "text-rose-400 bg-rose-500/10"
+                            : "text-white/45 hover:text-white hover:bg-white/10"
+                        }`}
+                      >
+                        <ThumbsDown className="w-3.5 h-3.5" />
+                        <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 rounded bg-[#1a1a1a] border border-white/10 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg">
+                          Bad response
+                        </span>
+                      </button>
+
+                      {/* Regenerate (last message only) */}
+                      {idx === messages.length - 1 && (
+                        <button
+                          type="button"
+                          onClick={handleRegenerate}
+                          className="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors relative group"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 rounded bg-[#1a1a1a] border border-white/10 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg">
+                            Regenerate response
+                          </span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1294,10 +1372,7 @@ const createNewChat = async () => {
             })
           )}
           {isLoading && messages[messages.length - 1]?.role === "user" && (
-            <div className="flex gap-3 sm:gap-4">
-              <div className="flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center">
-                <Bot className="w-4 h-4 sm:w-5 sm:h-5" />
-              </div>
+            <div className="flex justify-start">
               <div className="p-3.5 sm:p-4 rounded-2xl bg-blue-600/10 border border-blue-500/10 rounded-tl-none">
                 <div className="flex gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce [animation-delay:-0.3s]" />

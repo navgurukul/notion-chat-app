@@ -77,6 +77,11 @@ const CORE_COLUMN_MIGRATIONS: ColumnMigration[] = [
     column: "emotion",
     definition: "TEXT",
   },
+  {
+    table: "chat_messages",
+    column: "feedback",
+    definition: "TEXT",
+  },
 ];
 
 const NOTION_PAGE_COLUMN_MIGRATIONS: ColumnMigration[] = [
@@ -253,7 +258,7 @@ async function runColumnMigrations(
   }
 }
 
-const CURRENT_SCHEMA_HASH = "v6_session_state_jsonb";
+const CURRENT_SCHEMA_HASH = "v7_message_feedback";
 
 export async function ensureSchema() {
   if (schemaReady) return;
@@ -344,6 +349,7 @@ export async function ensureSchema() {
           role TEXT NOT NULL,
           content TEXT NOT NULL,
           emotion TEXT,
+          feedback TEXT,
           created_at TIMESTAMP DEFAULT NOW()
         );
       `,
