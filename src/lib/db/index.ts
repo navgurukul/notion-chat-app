@@ -131,10 +131,6 @@ export async function resolvePersonName(
   let q = input.trim().toLowerCase();
   if (!q) return { exact: null, candidates: [] };
 
-  if (q === "sanjana") {
-    q = "sanjna";
-  }
-
   const exact = dir.find((p) => p.normalized === q);
   if (exact) return { exact: exact.name, candidates: [] };
 

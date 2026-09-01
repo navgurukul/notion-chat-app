@@ -78,13 +78,15 @@ export async function trySqlAnswer(
 
   if (signal?.aborted) return null;
 
-  console.log("[trySqlAnswer] debug", {
-    kind: finalParsed.kind,
-    metadataOnly,
-    directAnswerLength: directAnswer?.length ?? null,
-    directAnswerPreview: directAnswer?.slice(0, 80) ?? null,
-    isMiss: directAnswer ? isSqlMissAnswer(directAnswer) : "no answer",
-  });
+  if (process.env.NODE_ENV !== "production" || process.env.CHAT_DEBUG === "true") {
+    console.log("[trySqlAnswer] debug", {
+      kind: finalParsed.kind,
+      metadataOnly,
+      directAnswerLength: directAnswer?.length ?? null,
+      directAnswerPreview: directAnswer?.slice(0, 80) ?? null,
+      isMiss: directAnswer ? isSqlMissAnswer(directAnswer) : "no answer",
+    });
+  }
 
   if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer)) {
     const isSynthesis = isSynthesisRequest(ctx.message);
