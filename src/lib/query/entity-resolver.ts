@@ -201,7 +201,7 @@ export async function resolvePerson(input: string): Promise<ResolvedPerson> {
     const normalizedInput = name.toLowerCase();
 
     const exactMatch = dir.find((p) => p.normalized === normalizedInput);
-    if (exactMatch) {
+    if (exactMatch || res.exact.toLowerCase() === normalizedInput) {
       return {
         value: res.exact,
         quality: ResolutionQuality.EXACT,
