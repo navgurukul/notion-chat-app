@@ -70,6 +70,30 @@ function cleanDocCache() {
   }
 }
 
+const VERB_STOP_WORDS = new Set([
+  "be", "is", "are", "was", "were", "been", "being",
+  "complete", "completed", "completing", "completion",
+  "do", "does", "did", "doing", "done",
+  "go", "going", "gone",
+  "work", "worked", "working",
+  "create", "created", "creating",
+  "assign", "assigned", "assigning",
+  "start", "started", "starting",
+  "finish", "finished", "finishing",
+  "end", "ended", "ending",
+  "happen", "happened", "happening",
+  "take", "taken", "taking",
+  "make", "made", "making",
+  "get", "got", "getting",
+]);
+
+function isVerbOrActionWord(term: string): boolean {
+  const norm = term.toLowerCase().trim();
+  if (VERB_STOP_WORDS.has(norm)) return true;
+  const words = norm.split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.every((w) => VERB_STOP_WORDS.has(w));
+}
+
 function computeMatchScore(topic: string, title: string): { score: number; quality: ResolutionQuality } {
   const tLow = topic.toLowerCase().trim();
   const titleLow = title.toLowerCase().trim();
@@ -85,16 +109,22 @@ function computeMatchScore(topic: string, title: string): { score: number; quali
   }
 
   if (titleNorm.startsWith(tNorm)) {
+    if (tNorm.length < 3 || isVerbOrActionWord(tNorm)) {
+      return { score: 0.0, quality: ResolutionQuality.NONE };
+    }
     return { score: 0.94, quality: ResolutionQuality.PARTIAL };
   }
 
   const escaped = tNorm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const wordRegex = new RegExp(`\\b${escaped}\\b`, "i");
   if (wordRegex.test(titleNorm)) {
+    if (tNorm.length < 4 || isVerbOrActionWord(tNorm)) {
+      return { score: 0.0, quality: ResolutionQuality.NONE };
+    }
     return { score: 0.85, quality: ResolutionQuality.PARTIAL };
   }
 
-  const tTokens = new Set(tNorm.split(/\s+/).filter(tok => tok.length > 2));
+  const tTokens = new Set(tNorm.split(/\s+/).filter(tok => tok.length > 2 && !VERB_STOP_WORDS.has(tok)));
   const titleTokens = new Set(titleNorm.split(/\s+/).filter(tok => tok.length > 2));
   if (tTokens.size > 0 && titleTokens.size > 0) {
     let intersection = 0;
@@ -103,7 +133,7 @@ function computeMatchScore(topic: string, title: string): { score: number; quali
     }
     const overlap = intersection / Math.max(tTokens.size, titleTokens.size);
     if (overlap >= 0.5) {
-      return { score: 0.80 * overlap, quality: ResolutionQuality.PARTIAL };
+      return { score: 0.85 * overlap, quality: ResolutionQuality.PARTIAL };
     }
   }
 
@@ -112,7 +142,7 @@ function computeMatchScore(topic: string, title: string): { score: number; quali
 
 export async function resolveDocument(topic: string): Promise<ResolvedDocument> {
   const trimmed = topic.trim();
-  if (trimmed.length < 2 || isNoiseTopic(trimmed)) {
+  if (trimmed.length < 3 || isNoiseTopic(trimmed) || isVerbOrActionWord(trimmed)) {
     return { value: null, url: null, quality: ResolutionQuality.NONE };
   }
 
@@ -124,7 +154,10 @@ export async function resolveDocument(topic: string): Promise<ResolvedDocument> 
   }
 
   const stripped = stripDocWords(trimmed);
-  const searchTerms = Array.from(new Set([trimmed, stripped].filter((w) => w && w.length >= 2)));
+  const searchTerms = Array.from(new Set([trimmed, stripped].filter((w) => w && w.length >= 3 && !isVerbOrActionWord(w))));
+  if (!searchTerms.length) {
+    return { value: null, url: null, quality: ResolutionQuality.NONE };
+  }
   const likePatterns = searchTerms.map((term) => `%${term.replace(/[%_\\]/g, "\\$&")}%`);
 
   let pages = await query<{ title: string | null; url: string | null }>(
@@ -157,7 +190,7 @@ export async function resolveDocument(topic: string): Promise<ResolvedDocument> 
     for (const page of pages) {
       if (!page.title) continue;
       const { score, quality } = computeMatchScore(searchTopic, page.title);
-      if (score >= 0.80 && (!bestMatch || score > bestMatch.score)) {
+      if (score >= 0.85 && (!bestMatch || score > bestMatch.score)) {
         bestMatch = { title: page.title, url: page.url, score, quality };
       }
     }
@@ -580,7 +613,12 @@ export async function extractRawEntities(message: string): Promise<{ personName?
   );
   if (docMatch?.[1]) {
     const candidateDoc = docMatch[1].trim();
-    if (!/^\d{4}$/.test(candidateDoc) && !isNoiseTopic(candidateDoc)) {
+    if (
+      !/^\d{4}$/.test(candidateDoc) &&
+      !isNoiseTopic(candidateDoc) &&
+      !isVerbOrActionWord(candidateDoc) &&
+      candidateDoc.length >= 3
+    ) {
       docTitle = candidateDoc;
     }
   }

@@ -252,6 +252,24 @@ function handleEmbeddingFailure(error: unknown, context: string) {
   console.error(`[embeddings] ${context} failed:`, error);
 }
 
+type EmbeddingCacheEntry = {
+  embedding: number[] | null;
+  expiry: number;
+};
+
+const embeddingCache = new Map<string, EmbeddingCacheEntry>();
+const EMBEDDING_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const EMBEDDING_CACHE_MAX_SIZE = 500;
+
+function cleanEmbeddingCache() {
+  const now = Date.now();
+  for (const [key, entry] of embeddingCache.entries()) {
+    if (now > entry.expiry) {
+      embeddingCache.delete(key);
+    }
+  }
+}
+
 export async function embedText(
   text: string
 ): Promise<number[] | null> {
@@ -259,6 +277,13 @@ export async function embedText(
 
   if (!trimmed) {
     return null;
+  }
+
+  const cacheKey = trimmed.toLowerCase();
+  cleanEmbeddingCache();
+  const cached = embeddingCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiry) {
+    return cached.embedding;
   }
 
   if (!isEmbeddingsEnabled()) {
@@ -271,10 +296,18 @@ export async function embedText(
       "OpenAI embedding request"
     );
 
-    const embedding =
-      data?.data?.[0]?.embedding;
+    const embedding = validateEmbedding(data?.data?.[0]?.embedding);
 
-    return validateEmbedding(embedding);
+    if (embeddingCache.size >= EMBEDDING_CACHE_MAX_SIZE) {
+      const firstKey = embeddingCache.keys().next().value;
+      if (firstKey !== undefined) embeddingCache.delete(firstKey);
+    }
+    embeddingCache.set(cacheKey, {
+      embedding,
+      expiry: Date.now() + EMBEDDING_CACHE_TTL_MS,
+    });
+
+    return embedding;
   } catch (error) {
     handleEmbeddingFailure(error, "embedText");
     return null;

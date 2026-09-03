@@ -1,40 +1,79 @@
 import type { ParsedQuery, QueryKind } from "@/lib/query/types";
 import { isWeakProjectEtaAnswer } from "@/lib/sql/answers";
 
-// ---------------------------------------------------------------------------
-// Metadata-only routing (SQL-only lane; never silently fall back to RAG)
-// ---------------------------------------------------------------------------
+export type QueryLane = "sql-only" | "rag-only" | "sql-then-rag";
 
-/**
- * Metadata intents: SQL-only lane. Never silently fall back to RAG.
- * (Link requests use tryNotionLinkAnswer separately.)
- */
-export const METADATA_ONLY_KINDS = new Set<QueryKind>([
-  "owner_of",
-  "owner_list",
-  "created_by_of",
-  "created_by_list",
-  "assigned_to_of",
-  "assigned_list",
-  "worked_on_list",
-  "type_of",
-  "blocker_list",
-  "compare_pages",
-  "project_manager_of",
-  "activity_summary",
-  "team_activity",
-  "team_roster",
-  "onboarding_tasks",
-  "risks_for",
-  "people_list",
-  "project_most_devs",
-  "project_member_breakdown",
-  "person_project_membership",
-  "assignee_project_check",
-]);
+export interface QueryKindConfig {
+  lane: QueryLane;
+  trustedWhenSqlHits: boolean;
+  needsPageTitleOnMiss?: boolean;
+  shouldExpandRag?: boolean;
+}
+
+export const QUERY_KIND_CONFIG: Record<QueryKind, QueryKindConfig> = {
+  // SQL-only metadata lane (never silently fall back to RAG)
+  owner_list: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  owner_of: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: true, shouldExpandRag: false },
+  created_by_list: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  created_by_of: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: true, shouldExpandRag: false },
+  assigned_list: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: true, shouldExpandRag: false },
+  assigned_to_of: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: true, shouldExpandRag: false },
+  worked_on_list: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  project_manager_of: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  type_of: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: true, shouldExpandRag: false },
+  blocker_list: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  compare_pages: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: true, shouldExpandRag: false },
+  activity_summary: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  team_activity: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  team_roster: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  onboarding_tasks: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: true, shouldExpandRag: false },
+  risks_for: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: true, shouldExpandRag: true },
+  people_list: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  project_most_devs: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  project_member_breakdown: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  person_project_membership: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  assignee_project_check: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
+
+  // SQL-then-RAG hybrid lane
+  status_of: { lane: "sql-then-rag", trustedWhenSqlHits: true, needsPageTitleOnMiss: true, shouldExpandRag: false },
+  project_eta: { lane: "sql-then-rag", trustedWhenSqlHits: true, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  page_about: { lane: "sql-then-rag", trustedWhenSqlHits: false, needsPageTitleOnMiss: true, shouldExpandRag: true },
+  project_summary: { lane: "sql-then-rag", trustedWhenSqlHits: false, needsPageTitleOnMiss: true, shouldExpandRag: true },
+  topic_list: { lane: "sql-then-rag", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: true },
+  analytics: { lane: "sql-then-rag", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
+
+  // RAG-only lane
+  semantic: { lane: "rag-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: true },
+  smalltalk: { lane: "rag-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
+};
+
+// Derived sets for backward compatibility and fast lookup
+export const METADATA_ONLY_KINDS = new Set<QueryKind>(
+  (Object.keys(QUERY_KIND_CONFIG) as QueryKind[]).filter((k) => QUERY_KIND_CONFIG[k].lane === "sql-only")
+);
+
+export const STRUCTURED_QUERY_KINDS = new Set<QueryKind>(
+  (Object.keys(QUERY_KIND_CONFIG) as QueryKind[]).filter((k) => Boolean(QUERY_KIND_CONFIG[k].needsPageTitleOnMiss))
+);
+
+export const TRUSTED_SQL_KINDS = new Set<QueryKind>(
+  (Object.keys(QUERY_KIND_CONFIG) as QueryKind[]).filter((k) => QUERY_KIND_CONFIG[k].trustedWhenSqlHits)
+);
+
+export const BROAD_RAG_KINDS = new Set<QueryKind>(
+  (Object.keys(QUERY_KIND_CONFIG) as QueryKind[]).filter((k) => Boolean(QUERY_KIND_CONFIG[k].shouldExpandRag))
+);
+
+export function getQueryKindConfig(kind: QueryKind): QueryKindConfig {
+  return QUERY_KIND_CONFIG[kind] ?? { lane: "rag-only", trustedWhenSqlHits: false };
+}
 
 export function isMetadataOnlyKind(kind: QueryKind): boolean {
-  return METADATA_ONLY_KINDS.has(kind);
+  return getQueryKindConfig(kind).lane === "sql-only";
+}
+
+export function shouldExpandRagQuery(kind: QueryKind): boolean {
+  return Boolean(getQueryKindConfig(kind).shouldExpandRag);
 }
 
 export function metadataNotFoundAnswer(parsed: ParsedQuery): string {
@@ -92,10 +131,6 @@ export function metadataNotFoundAnswer(parsed: ParsedQuery): string {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Answer quality / RAG fallback checks (formerly answer-quality.ts)
-// ---------------------------------------------------------------------------
-
 /** SQL response that is an explicit empty/miss (not a substantive metadata answer). */
 export function isSqlMissAnswer(answer: string) {
   const trimmed = answer.trim();
@@ -121,27 +156,6 @@ export function isTeamActivityMetadataGap(answer: string | null | undefined) {
   return Boolean(answer?.includes("not available from metadata alone"));
 }
 
-/** SQL paths that are reliable when they return a concrete fact (not “not found”). */
-const TRUSTED_SQL_KINDS = new Set([
-  "owner_of",
-  "status_of",
-  "assigned_to_of",
-  "created_by_of",
-  "type_of",
-  "blocker_list",
-  "compare_pages",
-  "assigned_list",
-  "owner_list",
-  "created_by_list",
-  "worked_on_list",
-  "activity_summary",
-  "project_eta",
-  "team_activity",
-  "project_manager_of",
-  "risks_for",
-  "onboarding_tasks",
-]);
-
 /**
  * If true, skip SQL and use RAG + grounded LLM (retrieval-first fallback).
  * Goal: ~90% correct answers — only trust SQL when it clearly hit the right fact.
@@ -150,8 +164,13 @@ export function shouldFallbackToRag(parsed: ParsedQuery, sqlAnswer: string | nul
   if (!sqlAnswer?.trim()) return true;
   if (isSqlMissAnswer(sqlAnswer)) return true;
 
-  // Metadata lane (status, blockers, team activity, …) must not be discarded for RAG.
-  if (isMetadataOnlyKind(parsed.kind)) return false;
+  const config = getQueryKindConfig(parsed.kind);
+
+  // Metadata-only lane must not fall back to RAG
+  if (config.lane === "sql-only") return false;
+
+  // RAG-only lane always uses RAG
+  if (config.lane === "rag-only") return true;
 
   if (parsed.kind === "project_eta" && isWeakProjectEtaAnswer(sqlAnswer)) {
     return true;
@@ -171,7 +190,7 @@ export function shouldFallbackToRag(parsed: ParsedQuery, sqlAnswer: string | nul
     return true;
   }
 
-  if (!TRUSTED_SQL_KINDS.has(parsed.kind)) {
+  if (!config.trustedWhenSqlHits) {
     return true;
   }
 

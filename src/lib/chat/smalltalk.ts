@@ -284,7 +284,7 @@ export async function jsonAnswer(sessionId: string | null, answer: string, emoti
     return new Response(null, { status: 499 });
   }
   if (sessionId) {
-    addChatMessage(sessionId, "bot", answer, emotion).catch(err => console.error("[Background DB Write Error] Failed to save bot message:", err));
+    await addChatMessage(sessionId, "bot", answer, emotion).catch(err => console.error("[DB Write Error] Failed to save bot message:", err));
   }
   return NextResponse.json({ answer, emotion });
 }

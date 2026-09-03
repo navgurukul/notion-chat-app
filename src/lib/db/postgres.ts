@@ -218,6 +218,11 @@ async function ensureNotionChunksSchema(client: PoolClient) {
     ON notion_chunks
     USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
+
+    CREATE INDEX IF NOT EXISTS idx_notion_chunks_embedding
+    ON notion_chunks
+    USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
   `);
 
   await client.query(`
@@ -258,7 +263,7 @@ async function runColumnMigrations(
   }
 }
 
-const CURRENT_SCHEMA_HASH = "v7_message_feedback";
+const CURRENT_SCHEMA_HASH = "v8_hnsw_fts";
 
 export async function ensureSchema() {
   if (schemaReady) return;
@@ -398,6 +403,21 @@ export async function ensureSchema() {
 
         CREATE INDEX IF NOT EXISTS notion_pages_synced_at_idx
         ON notion_pages (synced_at);
+      `);
+
+      if (!(await columnExists(client, "notion_pages", "fts"))) {
+        await client.query(`
+          ALTER TABLE notion_pages
+          ADD COLUMN fts tsvector GENERATED ALWAYS AS (
+            to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(content, ''))
+          ) STORED
+        `);
+      }
+
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS notion_pages_fts_idx
+        ON notion_pages
+        USING gin (fts);
       `);
 
       await ensureNotionChunksSchema(client);

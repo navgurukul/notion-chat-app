@@ -94,7 +94,12 @@ export async function evaluateRetrieval(datasetPath?: string) {
   const dataset: GoldenItem[] = JSON.parse(fs.readFileSync(file, "utf-8"));
   const results: RetrievalQueryResult[] = [];
 
+  let idx = 0;
   for (const item of dataset) {
+    idx++;
+    if (idx % 5 === 0 || idx === 1 || idx === dataset.length) {
+      console.log(`[eval-retrieval] Processing ${idx}/${dataset.length}: "${item.query.slice(0, 30)}..."`);
+    }
     let hits: Array<{ chunk_id: string; title: string | null; score: number }> = [];
     let topScore = 0;
     let confidenceOk = false;

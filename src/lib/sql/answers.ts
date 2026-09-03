@@ -354,17 +354,20 @@ async function searchProjectPages(topic: string) {
   if (!tokens.length) return [];
 
   const primary = `%${escapeLike(tokens[0])}%`;
+  const ftsInput = tokens.join(" ");
   const rows = await query<NotionPageRow & { content: string | null }>(
     `
     SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
     FROM notion_pages
     WHERE
       lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
-      OR lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
-      ${tokens.length > 1 ? `OR lower(coalesce(title, '')) LIKE lower($2) ESCAPE '\\'` : ""}
+      OR fts @@ plainto_tsquery('simple', $2)
+      ${tokens.length > 1 ? `OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'` : ""}
     LIMIT 40
     `,
-    tokens.length > 1 ? [primary, `%${escapeLike(tokens[1])}%`] : [primary],
+    tokens.length > 1
+      ? [primary, ftsInput, `%${escapeLike(tokens[1])}%`]
+      : [primary, ftsInput],
   );
 
   return rows
@@ -559,7 +562,10 @@ async function findProjectRosterThemes(person: string) {
     SELECT title, url, content
     FROM notion_pages
     WHERE
-      ${personColumnMatchSql("content", 1, 2)}
+      (
+        fts @@ plainto_tsquery('simple', $2)
+        OR ${personColumnMatchSql("content", 1, 2)}
+      )
       AND (
         lower(coalesce(title, '')) LIKE '%datapivot%'
         OR lower(coalesce(title, '')) LIKE '%nagaada%'
