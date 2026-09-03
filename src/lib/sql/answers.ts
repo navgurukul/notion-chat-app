@@ -1698,13 +1698,11 @@ async function handleMetadataQueryInner(
             : null;
       const assigneeInContentSql = `
         (
-          (
-            lower(coalesce(content, '')) LIKE '%assignee:%'
-            OR lower(coalesce(content, '')) LIKE '%assign:%'
-            OR lower(coalesce(content, '')) LIKE '%assigned:%'
-            OR lower(coalesce(content, '')) LIKE '%captain:%'
+          (owner IS NULL OR trim(owner) = '')
+          AND (
+            lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
+            OR lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
           )
-          AND lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
         )
       `;
       const ownerMatchSql = personColumnMatchSql("owner", 1, 2);

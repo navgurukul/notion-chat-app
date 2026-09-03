@@ -379,8 +379,9 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  const showTasksMatch = q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|project\s+names?)\s+(?:assigned\s+)?(?:to|for|of)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i)
-    ?? q.match(/^(?:show|list|get|display)\s+(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})'s\s+(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|project\s+names?)/i);
+  const showTasksMatch = q.match(/^(?:show|list|get|display|tell\s+me|what\s+is|what\s+are)\s+(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|project\s+names?)\s+(?:assigned\s+)?(?:to|for|of)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i)
+    ?? q.match(/^(?:show|list|get|display|tell\s+me|what\s+is|what\s+are)?\s*(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:assigned\s+)?(?:to|for|of)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i)
+    ?? q.match(/^(?:show|list|get|display|tell\s+me)?\s*(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})'s\s+(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|project\s+names?)/i);
   if (showTasksMatch) {
     const person = cleanPersonName(showTasksMatch[1]);
     if (person) {
@@ -393,7 +394,8 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  const workingOnMatch = q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\b/i)
+  const workingOnMatch = q.match(/\b(?:what|which)\s+(?:is|are|has|have)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\b/i)
+    ?? q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\b/i)
     ?? q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)\s+(?:is|are|has|have)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\b/i)
     ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)?\s*(?:currently\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
     ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:has|have|had)\s+(?:been\s+)?(?:working\s+on|worked\s+on|worked|done|doing)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
