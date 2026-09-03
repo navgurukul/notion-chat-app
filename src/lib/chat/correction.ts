@@ -1,14 +1,8 @@
 import type { ChatHistoryItem } from "@/lib/ai/openai";
+import { getJsonCompletion } from "@/lib/ai/openai";
 import { resolvePerson, resolveDocument } from "@/lib/query/entity-resolver";
 import { reformulationCache, sqlMetadataCache } from "./cache";
 import { getSessionState, updateSessionState, listChatMessages } from "./store";
-
-const CORRECTION_PATTERNS = [
-  /^(?:no,?\s+)?(?:it\s+was\s+|it\s+is\s+)?(?:related\s+to\s+)?(.+?)\s+not\s+(.+)$/i,
-  /^(?:no,?\s+)?(?:it\s+was\s+|it\s+is\s+)?(?:related\s+to\s+)?(.+?)\s+instead\s+of\s+(.+)$/i,
-  /^(?:no,?\s+)?(?:I\s+)?meant\s+(.+?)(?:\s+not\s+(.+))?$/i,
-  /^(?:no,?\s+)?(?:it\s+was\s+|it\s+is\s+)(.+)$/i,
-];
 
 const WRONG_WORDS = /\b(wrong|worng|wrng|incorrect|false|bad|error)\b/i;
 
@@ -20,16 +14,16 @@ export function isWrongAnswerFeedback(message: string): boolean {
 export function isCorrectionMessage(content: string): boolean {
   const normalized = content.trim().toLowerCase();
   const words = normalized.split(/\s+/).filter(Boolean);
-  if (words.length > 15) {
+  if (words.length > 18) {
     return false;
   }
 
-  // Starts with correction indicators
+  // Fast-path correction indicators
   if (/^(no|wrong|incorrect|false|bad|error|it\s+was|it\s+is|i\s+meant|meant|this\s+is\s+(wrong|incorrect))\b/i.test(normalized)) {
     return true;
   }
 
-  // Short message with entity swap (e.g., "Sanjana not Mahendra")
+  // Short entity swap indicators (e.g., "Sanjana not Mahendra")
   if (words.length <= 6 && (/\bnot\b/i.test(normalized) || /\binstead\s+of\b/i.test(normalized))) {
     return true;
   }
@@ -43,7 +37,6 @@ export function replaceEntityInText(
   oldEntityCandidate?: string,
   lastEntity?: string
 ): string {
-  // 1. Try to replace the oldEntityCandidate if provided
   if (oldEntityCandidate) {
     const escapedTarget = oldEntityCandidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const regex = new RegExp(`\\b${escapedTarget}\\b`, "gi");
@@ -56,7 +49,6 @@ export function replaceEntityInText(
     }
   }
 
-  // 2. Fall back to replacing lastEntity if it is present in the text
   if (lastEntity) {
     const escapedTarget = lastEntity.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const regex = new RegExp(`\\b${escapedTarget}\\b`, "gi");
@@ -74,11 +66,38 @@ export function replaceEntityInText(
 
 function cleanEntityName(name: string): string {
   let cleaned = name.trim();
-  // Strip common leading conversational prefix filler
   cleaned = cleaned.replace(/^(?:no,?\s+)?(?:wait,?\s+)?(?:it's|it\s+is|it\s+was|i\s+meant|meant|related\s+to|for|about|with|be)\s+/i, "");
-  // Also strip any leftover "no " or punctuation
   cleaned = cleaned.replace(/^(?:no|wait)[,.\s]+/i, "");
   return cleaned.trim();
+}
+
+async function extractCorrectionInfoLlm(message: string): Promise<{
+  isCorrection: boolean;
+  isWrongAnswerFeedback: boolean;
+  newEntity?: string;
+  oldEntity?: string;
+}> {
+  try {
+    const systemPrompt = `Analyze user message for entity swap or wrong answer feedback. Return JSON:
+{
+  "isCorrection": boolean,
+  "isWrongAnswerFeedback": boolean,
+  "newEntity": string | null,
+  "oldEntity": string | null
+}`;
+    const raw = await getJsonCompletion(systemPrompt, `Message: ${message}`);
+    const jsonMatch = raw.match(/\{[\s\S]*\}/)?.[0] ?? raw;
+    const parsed = JSON.parse(jsonMatch);
+    return {
+      isCorrection: Boolean(parsed.isCorrection),
+      isWrongAnswerFeedback: Boolean(parsed.isWrongAnswerFeedback),
+      newEntity: parsed.newEntity ? cleanEntityName(parsed.newEntity) : undefined,
+      oldEntity: parsed.oldEntity ? cleanEntityName(parsed.oldEntity) : undefined,
+    };
+  } catch (error) {
+    console.error("[Correction] LLM extraction failed:", error);
+    return { isCorrection: false, isWrongAnswerFeedback: false };
+  }
 }
 
 export async function detectAndHandleCorrection(
@@ -121,7 +140,6 @@ export async function detectAndHandleCorrection(
             pending.oldEntityRaw
           );
 
-          // Clear pending clarification and update state
           state.pendingClarification = undefined;
           if (pending.type === "person") {
             state.activePerson = {
@@ -152,7 +170,6 @@ export async function detectAndHandleCorrection(
             correctedProject: pending.type === "project" ? matchedCandidate : undefined
           };
         } else {
-          // Clear pending clarification if reply didn't match any candidates
           state.pendingClarification = undefined;
           await updateSessionState(sessionId, state);
         }
@@ -162,49 +179,36 @@ export async function detectAndHandleCorrection(
     }
   }
 
-  // B. Guard with isCorrectionMessage
+  // B. Guard check
   if (!isCorrectionMessage(message)) {
     return null;
   }
 
-  const isWrongFeedback = isWrongAnswerFeedback(normalized);
-
+  // Fast-path regex checks
+  let isWrongFeedback = isWrongAnswerFeedback(normalized);
   let newEntityRaw: string | undefined;
   let oldEntityRaw: string | undefined;
 
-  for (const pattern of CORRECTION_PATTERNS) {
-    const match = normalized.match(pattern);
-    if (match) {
-      newEntityRaw = match[1]?.trim();
-      if (match[2]) {
-        oldEntityRaw = match[2]?.trim();
-      }
-      break;
+  const notMatch = normalized.match(/(.+?)\s+(?:not|instead of)\s+(.+)/i);
+  if (notMatch) {
+    newEntityRaw = cleanEntityName(notMatch[1]);
+    oldEntityRaw = cleanEntityName(notMatch[2]);
+  } else if (!isWrongFeedback) {
+    // Fast LLM JSON fallback for natural language entity swap variants
+    const llmInfo = await extractCorrectionInfoLlm(message);
+    if (llmInfo.isCorrection) {
+      isWrongFeedback = llmInfo.isWrongAnswerFeedback;
+      newEntityRaw = llmInfo.newEntity;
+      oldEntityRaw = llmInfo.oldEntity;
     }
   }
 
-  // Fallback for "not" split
-  if (!newEntityRaw && /\bnot\b/i.test(normalized)) {
-    const parts = normalized.split(/\bnot\b/i);
-    if (parts.length === 2) {
-      newEntityRaw = parts[0].trim();
-      oldEntityRaw = parts[1].trim();
-    }
-  }
-
-  if (newEntityRaw) {
-    newEntityRaw = cleanEntityName(newEntityRaw).replace(/[?.!,;]+$/g, "").trim();
-  }
-  if (oldEntityRaw) {
-    oldEntityRaw = cleanEntityName(oldEntityRaw).replace(/[?.!,;]+$/g, "").trim();
-  }
-
-  const isCorrection = isWrongFeedback || !!newEntityRaw;
+  const isCorrection = isWrongFeedback || Boolean(newEntityRaw);
   if (!isCorrection) {
     return null;
   }
 
-  // Clear caches to force-refresh retrieval
+  // Clear caches for fresh retrieval
   reformulationCache.clear();
   sqlMetadataCache.clear();
 
@@ -240,12 +244,8 @@ export async function detectAndHandleCorrection(
       let targetUserMessage: ChatHistoryItem | undefined;
       for (let i = userMessages.length - 1; i >= 0; i--) {
         const uMsg = userMessages[i];
-        if (uMsg.content.trim().toLowerCase() === message.trim().toLowerCase()) {
-          continue;
-        }
-        if (isCorrectionMessage(uMsg.content)) {
-          continue;
-        }
+        if (uMsg.content.trim().toLowerCase() === message.trim().toLowerCase()) continue;
+        if (isCorrectionMessage(uMsg.content)) continue;
         targetUserMessage = uMsg;
         break;
       }
@@ -275,17 +275,12 @@ export async function detectAndHandleCorrection(
     }
   }
 
-  // Fallback to message history if not in session state
   let targetUserMessage: ChatHistoryItem | undefined;
   const userMessages = resolvedHistory.filter(item => item.role === "user");
   for (let i = userMessages.length - 1; i >= 0; i--) {
     const uMsg = userMessages[i];
-    if (uMsg.content.trim().toLowerCase() === message.trim().toLowerCase()) {
-      continue;
-    }
-    if (isCorrectionMessage(uMsg.content)) {
-      continue;
-    }
+    if (uMsg.content.trim().toLowerCase() === message.trim().toLowerCase()) continue;
+    if (isCorrectionMessage(uMsg.content)) continue;
     targetUserMessage = uMsg;
     break;
   }
@@ -310,11 +305,10 @@ export async function detectAndHandleCorrection(
         return `${candidates.slice(0, -1).join(", ")}, or ${candidates[candidates.length - 1]}`;
       };
       const clarifyingQuestion = `Do you mean ${formatCandidates(resolvedPerson.candidates)}?`;
-      
-      // Update session state with pending clarification
+
       if (sessionId) {
         try {
-          const state = await getSessionState(sessionId) || {};
+          const state = (await getSessionState(sessionId)) || {};
           state.pendingClarification = {
             type: "person",
             candidates: resolvedPerson.candidates,
@@ -338,13 +332,11 @@ export async function detectAndHandleCorrection(
       const personValue = resolvedPerson.value || resolvedPerson.candidates[0];
       correctedPerson = personValue;
 
-      // Swap in text
       rewrittenMessage = replaceEntityInText(rewrittenMessage, personValue, oldEntityRaw || lastEntities.lastPerson, lastEntities.lastPerson);
-      
-      // Update session state
+
       if (sessionId) {
         try {
-          const state = await getSessionState(sessionId) || {};
+          const state = (await getSessionState(sessionId)) || {};
           state.activePerson = {
             id: personValue,
             name: personValue,
@@ -365,13 +357,11 @@ export async function detectAndHandleCorrection(
       if (resolvedDoc.value) {
         correctedProject = resolvedDoc.value;
 
-        // Swap in text
         rewrittenMessage = replaceEntityInText(rewrittenMessage, resolvedDoc.value, oldEntityRaw || lastEntities.lastProject, lastEntities.lastProject);
 
-        // Update session state
         if (sessionId) {
           try {
-            const state = await getSessionState(sessionId) || {};
+            const state = (await getSessionState(sessionId)) || {};
             state.activeProject = {
               id: resolvedDoc.value,
               name: resolvedDoc.value,
@@ -390,7 +380,6 @@ export async function detectAndHandleCorrection(
     }
   }
 
-  // Ensure third-person pronouns in the rewritten query resolve to the corrected person
   if (correctedPerson) {
     const thirdPersonRegex = /\b(he|him|his|she|her|hers|they|them|their)\b/i;
     if (thirdPersonRegex.test(rewrittenMessage)) {

@@ -148,5 +148,460 @@
     "expected_answer_claims": [
       "Shows an inline policy note box below Leave Type dropdown when a leave type with policy note is selected"
     ]
+  },
+  {
+    "id": "q016",
+    "query": "What was decided about hiding the Location/Map fields on the input form?",
+    "expected_chunk_ids": [
+      "19e62044-d039-47e9-a7b9-fbc5543472bd"
+    ],
+    "expected_page_titles": [
+      "Hide Location/Map fields on input form for now. Do Not Delete."
+    ],
+    "expected_answer_claims": [
+      "The Location/Map fields should be hidden but not deleted, since they might be needed in the future"
+    ]
+  },
+  {
+    "id": "q017",
+    "query": "What was the bug with data submission before 7 AM?",
+    "expected_chunk_ids": [
+      "c2165f91-11b0-4071-ba35-e965212ae95a"
+    ],
+    "expected_page_titles": [
+      "Data submission restricted before 7 AM (next day)"
+    ],
+    "expected_answer_claims": [
+      "Anshumali reported that data filled before 7 AM the next day was not allowed to be submitted, even though it should be allowed until 7 AM"
+    ]
+  },
+  {
+    "id": "q018",
+    "query": "Who is responsible for the Zoom settings persistence issue and what was implemented?",
+    "expected_chunk_ids": [
+      "4750ebb9-3160-49c2-9fc2-f66013a437ec"
+    ],
+    "expected_page_titles": [
+      "Even after configuring the Zoom meeting settings such as enabling participants to join, disabling the join/leave notification sound, and turning off annotations, these settings are not being retained for new Zoom sessions. Every time a new class session is started, we have to manually reconfigure the same settings. Could these settings be made persistent so that once they are configured, they are automatically applied to all future Zoom sessions?"
+    ],
+    "expected_answer_claims": [
+      "Saksham Chauhan, Aniket Dutta, and Poonam Bagh own this task, and the Zoom Waiting Room has been disabled for meeting hosts so authorized participants can join directly"
+    ]
+  },
+  {
+    "id": "q019",
+    "query": "Who should integrate the resume-matching AI prompts into the backend, and which endpoints?",
+    "expected_chunk_ids": [
+      "e0b3710b-cd95-49d2-8a4b-6ca1d186d2de"
+    ],
+    "expected_page_titles": [
+      "Resume Buddy V2 research"
+    ],
+    "expected_answer_claims": [
+      "Aadarsh should integrate the prompts into the /ai/parse-resume and /ai/match-jd backend API endpoints"
+    ]
+  },
+  {
+    "id": "q020",
+    "query": "What does the Zoe AI click-to-navigate feature do when a user clicks a feedback card?",
+    "expected_chunk_ids": [
+      "e0b3710b-cd95-49d2-8a4b-6ca1d186d2de"
+    ],
+    "expected_page_titles": [
+      "Resume Buddy V2 research"
+    ],
+    "expected_answer_claims": [
+      "Clicking an AI feedback card moves the user to the exact form field needing correction, highlighting it with a glowing emerald border"
+    ]
+  },
+  {
+    "id": "q021",
+    "query": "What does the Ella Garden Progress System implementation plan document contain?",
+    "expected_chunk_ids": [
+      "031c741d-771b-41ba-bb06-2816aeab06df"
+    ],
+    "expected_page_titles": [
+      "Implementation Plan - Gamified Garden Progress System"
+    ],
+    "expected_answer_claims": [
+      "It contains the complete technical specifications, database schemas, API details, and core progression logic for the level-aware Garden Progress System"
+    ]
+  },
+  {
+    "id": "q022",
+    "query": "What concern was raised in the 17th April 2026 proposal about the employee database?",
+    "expected_chunk_ids": [
+      "25f87007-73ec-4514-ac5e-ca5e3b710726"
+    ],
+    "expected_page_titles": [
+      "17th April 2026 Proposal"
+    ],
+    "expected_answer_claims": [
+      "The proposal raises concern that Google Sheets and Apps Script are still being used to maintain the main employee database, and argues the company has outgrown this approach"
+    ]
+  },
+  {
+    "id": "q023",
+    "query": "Can a Super Admin raise a comp-off request for themselves?",
+    "expected_chunk_ids": [
+      "82de2c70-769d-4ed8-921d-927cfe9d2f08"
+    ],
+    "expected_page_titles": [
+      "SAnA can raise comp-off requests and perform admin actions related to timesheets,leaves for other SAnA but not themselves"
+    ],
+    "expected_answer_claims": [
+      "A Super Admin raising a comp-off request for themselves is blocked; they can only raise it for other employees"
+    ]
+  },
+  {
+    "id": "q024",
+    "query": "Why was the dual progress indicator removed from the Quiz Page redesign?",
+    "expected_chunk_ids": [
+      "798e17cf-3f32-49d9-ac70-e0d35358012d"
+    ],
+    "expected_page_titles": [
+      "Quiz Page"
+    ],
+    "expected_answer_claims": [
+      "The dots were removed because two progress indicators showing the same information created visual noise without adding value; the bar alone was sufficient"
+    ]
+  },
+  {
+    "id": "q025",
+    "query": "Where in the quiz flow is the stream selection screen now placed?",
+    "expected_chunk_ids": [
+      "798e17cf-3f32-49d9-ac70-e0d35358012d"
+    ],
+    "expected_page_titles": [
+      "Quiz Page"
+    ],
+    "expected_answer_claims": [
+      "Stream selection now appears on a dedicated screen after the 10th question and before the results page, instead of in a post-signup form"
+    ]
+  },
+  {
+    "id": "q026",
+    "query": "What route does the Admin Side Sessions Module use?",
+    "expected_chunk_ids": [
+      "adbb5955-1f82-487f-89f8-f438dd55f0f6"
+    ],
+    "expected_page_titles": [
+      "Admin Side– Sessions Module (UI Implementation & API Integration)"
+    ],
+    "expected_answer_claims": [
+      "The route is /admin/mentorsDashboard/sessions, owned by Ujala Ujala"
+    ]
+  },
+  {
+    "id": "q027",
+    "query": "Should Ella stay on self-hosted EC2 Postgres or migrate to Supabase?",
+    "expected_chunk_ids": [
+      "c4dea24a-2f0f-4de4-b96a-347da9bb205d"
+    ],
+    "expected_page_titles": [
+      "Sprint 1: May 27 – June 6 (Database, Contracts & API Client)"
+    ],
+    "expected_answer_claims": [
+      "Recommendation is to stay on EC2 self-hosted Postgres because sub-1ms local loopback is critical for real-time voice turns, while Supabase would add 150ms+ per exchange"
+    ]
+  },
+  {
+    "id": "q028",
+    "query": "What is the critical DB fix needed in /llm/conversation-turn regardless of database choice?",
+    "expected_chunk_ids": [
+      "c4dea24a-2f0f-4de4-b96a-347da9bb205d"
+    ],
+    "expected_page_titles": [
+      "Sprint 1: May 27 – June 6 (Database, Contracts & API Client)"
+    ],
+    "expected_answer_claims": [
+      "The DB session must be closed before awaiting the LLM response, not after, otherwise 100 concurrent users will exhaust the connection pool while waiting for Gemini or OpenAI"
+    ]
+  },
+  {
+    "id": "q029",
+    "query": "Why was stream selection moved to a separate screen instead of asking post-signup?",
+    "expected_chunk_ids": [
+      "8ce93394-7916-47c2-8661-e4f362c0aa29"
+    ],
+    "expected_page_titles": [
+      "Quiz Page"
+    ],
+    "expected_answer_claims": [
+      "Asking stream post-signup meant results were shown unfiltered first; asking it right before results lets the filter be applied before the student sees their personalised list"
+    ]
+  },
+  {
+    "id": "q030",
+    "query": "What happens when a student selects \"Still Exploring\" on the stream screen?",
+    "expected_chunk_ids": [
+      "8ce93394-7916-47c2-8661-e4f362c0aa29"
+    ],
+    "expected_page_titles": [
+      "Quiz Page"
+    ],
+    "expected_answer_claims": [
+      "Selecting Still Exploring does not show all-stream results; the student's quiz answers are used to infer their strongest interest direction and results are filtered accordingly"
+    ]
+  },
+  {
+    "id": "q031",
+    "query": "What market gap does the Create with AI concept note identify?",
+    "expected_chunk_ids": [
+      "a3d93495-7451-435a-8460-5535092ffa40"
+    ],
+    "expected_page_titles": [
+      "Create with AI - Concept Note"
+    ],
+    "expected_answer_claims": [
+      "Existing platforms like Duolingo are built for urban environments and don't serve the target persona of 12-16 year olds in rural or semi-urban areas well"
+    ]
+  },
+  {
+    "id": "q032",
+    "query": "What does the Garden Progress System's GET /users/me/garden endpoint do?",
+    "expected_chunk_ids": [
+      "3366afd5-0c71-40bd-8850-35cdd2c06fb1"
+    ],
+    "expected_page_titles": [
+      "Implementation Plan - Gamified Garden Progress System"
+    ],
+    "expected_answer_claims": [
+      "It exposes a single read endpoint that translates the database progress arrays into a pre-calculated layout structure for the client, requiring a Bearer JWT access token"
+    ]
+  },
+  {
+    "id": "q033",
+    "query": "What's the current status of the 2Factor Bulk SMS service setup?",
+    "expected_chunk_ids": [
+      "1d2b7ea0-26e1-4414-a9c4-a2f62cc0f38c"
+    ],
+    "expected_page_titles": [
+      "2Factor Bulk SMS Service Setup"
+    ],
+    "expected_answer_claims": [
+      "It is on hold, currently running on 200 free sample credits, and next step is to confirm testing and approve purchase of SMS credits"
+    ]
+  },
+  {
+    "id": "q034",
+    "query": "How does the Daily Activity Tracker's Google OAuth login flow work?",
+    "expected_chunk_ids": [
+      "f0345ff3-6af2-48bd-ac4b-4fa23f49852d"
+    ],
+    "expected_page_titles": [
+      "Tech Documentation and Overview"
+    ],
+    "expected_answer_claims": [
+      "User clicks Login with Google, authenticates, Google returns an id_token which is decoded to check the email domain, and only org-domain emails are allowed through before the user role is fetched and they're redirected to a role-based dashboard"
+    ]
+  },
+  {
+    "id": "q035",
+    "query": "What is the bug with duplicate student emails in Admin?",
+    "expected_chunk_ids": [
+      "b2267446-6b7e-42d4-8184-34aed4f36e98"
+    ],
+    "expected_page_titles": [
+      "🧑‍💻 ADMIN – Duplicate student emails can be added manually"
+    ],
+    "expected_answer_claims": [
+      "The system allows admins to manually add a student with an email that's already used in the same course, creating duplicate records instead of blocking it with a validation error"
+    ]
+  },
+  {
+    "id": "q036",
+    "query": "What is the bug with the 'Coding Problem' label under Quiz chapters?",
+    "expected_chunk_ids": [
+      "2d9c3bcd-976a-494e-9336-93270d51ca76"
+    ],
+    "expected_page_titles": [
+      "ADMIN - Incorrect Label “Coding Problem” Displayed Under Quiz Chapter"
+    ],
+    "expected_answer_claims": [
+      "The label under a Quiz chapter incorrectly shows Coding Problem instead of Quiz, owned by Nikita Verma"
+    ]
+  },
+  {
+    "id": "q037",
+    "query": "What are the system default working days and holidays proposed in NavTrack V2?",
+    "expected_chunk_ids": [
+      "874585e9-13e1-4231-a869-b5f02355fbb0"
+    ],
+    "expected_page_titles": [
+      "NavTrack V2 Priorities list"
+    ],
+    "expected_answer_claims": [
+      "Working days are Mon-Fri plus 1st, 3rd, 5th Saturdays, national holidays are Jan 26, Aug 15, Oct 2, Dec 31, grace reset is on the 26th at 10 AM, and the salary cycle runs 26th to 25th"
+    ]
+  },
+  {
+    "id": "q038",
+    "query": "Why does Rocket Journal matter as a competitor to watch?",
+    "expected_chunk_ids": [
+      "f0393029-23e7-41b5-9b02-046510341cf6"
+    ],
+    "expected_page_titles": [
+      "🔍 Competitive Research — Wysa, Calmi, Day One, AudioDiary + Android-Focused Apps"
+    ],
+    "expected_answer_claims": [
+      "Rocket Journal has Rant Mode, Reflect Mode, and Scribble Mode, matching the exact three modes planned, and is Indian-founded, voice-first, and AI-powered"
+    ]
+  },
+  {
+    "id": "q039",
+    "query": "What pain points did Suhani report about her learning experience?",
+    "expected_chunk_ids": [
+      "6b17b211-1973-4b06-be15-d03ed7b7efa3"
+    ],
+    "expected_page_titles": [
+      "Libersha"
+    ],
+    "expected_answer_claims": [
+      "She faces language barriers since instructor Akhil Sharma conducts sessions in Hindi, and technical issues where assessments become unavailable and submission tracking fails"
+    ]
+  },
+  {
+    "id": "q040",
+    "query": "What key issues did student interviews reveal about the support system?",
+    "expected_chunk_ids": [
+      "af3cbf9a-c922-4da8-a7d7-2a62e8572cb9"
+    ],
+    "expected_page_titles": [
+      "Conduct Student Interviews to understand existing behaviour & challenges"
+    ],
+    "expected_answer_claims": [
+      "The instructor-to-student ratio creates unsustainable support demands, students can't get timely doubt resolution, and it's hard to find exact topics when revising recordings"
+    ]
+  },
+  {
+    "id": "q041",
+    "query": "What is the bug with LWP (Leave Without Pay) balance?",
+    "expected_chunk_ids": [
+      "dfb4773b-e637-44bd-b086-66929797f3c6"
+    ],
+    "expected_page_titles": [
+      "LWP Balance Not Reduced After Leave Approval"
+    ],
+    "expected_answer_claims": [
+      "After an LWP request is approved, the balance is not reduced, letting users apply more LWP than their allocated balance and causing incorrect payroll calculations"
+    ]
+  },
+  {
+    "id": "q042",
+    "query": "What link types does the assignment chapter input box need to accept?",
+    "expected_chunk_ids": [
+      "e086aecd-e941-4cf6-b131-6d031c947d2c"
+    ],
+    "expected_page_titles": [
+      "Assignment Chapter issue"
+    ],
+    "expected_answer_claims": [
+      "It must accept URLs from Google Drive, Google Docs, Google Sheets, and GitHub, and show a clear error for unsupported links"
+    ]
+  },
+  {
+    "id": "q043",
+    "query": "What happens to a student with 0% profile completion who clicks profile completion?",
+    "expected_chunk_ids": [
+      "3095143e-fa1e-434e-9715-ac5be4bf73e2"
+    ],
+    "expected_page_titles": [
+      "Students with 0% profile completion are redirected to \"Profile Not Found\" instead of the Profile page"
+    ],
+    "expected_answer_claims": [
+      "They are redirected to a Profile Not Found page instead of the Profile page, permanently blocking them from completing their profile, owned by Nikita Verma"
+    ]
+  },
+  {
+    "id": "q044",
+    "query": "What is a Chapter in the Zuvy LMS hierarchy?",
+    "expected_chunk_ids": [
+      "1fb4f78d-5eb2-4bb9-9614-aaa0fe95f6d2"
+    ],
+    "expected_page_titles": [
+      "Platform SOP for admin side - for ops"
+    ],
+    "expected_answer_claims": [
+      "A Chapter is a single piece of content inside a Module — video, article, quiz, coding problem, assignment, or project — and Chapters appear in linear order under their parent Module"
+    ]
+  },
+  {
+    "id": "q045",
+    "query": "What is the actual cause of the generic course save error?",
+    "expected_chunk_ids": [
+      "e81d7042-b242-4e6c-b3c4-56ec64a6286a"
+    ],
+    "expected_page_titles": [
+      "ADMIN - Course Save Error Shows Generic Message"
+    ],
+    "expected_answer_claims": [
+      "The network tab reveals the real error is 'duration must be a number conforming to the specified constraints,' but this backend validation message isn't surfaced to the admin"
+    ]
+  },
+  {
+    "id": "q046",
+    "query": "Why doesn't the Career Identity card show a match percentage?",
+    "expected_chunk_ids": [
+      "ecf20c98-d813-4d87-a0ce-e266c0415383"
+    ],
+    "expected_page_titles": [
+      "Dashboard for returning user"
+    ],
+    "expected_answer_claims": [
+      "Match percentage was removed because it belongs on career match cards where it relates to specific options; on the identity card it was a number without context"
+    ]
+  },
+  {
+    "id": "q047",
+    "query": "What dependencies are needed for LinkedIn profile auto-fill integration?",
+    "expected_chunk_ids": [
+      "3ccb071a-7da3-4132-99b7-94fb79eea4de"
+    ],
+    "expected_page_titles": [
+      "Integrate LinkedIn Profile Auto-Fill Using LinkedIn API"
+    ],
+    "expected_answer_claims": [
+      "Access to the required LinkedIn APIs, completing the LinkedIn developer application/setup process, and configuring authentication and permissions"
+    ]
+  },
+  {
+    "id": "q048",
+    "query": "What is the RBAC bug with active role after page refresh?",
+    "expected_chunk_ids": [
+      "9cc6f491-2a38-4b6f-b58a-15b9d2bd8004"
+    ],
+    "expected_page_titles": [
+      "RBAC - Active Role Resets to Admin After Page Refresh (Frontend)"
+    ],
+    "expected_answer_claims": [
+      "The active role resets to Admin after a page refresh instead of staying on the last selected role, owned by Poonam Bagh"
+    ]
+  },
+  {
+    "id": "q049",
+    "query": "What controls whether a course has one-on-one mentorship access enabled?",
+    "expected_chunk_ids": [
+      "79a4e119-9b3d-4f26-a9f8-f4a1106d805b"
+    ],
+    "expected_page_titles": [
+      "Mentor Profile, Scrutiny & other restrictions"
+    ],
+    "expected_answer_claims": [
+      "A Super Admin toggle in each course's settings controls mentorship access; turning it on lets all enrolled learners book sessions, turning it off blocks them"
+    ]
+  },
+  {
+    "id": "q050",
+    "query": "What does the Comp-Off Section visibility depend on for a manager?",
+    "expected_chunk_ids": [
+      "ee7b1de1-1107-4ca0-a94a-5990c9cc233a"
+    ],
+    "expected_page_titles": [
+      "Comp-Off Section Not Visible for User Listed as Manager in PnC Sheet"
+    ],
+    "expected_answer_claims": [
+      "The Comp-Off section should be visible if the user is listed as a manager with at least one reportee in the PnC sheet, and hidden if they have no reportees"
+    ]
   }
 ]

@@ -126,13 +126,13 @@ function parseActivityQuery(question: string, q: string): RulesQuery | null {
 
   const teamRosterMatch =
     question.match(
-      /\bwho(?:\s+all|\s+else)?\s+(?:is|are)\s+(?:all\s+)?(?:working|work(?:ing)?)\s+(?:on\s+)?(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
+      /\bwho(?:\s+all|\s+else)?\s+(?:is|are)\s+(?:all\s+)?(?:working|work(?:ing)?|associated|part|belonging)\s+(?:on|with|to)?\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
     ) ??
     question.match(
-      /\b(?:who\s+all|which\s+people|list\s+(?:all\s+)?(?:people|members|team))\b[\s\S]*?\b(?:working|work(?:ing)?)\s+(?:on\s+)?(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
+      /\b(?:who\s+all|which\s+people|list\s+(?:all\s+)?(?:people|members|team|team\s+members))\b[\s\S]*?\b(?:working|work(?:ing)?|associated|for|on|in|with)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
     ) ??
     question.match(
-      /\b(?:how\s+many|number\s+of)\s+(?:people|members|team\s+members|devs|developers|engineers)\s+(?:are\s+)?(?:working|work(?:ing)?)\s+(?:on\s+)?(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
+      /\b(?:how\s+many|number\s+of)\s+(?:people|members|team\s+members|devs|developers|engineers)\s+(?:are\s+)?(?:working|work(?:ing)?|associated)\s+(?:on|with)?\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i,
     );
   if (teamRosterMatch?.[1]) {
     const docTitle = stripDocWords(teamRosterMatch[1]);
@@ -143,6 +143,7 @@ function parseActivityQuery(question: string, q: string): RulesQuery | null {
         kind: "team_roster",
         docTitle,
         raw: question,
+        parserConfidence: 0.90,
       };
     }
   }
@@ -288,7 +289,7 @@ export function parseQueryByRules(question: string): RulesQuery {
     countPeople.test(q) ||
     totalPeople.test(q) ||
     (/\b(?:list|show|get|display|who)\b.*\b(?:team\s+members?|people|members|users|devs)\b/i.test(q) &&
-     !/\b(?:project|each\s+project|per\s+project|breakdown|by\s+project|project\s+wise)\b/i.test(q))
+     !/\b(?:project|each\s+project|per\s+project|breakdown|by\s+project|project\s+wise|for|on|in)\b/i.test(q))
   ) {
     return { kind: "people_list", raw: question, parserConfidence: 0.95 };
   }
@@ -309,9 +310,9 @@ export function parseQueryByRules(question: string): RulesQuery {
     return { kind: "project_member_breakdown", raw: question, parserConfidence: 0.90 };
   }
 
-  if (/\bwho\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm|owner)\s+(?:of|for|on)\b/i.test(q)) {
+  if (/\bwho\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm)\s+(?:of|for|on)\b/i.test(q)) {
     const docTitle = extractAfter(question, [
-      /who\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm|owner)\s+(?:of|for|on)\s+(.+?)(?:\?|$)/i,
+      /who\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm)\s+(?:of|for|on)\s+(.+?)(?:\?|$)/i,
     ]);
     return { kind: "project_manager_of", docTitle: docTitle ?? undefined, raw: question };
   }
@@ -491,12 +492,16 @@ export function parseQueryByRules(question: string): RulesQuery {
 
   if (
     /\b(mostly|most)\s+active\b/i.test(q) ||
+    /\bwhat\s+(?:did|has|have)\s+.+\s+(?:work|worked)\s+on\b/i.test(q) ||
+    /\bactivity\s+(?:for|of|by)\b/i.test(q) ||
     /\b(?:give me|show|list|provide)?\s*(?:data|docs?|tasks?|projects?)?\s*(?:of|about|related to)?\s*\w+.*\bthat\s+\w+.*\b(worked|workd|working|works|work)\b/i.test(q) ||
     /\bwhat\s+(?:tasks?|projects?|work)\s+\w+\s+(?:works|work)\b/i.test(q) ||
     /\b(?:what|which|show|list|all)\b.*\b(tasks?|projects?|work)\b.*\b(?:assigned|assign|given)\b.*\bto\s+\w/i.test(q) ||
     /\b(worked|working)\s+on\s+by\b/i.test(q)
   ) {
     const personName = extractAfter(question, [
+      /what\s+did\s+(.+?)\s+work\s+on/i,
+      /activity\s+(?:for|of|by)\s+(.+?)(?:\?|$)/i,
       /\b(?:on|about|for|of)\s+([A-Za-z][A-Za-z'.-]*(?:\s+[A-Za-z][A-Za-z'.-]*){0,2})\s+(?:tasks?|projects?|work)\b/i,
       /what\s+(?:tasks?|projects?|work)\s+(.+?)\s+(?:has|have)\s+(?:been\s+)?(?:worked|workd|working|done|doing)(?:\s+on)?/i,
       /what\s+(?:tasks?|projects?|work)\s+(.+?)\s+(?:works|work)\b/i,
@@ -506,7 +511,12 @@ export function parseQueryByRules(question: string): RulesQuery {
       /worked\s+on\s+by\s+(.+)$/i,
       /\btasks?\s+(?:by|of|for)\s+(.+)$/i,
     ]);
-    return withYear(question, { kind: "worked_on_list", personName: cleanPersonName(personName) ?? undefined });
+    const cleanedPerson = cleanPersonName(personName);
+    return withYear(question, {
+      kind: "worked_on_list",
+      personName: cleanedPerson ?? undefined,
+      parserConfidence: cleanedPerson ? 0.95 : 0.6,
+    });
   }
 
   const personOwnsProjectsMatch = question.match(
@@ -670,7 +680,7 @@ export function parseQueryByRules(question: string): RulesQuery {
 
   const projectSummaryTopic = extractProjectSummaryTopic(question);
   if (projectSummaryTopic) {
-    return { kind: "project_summary", docTitle: projectSummaryTopic, raw: question };
+    return { kind: "project_summary", docTitle: projectSummaryTopic, raw: question, parserConfidence: 0.90 };
   }
 
   if (isCrossDocSummaryQuestion(question)) {
@@ -705,8 +715,8 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  if (/\b(?:tell\s+me\s+more\s+about|more\s+about|details|info|information)\s+(?:of|about|for|on)?\s*(.+?)(?:\?|$)/i.test(q) || /^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i.test(q)) {
-    const match = question.match(/\b(?:tell\s+me\s+more\s+about|more\s+about|details|info|information)\s+(?:of|about|for|on)?\s*(.+?)(?:\?|$)/i) ?? question.match(/^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i);
+  if (/\b(?:tell\s+me\s+(?:more\s+)?about|more\s+about|details|info|information)\s+(?:of|about|for|on)?\s*(.+?)(?:\?|$)/i.test(q) || /^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i.test(q)) {
+    const match = question.match(/\b(?:tell\s+me\s+(?:more\s+)?about|more\s+about|details|info|information)\s+(?:of|about|for|on)?\s*(.+?)(?:\?|$)/i) ?? question.match(/^(?:show\s+)?(.+?)\s+(?:details|info|information)\??$/i);
     const doc = stripDocWords(match?.[1] || "");
     if (doc) {
       return { kind: "page_about", docTitle: doc, raw: question, parserConfidence: 0.95 };
@@ -742,14 +752,14 @@ export function extractProjectSummaryTopic(question: string) {
   }
 
   const hasProgramIntent =
-    (/\b(summarize|summary|overview)\b/i.test(q) &&
-      (/\bproject\b/i.test(q) || /\boverview\b/i.test(q))) ||
+    (/\b(summarize|summary|overview|everything)\b/i.test(q) &&
+      (/\bproject\b/i.test(q) || /\boverview\b/i.test(q) || /\beverything\b/i.test(q))) ||
     /\bwhat\s+is\s+(?:the\s+)?.+\s+project\s*\??$/i.test(q);
 
   if (!hasProgramIntent) return null;
 
   const patterns = [
-    /\b(?:summarize|summary of|give me an overview of|overview of)\s+(?:the\s+)?(.+?)(?:\s+project)?\s*\??$/i,
+    /\b(?:summarize|summary of|give me an overview of|overview of|everything about|give me everything about)\s+(?:the\s+)?(.+?)(?:\s+project)?\s*\??$/i,
     /\b(?:describe|explain)\s+(?:the\s+)?(.+?)\s+project\s*\??$/i,
     /\bwhat\s+is\s+(?:the\s+)?(.+?)\s+project\s*\??$/i,
   ];
@@ -761,7 +771,7 @@ export function extractProjectSummaryTopic(question: string) {
       .replace(/[?!.,;]+$/g, "")
       .trim();
     const cleaned = stripDocWords(topic) || topic;
-    if (cleaned.length >= 3 && !/^(the|a|an|this|that)$/i.test(cleaned)) {
+    if (cleaned.length >= 1 && !/^(the|a|an|this|that)$/i.test(cleaned)) {
       return cleaned;
     }
   }
@@ -874,13 +884,14 @@ export function scoreRegexParse(
 
   if (parsed.kind === "assigned_list" && parsed.personName) return RuleConfidence.HIGH * entity;
   if (parsed.kind === "activity_summary" && parsed.personName) return RuleConfidence.HIGH * entity;
+  if (parsed.kind === "worked_on_list" && parsed.personName) return RuleConfidence.HIGH * entity;
   if (parsed.kind === "page_about" && parsed.docTitle && parsed.docTitle.length >= 6) {
     return RuleConfidence.MEDIUM * entity;
   }
   if (parsed.kind === "project_summary" && parsed.docTitle) return RuleConfidence.MEDIUM * entity;
   if (parsed.kind === "risks_for" && parsed.docTitle) return RuleConfidence.MEDIUM * entity;
 
-  if (parsed.kind === "worked_on_list" || parsed.kind === "topic_list") {
+  if (parsed.kind === "topic_list") {
     return RuleConfidence.LOW * entity;
   }
 

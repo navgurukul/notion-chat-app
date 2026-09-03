@@ -2,7 +2,7 @@
 
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, memo } from "react";
 import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw, ThumbsUp, ThumbsDown, Copy, Check } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -81,6 +81,72 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const ChatInputForm = memo(function ChatInputForm({
+  onSubmit,
+  isLoading,
+  activeSessionId,
+  isLoadingChats,
+  stopConfirmState,
+  onStopClick,
+}: {
+  onSubmit: (text: string) => void;
+  isLoading: boolean;
+  activeSessionId: string | null;
+  isLoadingChats: boolean;
+  stopConfirmState: "idle" | "confirm";
+  onStopClick: () => void;
+}) {
+  const [text, setText] = useState("");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!text.trim() || isLoading || !activeSessionId) return;
+    const val = text.trim();
+    setText("");
+    onSubmit(val);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="max-w-4xl mx-auto relative group">
+      <input
+        type="text"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        disabled={!activeSessionId || isLoadingChats}
+        placeholder={activeSessionId ? "Ask anything..." : "Creating chat..."}
+        className="w-full p-3.5 sm:p-4 pr-12 sm:pr-14 rounded-2xl bg-white/5 border border-white/10 focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.07] transition-all placeholder:text-white/20 text-white text-sm sm:text-base"
+      />
+      {isLoading ? (
+        <button
+          type="button"
+          onClick={onStopClick}
+          className={`absolute right-2 top-2 sm:right-2.5 sm:top-2.5 p-2 rounded-xl text-white transition-all duration-200 flex items-center justify-center min-h-[36px] ${
+            stopConfirmState === "confirm"
+              ? "bg-red-700 hover:bg-red-800 px-3 animate-pulse"
+              : "bg-red-500 hover:bg-red-600"
+          }`}
+          title={stopConfirmState === "confirm" ? "Click again to confirm" : "Stop generating"}
+        >
+          {stopConfirmState === "confirm" ? (
+            <span className="text-[10px] font-bold tracking-wider uppercase">Click again</span>
+          ) : (
+            <Square className="w-5 h-5 fill-current" />
+          )}
+        </button>
+      ) : (
+        <button
+          type="submit"
+          disabled={!text.trim() || !activeSessionId}
+          className="absolute right-2 top-2 sm:right-2.5 sm:top-2.5 p-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 transition-all font-semibold"
+          title="Send message"
+        >
+          <Send className="w-5 h-5" />
+        </button>
+      )}
+    </form>
+  );
+});
+
 export default function ChatPage() {
   const LAST_SYNC_STORAGE_KEY = "notion_last_synced_at";
   const LAST_CHAT_SESSION_KEY = "notion_active_chat_session";
@@ -100,7 +166,6 @@ export default function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isLoadingChats, setIsLoadingChats] = useState(false);
   const [chatsReady, setChatsReady] = useState(false);
-  const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [thinkingByMessage, setThinkingByMessage] = useState<ThinkingByMessage>({});
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
@@ -276,7 +341,9 @@ export default function ChatPage() {
       return merged;
     });
 
-    setThinkingByMessage({});
+    if (!chatInFlightRef.current) {
+      setThinkingByMessage({});
+    }
     return mapped.length > 0;
   };
 
@@ -646,13 +713,9 @@ const createNewChat = async () => {
     }
   };
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || isLoading || !activeSessionId) return;
-
-    const userMessage = input.trim();
-    setInput("");
-    await executeChatFlow(userMessage);
+  const handleSend = async (userMessageText: string) => {
+    if (!userMessageText.trim() || isLoading || !activeSessionId) return;
+    await executeChatFlow(userMessageText.trim());
   };
 
   const handleStopClick = () => {
@@ -1279,37 +1342,40 @@ const createNewChat = async () => {
                         </div>
                       </div>
                     ) : (
-                      <div className="relative max-w-[88%] sm:max-w-[80%] flex flex-col items-end">
+                      <div className={`relative max-w-[88%] sm:max-w-[80%] flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
                         <div className={`w-full p-3.5 sm:p-4 rounded-2xl ${msg.role === "user"
                           ? "bg-white/10 border border-white/10 rounded-tr-none"
                           : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
                           }`}>
-                          {showThinking && thinkingEntry && (
-                            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-500/25 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-100/80">
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          {showThinking && thinkingEntry ? (
+                            <div className={`${msg.content.trim() ? "mb-4" : ""} inline-flex items-center gap-2 rounded-full border border-blue-500/25 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-100/80`}>
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />
                               <span>{thinkingLabel}</span>
                             </div>
-                          )}
-                          {(msg.content.trim() || showThinking) && (
-                            <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed prose-headings:mt-4 prose-headings:mb-2 prose-h2:text-base prose-h3:text-sm prose-h4:text-sm prose-ul:my-2 prose-li:my-0.5 prose-table:text-sm prose-th:border prose-th:border-white/15 prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-white/15 prose-td:px-2 prose-td:py-1 prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
-                              {msg.content.trim() ? (
-                                <ReactMarkdown
-                                  remarkPlugins={[remarkGfm]}
-                                  components={{
-                                    a: ({ href, children }) => (
-                                      <a href={href} target="_blank" rel="noopener noreferrer">
-                                        {children}
-                                      </a>
-                                    ),
-                                  }}
-                                >
-                                  {msg.role === "bot" && msg.emotion && msg.emotion !== "neutral" && emotionConfig[msg.emotion]?.emoji
-                                    ? injectEmojiIntoMarkdown(msg.content, emotionConfig[msg.emotion].emoji)
-                                    : msg.content}
-                                </ReactMarkdown>
-                              ) : null}
+                          ) : !msg.content.trim() && isPendingBot ? (
+                            <div className="inline-flex items-center gap-2 px-1 py-0.5 text-xs text-blue-300/80">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />
+                              <span>Generating answer...</span>
                             </div>
-                          )}
+                          ) : null}
+                          {msg.content.trim() ? (
+                            <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed prose-headings:mt-4 prose-headings:mb-2 prose-h2:text-base prose-h3:text-sm prose-h4:text-sm prose-ul:my-2 prose-li:my-0.5 prose-table:text-sm prose-th:border prose-th:border-white/15 prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-white/15 prose-td:px-2 prose-td:py-1 prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
+                              <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                components={{
+                                  a: ({ href, children }) => (
+                                    <a href={href} target="_blank" rel="noopener noreferrer">
+                                      {children}
+                                    </a>
+                                  ),
+                                }}
+                              >
+                                {msg.role === "bot" && msg.emotion && msg.emotion !== "neutral" && emotionConfig[msg.emotion]?.emoji
+                                  ? injectEmojiIntoMarkdown(msg.content, emotionConfig[msg.emotion].emoji)
+                                  : msg.content}
+                              </ReactMarkdown>
+                            </div>
+                          ) : null}
                         </div>
 
                         {/* Action buttons for user query */}
@@ -1439,46 +1505,14 @@ const createNewChat = async () => {
 
         {/* Input Area */}
         <div className="p-3 sm:p-4 md:p-6 lg:p-8">
-          <form
+          <ChatInputForm
             onSubmit={handleSend}
-            className="max-w-4xl mx-auto relative group"
-          >
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              disabled={!activeSessionId || isLoadingChats}
-              placeholder={activeSessionId ? "Ask anything..." : "Creating chat..."}
-              className="w-full p-3.5 sm:p-4 pr-12 sm:pr-14 rounded-2xl bg-white/5 border border-white/10 focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.07] transition-all placeholder:text-white/20 text-white text-sm sm:text-base"
-            />
-            {isLoading ? (
-              <button
-                type="button"
-                onClick={handleStopClick}
-                className={`absolute right-2 top-2 sm:right-2.5 sm:top-2.5 p-2 rounded-xl text-white transition-all duration-200 flex items-center justify-center min-h-[36px] ${
-                  stopConfirmState === "confirm"
-                    ? "bg-red-700 hover:bg-red-800 px-3 animate-pulse"
-                    : "bg-red-500 hover:bg-red-600"
-                }`}
-                title={stopConfirmState === "confirm" ? "Click again to confirm" : "Stop generating"}
-              >
-                {stopConfirmState === "confirm" ? (
-                  <span className="text-[10px] font-bold tracking-wider uppercase">Click again</span>
-                ) : (
-                  <Square className="w-5 h-5 fill-current" />
-                )}
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!input.trim() || !activeSessionId}
-                className="absolute right-2 top-2 sm:right-2.5 sm:top-2.5 p-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 transition-all font-semibold"
-                title="Send message"
-              >
-                <Send className="w-5 h-5" />
-              </button>
-            )}
-          </form>
+            isLoading={isLoading}
+            activeSessionId={activeSessionId}
+            isLoadingChats={isLoadingChats}
+            stopConfirmState={stopConfirmState}
+            onStopClick={handleStopClick}
+          />
           <p className="text-center text-[10px] text-white/20 mt-4 uppercase tracking-[0.2em]">
             Powered by Notion & OpenAI
           </p>
