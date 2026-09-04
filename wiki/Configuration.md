@@ -12,12 +12,22 @@ To use the Notion AI Chat Assistant, you need to provide several API keys and id
 
 ### Notion API
 - `NOTION_TOKEN`: Find this in your [Notion Integrations](https://www.notion.so/my-integrations).
-- `NOTION_DATABASE_ID`: The ID of the database you want to chat with. 
-  > [!TIP]
-  > The ID is the part of the URL after the workspace name and before the `?v=`.
 
-### Gemini AI
-- `GEMINI_API_KEY`: Obtained from [Google AI Studio](https://aistudio.google.com/).
+The current exporter uses Notion workspace search and uploads all accessible pages to S3. Make sure the integration is connected to the workspace/pages that should be searchable.
+
+### AWS Bedrock Knowledge Base
+- `AWS_REGION`: AWS region for S3 and Bedrock.
+- `AWS_ACCESS_KEY_ID`: AWS access key with S3 and Bedrock Knowledge Base permissions.
+- `AWS_SECRET_ACCESS_KEY`: AWS secret key.
+- `S3_BUCKET_NAME`: Bucket used by the Notion export script.
+- `AWS_KNOWLEDGE_BASE_ID`: Bedrock Knowledge Base ID.
+- `AWS_DATA_SOURCE_ID`: Bedrock data source ID.
+
+After exporting Notion content with `npm run export:notion`, start ingestion from the app's sync button and verify retrieval with `npm run test:bedrock`.
+
+### AI Provider
+- Chat uses OpenAI (same `OPENAI_API_KEY` already used for embeddings).
+- `OPENAI_CHAT_MODEL`: OpenAI chat model name (example: `gpt-4o-mini`).
 
 ## 🔗 Connecting Notion
 1. Go to your Notion Database.

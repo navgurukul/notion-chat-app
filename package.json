@@ -7,21 +7,29 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "export:notion": "tsx scripts/notion-to-s3.ts",
+    "search:s3": "tsx scripts/search-s3.ts",
+    "sync:notion": "tsx scripts/sync-notion.ts",
+    "sync:notion:full": "tsx scripts/sync-notion.ts --force --refresh-content",
+    "embed:missing": "tsx scripts/embed-missing.ts",
+    "verify:chat-routes": "tsx scripts/verify-chat-routes.ts",
+    "test:e2e": "tsx scripts/e2e-pipeline-test.ts",
+    "backfill:notion-edited-at": "tsx scripts/backfill-notion-edited-at.ts",
+    "eval": "tsx scripts/evaluate-rag.ts",
+    "eval:retrieval": "tsx scripts/evaluate-retrieval.ts",
+    "eval:faithfulness": "tsx scripts/evaluate-faithfulness.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock-agent": "^3.969.0",
-    "@aws-sdk/client-bedrock-agent-runtime": "^3.968.0",
     "@aws-sdk/client-s3": "^3.971.0",
-    "@aws-sdk/credential-providers": "^3.968.0",
-    "@google/generative-ai": "^0.24.1",
     "@notionhq/client": "^2.3.0",
     "@tailwindcss/typography": "^0.5.19",
+    "@types/pg": "^8.20.0",
     "dotenv": "^17.2.3",
-    "idb": "^8.0.3",
     "lucide-react": "^0.562.0",
     "next": "16.1.1",
     "next-auth": "^4.24.13",
+    "pg": "^8.20.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-markdown": "^10.1.0",
@@ -35,6 +43,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }
