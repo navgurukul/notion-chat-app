@@ -39,7 +39,11 @@ function pickLongerName(a: string, b: string) {
 }
 
 function cleanPersonVariant(name: string) {
-  return name.replace(/\s+[a-z]$/i, "").trim();
+  let cleaned = name.replace(/\s+[a-z]$/i, "").trim();
+  cleaned = cleaned.replace(/\s+(NAFPO|NG|AI|Dev|Team|Org)\b/gi, "").trim();
+  cleaned = cleaned.replace(/\s+(OOO|AFK|PTO|WFH)\b.*$/i, "").trim();
+  cleaned = cleaned.replace(/(Discussion|Notes|MoM|Meeting|Points|Action|Status|Task|Item|Agenda|Review|Demo|Scope).*$/i, "").trim();
+  return cleaned;
 }
 
 function parseNotionMention(raw: string): string | null {
@@ -91,8 +95,8 @@ function looksLikePersonName(value: string) {
 
   const lower = trimmed.toLowerCase();
 
-  // Noise word pattern (teams, roles, conjunctions, technical terms, calendar/process terms)
-  const noisePattern = /\b(team|project|members?|staff|users?|admins?|group|bots?|support|headline|task|tasks|vision|mission|roadmap|status|update|daily|weekly|monthly|meeting|call|sync|notes|retro|board|channel|guild|chapter|tribe|squad|lead|manager|pm|qa|dev|engineer|designer|coordinator|intern|fellow|consultant|employee|contractor|would|will|should|could|can|has|have|had|is|are|was|were|why|what|who|which|how|do|does|did|worked|working|assigned|assign|create|created|edit|edited|update|updated|added|add|remove|removed|delete|deleted|done|fixed|fix|page|docs?|documents?|layer|base|param|returns?|memberof|typedef|property|throws|deprecated|example|link|author|since|version|css|js|ts|html|code|snippet|test|spec|mock|stub|config|env|build|scripts?|npm|yarn|pnpm|git|github|gitlab|deploy|prod|staging|local)\b/;
+  // Noise word pattern (teams, roles, conjunctions, technical terms, calendar/process terms, system words)
+  const noisePattern = /\b(team|project|members?|staff|users?|admins?|group|bots?|support|headline|task|tasks|vision|mission|roadmap|status|update|daily|weekly|monthly|meeting|call|sync|notes|retro|board|channel|guild|chapter|tribe|squad|lead|manager|pm|qa|dev|engineer|designer|coordinator|intern|fellow|consultant|employee|contractor|would|will|should|could|can|has|have|had|is|are|was|were|why|what|who|which|how|do|does|did|worked|working|assigned|assign|create|created|edit|edited|update|updated|added|add|remove|removed|delete|deleted|done|fixed|fix|page|docs?|documents?|layer|base|param|returns?|memberof|typedef|property|throws|deprecated|example|link|author|since|version|css|js|ts|html|code|snippet|test|spec|mock|stub|config|env|build|scripts?|npm|yarn|pnpm|git|github|gitlab|deploy|prod|staging|local|server|cd)\b/;
   
   if (noisePattern.test(lower)) return false;
 
@@ -131,7 +135,14 @@ export function extractPeopleFromContent(
     { re: /\bowner:\s*([^\n]+)/gi, role: "owner (in page)" },
     { re: /\bpm:\s*([^\n]+)/gi, role: "PM" },
     { re: /\bproject manager:\s*([^\n]+)/gi, role: "PM" },
-    { re: /\b(?:devs?|team|members?):\s*([^\n]+)/gi, role: "team roster" },
+    { re: /\b(?:devs?|team|members?|roster):\s*([^\n]+)/gi, role: "team roster" },
+    { re: /\battendees?:\s*([^\n]+)/gi, role: "attendee" },
+    { re: /\bparticipants?:\s*([^\n]+)/gi, role: "participant" },
+    { re: /\bpresenters?:\s*([^\n]+)/gi, role: "presenter" },
+    { re: /\bpoc:\s*([^\n]+)/gi, role: "POC" },
+    { re: /\b(?:project\s+)?leads?:\s*([^\n]+)/gi, role: "lead" },
+    { re: /\bauthors?:\s*([^\n]+)/gi, role: "author" },
+    { re: /\bcontributors?:\s*([^\n]+)/gi, role: "contributor" },
   ];
 
   for (const { re, role } of linePatterns) {
@@ -150,9 +161,9 @@ export function extractPeopleFromContent(
   }
 
   for (const match of content.matchAll(
-    /(?:^|\n)\s*(?:Devs?|Designers?|Product Managers?|PM|QA)\b[^\n]*\n((?:[ \t]*\d+\.\s*[^\n]+\n?){1,12})/gi,
+    /(?:^|\n)\s*(?:Attendees?|Participants?|Devs?|Designers?|Product Managers?|PM|QA|Team(?:\s+Members?)?)\b[^\n]*\n((?:[ \t]*(?:[-*]|\d+\.)\s*[^\n]+\n?){1,15})/gi,
   )) {
-    for (const line of match[1].matchAll(/^\s*\d+\.\s*([^\n]+)/gim)) {
+    for (const line of match[1].matchAll(/^\s*(?:[-*]|\d+\.)\s*([^\n]+)/gim)) {
       const chunk = line[1].trim();
       for (const name of splitPersonField(chunk)) {
         if (looksLikePersonName(name)) {
@@ -201,24 +212,24 @@ export async function fetchProjectPages(scopeTopic: string): Promise<ProjectPage
 
   const tokenPatterns = tokens.map((t) => `%${escapeLike(t)}%`);
 
-  // Title match per token (broad recall) — content-wide match dropped;
-  // it was pulling in almost every page in the workspace.
-  const tokenConds = tokenPatterns
+  const titleConds = tokenPatterns
     .map((_, i) => `lower(coalesce(title, '')) LIKE lower($${i + 1}) ESCAPE '\\'`)
-    .join("\n        OR ");
+    .join(" OR ");
+
+  const contentConds = tokenPatterns
+    .map((_, i) => `lower(coalesce(content, '')) LIKE lower($${i + 1}) ESCAPE '\\'`)
+    .join(" OR ");
 
   const candidates = await query<ProjectPageRow>(
     `
     SELECT id, title, url, owner, created_by, last_edited_by, content
     FROM notion_pages
-    WHERE (${tokenConds})
+    WHERE (${titleConds}) OR (${contentConds})
     LIMIT 200
     `,
     tokenPatterns,
   );
 
-  // Same title-relevance scoring status_of/project_eta already trust —
-  // keeps team_roster/team_activity from diverging into broader noise.
   return filterPagesForProjectTopic(scopeTopic, candidates)
     .map((page) => ({ ...page, content: page.content ?? null }))
     .slice(0, 80);
@@ -241,6 +252,12 @@ export async function aggregatePeopleOnProject(pages: ProjectPageRow[]): Promise
     captain: 4,
     "owner (in page)": 5,
     PM: 4,
+    lead: 4,
+    attendee: 3,
+    participant: 3,
+    POC: 3,
+    author: 3,
+    contributor: 3,
     "team roster": 2,
     "billing roster": 1,
   };
@@ -249,7 +266,7 @@ export async function aggregatePeopleOnProject(pages: ProjectPageRow[]): Promise
     const canonicalName = findCanonicalName(name, directory);
     const key = personDedupeKey(canonicalName);
     const existsInDir = directory.some((p) => p.normalized === key);
-    if (!existsInDir) {
+    if (!existsInDir && !looksLikePersonName(canonicalName)) {
       return;
     }
     if (!TEAM_MEMBER_WHITELIST.has(key) && !looksLikePersonName(canonicalName)) {
@@ -337,7 +354,7 @@ export function isBugOrIncidentTitle(title: string | null | undefined) {
 /**
  * Keep pages that belong to a project topic (hub, MVP, PRD, scoped tasks) — drop noise tickets.
  */
-export function filterPagesForProjectTopic<T extends { title?: string | null }>(
+export function filterPagesForProjectTopic<T extends { title?: string | null; content?: string | null }>(
   topic: string,
   pages: T[],
   options?: { minTitleScore?: number },
@@ -352,6 +369,7 @@ export function filterPagesForProjectTopic<T extends { title?: string | null }>(
 
   return pages.filter((row) => {
     const title = row.title ?? "";
+    const content = row.content ?? "";
     if (isBugOrIncidentTitle(title)) return false;
 
     const titleScore = scoreTitleForTopic(topic, title);
@@ -363,8 +381,12 @@ export function filterPagesForProjectTopic<T extends { title?: string | null }>(
     }
 
     if (primary && new RegExp(`\\b${primary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(title)) {
-      if (/^(oscar|stub|zuvy|meraki|journaling|datapivot|nagaada)\b/i.test(title)) return true;
-      if (new RegExp(`^${primary}\\s+(app|mvp|prd|modes|platform|project|hub|\\+\\+)`, "i").test(title)) {
+      return true;
+    }
+
+    if (content) {
+      const contentLower = content.toLowerCase();
+      if (tokens.length > 0 && tokens.some((t) => contentLower.includes(t))) {
         return true;
       }
     }

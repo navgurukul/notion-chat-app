@@ -73,6 +73,12 @@ search_queries: [
 const LINK_PHRASES = [
   "notion link",
   "notion url",
+  "link for",
+  "link of",
+  "link to",
+  "url for",
+  "url of",
+  "url to",
   " link",
   " url",
   "open in notion",

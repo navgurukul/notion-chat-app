@@ -2,7 +2,7 @@
 
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, memo } from "react";
 import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw, ThumbsUp, ThumbsDown, Copy, Check } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -81,6 +81,72 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const ChatInputForm = memo(function ChatInputForm({
+  onSubmit,
+  isLoading,
+  activeSessionId,
+  isLoadingChats,
+  stopConfirmState,
+  onStopClick,
+}: {
+  onSubmit: (text: string) => void;
+  isLoading: boolean;
+  activeSessionId: string | null;
+  isLoadingChats: boolean;
+  stopConfirmState: "idle" | "confirm";
+  onStopClick: () => void;
+}) {
+  const [text, setText] = useState("");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!text.trim() || isLoading || !activeSessionId) return;
+    const val = text.trim();
+    setText("");
+    onSubmit(val);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="max-w-4xl mx-auto relative group">
+      <input
+        type="text"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        disabled={!activeSessionId || isLoadingChats}
+        placeholder={activeSessionId ? "Ask anything..." : "Creating chat..."}
+        className="w-full p-3.5 sm:p-4 pr-12 sm:pr-14 rounded-2xl bg-white/5 border border-white/10 focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.07] transition-all placeholder:text-white/20 text-white text-sm sm:text-base"
+      />
+      {isLoading ? (
+        <button
+          type="button"
+          onClick={onStopClick}
+          className={`absolute right-2 top-2 sm:right-2.5 sm:top-2.5 p-2 rounded-xl text-white transition-all duration-200 flex items-center justify-center min-h-[36px] ${
+            stopConfirmState === "confirm"
+              ? "bg-red-700 hover:bg-red-800 px-3 animate-pulse"
+              : "bg-red-500 hover:bg-red-600"
+          }`}
+          title={stopConfirmState === "confirm" ? "Click again to confirm" : "Stop generating"}
+        >
+          {stopConfirmState === "confirm" ? (
+            <span className="text-[10px] font-bold tracking-wider uppercase">Click again</span>
+          ) : (
+            <Square className="w-5 h-5 fill-current" />
+          )}
+        </button>
+      ) : (
+        <button
+          type="submit"
+          disabled={!text.trim() || !activeSessionId}
+          className="absolute right-2 top-2 sm:right-2.5 sm:top-2.5 p-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 transition-all font-semibold"
+          title="Send message"
+        >
+          <Send className="w-5 h-5" />
+        </button>
+      )}
+    </form>
+  );
+});
+
 export default function ChatPage() {
   const LAST_SYNC_STORAGE_KEY = "notion_last_synced_at";
   const LAST_CHAT_SESSION_KEY = "notion_active_chat_session";
@@ -100,7 +166,6 @@ export default function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isLoadingChats, setIsLoadingChats] = useState(false);
   const [chatsReady, setChatsReady] = useState(false);
-  const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [thinkingByMessage, setThinkingByMessage] = useState<ThinkingByMessage>({});
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
@@ -276,7 +341,9 @@ export default function ChatPage() {
       return merged;
     });
 
-    setThinkingByMessage({});
+    if (!chatInFlightRef.current) {
+      setThinkingByMessage({});
+    }
     return mapped.length > 0;
   };
 
@@ -646,13 +713,9 @@ const createNewChat = async () => {
     }
   };
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || isLoading || !activeSessionId) return;
-
-    const userMessage = input.trim();
-    setInput("");
-    await executeChatFlow(userMessage);
+  const handleSend = async (userMessageText: string) => {
+    if (!userMessageText.trim() || isLoading || !activeSessionId) return;
+    await executeChatFlow(userMessageText.trim());
   };
 
   const handleStopClick = () => {
@@ -671,20 +734,25 @@ const createNewChat = async () => {
     if (isLoading || !activeSessionId || !newContent.trim()) return;
     setEditingMessageId(null);
 
-    const targetIdx = messages.findIndex((m) => m.id === messageId);
+    const targetIdx = messages.findIndex(
+      (m, i) => m.id === messageId || `user-${i}` === messageId
+    );
     if (targetIdx === -1) return;
 
-    try {
-      const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${messageId}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error("Failed to delete message history");
-
-      const historyUpToEdited = messages.slice(0, targetIdx);
-      await executeChatFlow(newContent, historyUpToEdited);
-    } catch (error) {
-      console.error("Failed to edit message:", error);
+    const targetMsg = messages[targetIdx];
+    if (targetMsg?.id) {
+      try {
+        const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${targetMsg.id}`, {
+          method: "DELETE",
+        });
+        if (!response.ok) throw new Error("Failed to delete message history");
+      } catch (error) {
+        console.error("Failed to edit message:", error);
+      }
     }
+
+    const historyUpToEdited = messages.slice(0, targetIdx);
+    await executeChatFlow(newContent, historyUpToEdited);
   };
 
   const handleRegenerate = async () => {
@@ -697,10 +765,12 @@ const createNewChat = async () => {
     if (secondLastMsg.role !== "user") return;
 
     try {
-      const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${lastMsg.id}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error("Failed to delete message for regeneration");
+      if (lastMsg.id) {
+        const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${lastMsg.id}`, {
+          method: "DELETE",
+        });
+        if (!response.ok) throw new Error("Failed to delete message for regeneration");
+      }
 
       await executeChatFlow(secondLastMsg.content, undefined, true);
     } catch (error) {
@@ -708,12 +778,32 @@ const createNewChat = async () => {
     }
   };
 
-  const handleFeedback = async (messageId: string, feedback: "good" | "bad" | null) => {
-    try {
-      setMessages((prev) =>
-        prev.map((msg) => (msg.id === messageId ? { ...msg, feedback } : msg))
-      );
+  const handleFeedback = async (targetMsg: Message, feedback: "good" | "bad" | null, idx: number) => {
+    let messageId = targetMsg.id;
 
+    setMessages((prev) =>
+      prev.map((msg, i) => (i === idx || (messageId && msg.id === messageId) ? { ...msg, feedback } : msg))
+    );
+
+    if (!activeSessionId) return;
+
+    if (!messageId) {
+      await syncMessagesFromSession(activeSessionId);
+      setMessages((latestMessages) => {
+        const found = latestMessages[idx];
+        if (found?.id) {
+          fetch(`/api/chats/${activeSessionId}/messages`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messageId: found.id, feedback }),
+          }).catch((err) => console.error("Error setting feedback:", err));
+        }
+        return latestMessages;
+      });
+      return;
+    }
+
+    try {
       const response = await fetch(`/api/chats/${activeSessionId}/messages`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -728,9 +818,9 @@ const createNewChat = async () => {
     }
   };
 
-  const handleCopy = (messageId: string, text: string) => {
+  const handleCopy = (identifier: string, text: string) => {
     navigator.clipboard.writeText(text);
-    setCopiedMessageId(messageId);
+    setCopiedMessageId(identifier);
     setTimeout(() => {
       setCopiedMessageId(null);
     }, 2000);
@@ -1226,7 +1316,7 @@ const createNewChat = async () => {
                   <div
                     className={`flex w-full ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                   >
-                    {msg.role === "user" && editingMessageId === msg.id ? (
+                    {msg.role === "user" && (editingMessageId === msg.id || editingMessageId === `user-${idx}`) ? (
                       <div className="flex-1 max-w-[90%] sm:max-w-[80%] p-3.5 sm:p-4 rounded-2xl bg-white/10 border border-white/10 rounded-tr-none space-y-3">
                         <textarea
                           value={editingText}
@@ -1244,7 +1334,7 @@ const createNewChat = async () => {
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleEditMessage(msg.id!, editingText)}
+                            onClick={() => handleEditMessage(msg.id || `user-${idx}`, editingText)}
                             className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-semibold text-white transition-colors"
                           >
                             Save & Submit
@@ -1252,78 +1342,106 @@ const createNewChat = async () => {
                         </div>
                       </div>
                     ) : (
-                      <div className="relative max-w-[88%] sm:max-w-[80%] flex flex-col">
-                        <div className={`p-3.5 sm:p-4 rounded-2xl ${msg.role === "user"
+                      <div className={`relative max-w-[88%] sm:max-w-[80%] flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
+                        <div className={`w-full p-3.5 sm:p-4 rounded-2xl ${msg.role === "user"
                           ? "bg-white/10 border border-white/10 rounded-tr-none"
                           : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
                           }`}>
-                          {showThinking && thinkingEntry && (
-                            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-500/25 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-100/80">
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          {showThinking && thinkingEntry ? (
+                            <div className={`${msg.content.trim() ? "mb-4" : ""} inline-flex items-center gap-2 rounded-full border border-blue-500/25 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-100/80`}>
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />
                               <span>{thinkingLabel}</span>
                             </div>
-                          )}
-                          {(msg.content.trim() || showThinking) && (
-                            <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed prose-headings:mt-4 prose-headings:mb-2 prose-h2:text-base prose-h3:text-sm prose-h4:text-sm prose-ul:my-2 prose-li:my-0.5 prose-table:text-sm prose-th:border prose-th:border-white/15 prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-white/15 prose-td:px-2 prose-td:py-1 prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
-                              {msg.content.trim() ? (
-                                <ReactMarkdown
-                                  remarkPlugins={[remarkGfm]}
-                                  components={{
-                                    a: ({ href, children }) => (
-                                      <a href={href} target="_blank" rel="noopener noreferrer">
-                                        {children}
-                                      </a>
-                                    ),
-                                  }}
-                                >
-                                  {msg.role === "bot" && msg.emotion && msg.emotion !== "neutral" && emotionConfig[msg.emotion]?.emoji
-                                    ? injectEmojiIntoMarkdown(msg.content, emotionConfig[msg.emotion].emoji)
-                                    : msg.content}
-                                </ReactMarkdown>
-                              ) : null}
+                          ) : !msg.content.trim() && isPendingBot ? (
+                            <div className="inline-flex items-center gap-2 px-1 py-0.5 text-xs text-blue-300/80">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />
+                              <span>Generating answer...</span>
                             </div>
-                          )}
+                          ) : null}
+                          {msg.content.trim() ? (
+                            <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed prose-headings:mt-4 prose-headings:mb-2 prose-h2:text-base prose-h3:text-sm prose-h4:text-sm prose-ul:my-2 prose-li:my-0.5 prose-table:text-sm prose-th:border prose-th:border-white/15 prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-white/15 prose-td:px-2 prose-td:py-1 prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
+                              <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                components={{
+                                  a: ({ href, children }) => (
+                                    <a href={href} target="_blank" rel="noopener noreferrer">
+                                      {children}
+                                    </a>
+                                  ),
+                                }}
+                              >
+                                {msg.role === "bot" && msg.emotion && msg.emotion !== "neutral" && emotionConfig[msg.emotion]?.emoji
+                                  ? injectEmojiIntoMarkdown(msg.content, emotionConfig[msg.emotion].emoji)
+                                  : msg.content}
+                              </ReactMarkdown>
+                            </div>
+                          ) : null}
                         </div>
 
-                         {msg.role === "user" && msg.id && !isLoading && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingMessageId(msg.id!);
-                              setEditingText(msg.content);
-                            }}
-                            className="absolute -left-7 sm:-left-10 top-2 p-1 sm:p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors"
-                            title="Edit message"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
+                        {/* Action buttons for user query */}
+                        {msg.role === "user" && (
+                          <div className="flex items-center gap-1.5 mt-1 px-1 justify-end">
+                            {/* Copy user query */}
+                            <button
+                              type="button"
+                              onClick={() => handleCopy(msg.id || `user-${idx}`, msg.content)}
+                              className="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors relative group"
+                            >
+                              {copiedMessageId === (msg.id || `user-${idx}`) ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 rounded bg-[#1a1a1a] border border-white/10 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg">
+                                {copiedMessageId === (msg.id || `user-${idx}`) ? "Copied!" : "Copy query"}
+                              </span>
+                            </button>
+
+                            {/* Edit user query */}
+                            {!isLoading && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingMessageId(msg.id || `user-${idx}`);
+                                  setEditingText(msg.content);
+                                }}
+                                className="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors relative group"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                                <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 rounded bg-[#1a1a1a] border border-white/10 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg">
+                                  Edit query
+                                </span>
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
                   </div>
 
-                  {msg.role === "bot" && msg.id && !isLoading && (
+                  {/* Action buttons for bot response */}
+                  {msg.role === "bot" && msg.content.trim() && !(isLoading && idx === messages.length - 1) && (
                     <div className="flex items-center gap-1.5 mt-1 px-1">
                       {/* Copy response */}
                       <button
                         type="button"
-                        onClick={() => handleCopy(msg.id!, msg.content)}
+                        onClick={() => handleCopy(msg.id || `bot-${idx}`, msg.content)}
                         className="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors relative group"
                       >
-                        {copiedMessageId === msg.id ? (
+                        {copiedMessageId === (msg.id || `bot-${idx}`) ? (
                           <Check className="w-3.5 h-3.5 text-emerald-400" />
                         ) : (
                           <Copy className="w-3.5 h-3.5" />
                         )}
                         <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 rounded bg-[#1a1a1a] border border-white/10 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg">
-                          {copiedMessageId === msg.id ? "Copied!" : "Copy response"}
+                          {copiedMessageId === (msg.id || `bot-${idx}`) ? "Copied!" : "Copy response"}
                         </span>
                       </button>
 
-                      {/* Thumbs up */}
+                      {/* Thumbs up (Good response) */}
                       <button
                         type="button"
-                        onClick={() => handleFeedback(msg.id!, msg.feedback === "good" ? null : "good")}
+                        onClick={() => handleFeedback(msg, msg.feedback === "good" ? null : "good", idx)}
                         className={`p-1.5 rounded-lg transition-colors relative group ${
                           msg.feedback === "good"
                             ? "text-emerald-400 bg-emerald-500/10"
@@ -1336,10 +1454,10 @@ const createNewChat = async () => {
                         </span>
                       </button>
 
-                      {/* Thumbs down */}
+                      {/* Thumbs down (Bad response) */}
                       <button
                         type="button"
-                        onClick={() => handleFeedback(msg.id!, msg.feedback === "bad" ? null : "bad")}
+                        onClick={() => handleFeedback(msg, msg.feedback === "bad" ? null : "bad", idx)}
                         className={`p-1.5 rounded-lg transition-colors relative group ${
                           msg.feedback === "bad"
                             ? "text-rose-400 bg-rose-500/10"
@@ -1353,7 +1471,7 @@ const createNewChat = async () => {
                       </button>
 
                       {/* Regenerate (last message only) */}
-                      {idx === messages.length - 1 && (
+                      {idx === messages.length - 1 && !isLoading && (
                         <button
                           type="button"
                           onClick={handleRegenerate}
@@ -1387,46 +1505,14 @@ const createNewChat = async () => {
 
         {/* Input Area */}
         <div className="p-3 sm:p-4 md:p-6 lg:p-8">
-          <form
+          <ChatInputForm
             onSubmit={handleSend}
-            className="max-w-4xl mx-auto relative group"
-          >
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              disabled={!activeSessionId || isLoadingChats}
-              placeholder={activeSessionId ? "Ask anything..." : "Creating chat..."}
-              className="w-full p-3.5 sm:p-4 pr-12 sm:pr-14 rounded-2xl bg-white/5 border border-white/10 focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.07] transition-all placeholder:text-white/20 text-white text-sm sm:text-base"
-            />
-            {isLoading ? (
-              <button
-                type="button"
-                onClick={handleStopClick}
-                className={`absolute right-2 top-2 sm:right-2.5 sm:top-2.5 p-2 rounded-xl text-white transition-all duration-200 flex items-center justify-center min-h-[36px] ${
-                  stopConfirmState === "confirm"
-                    ? "bg-red-700 hover:bg-red-800 px-3 animate-pulse"
-                    : "bg-red-500 hover:bg-red-600"
-                }`}
-                title={stopConfirmState === "confirm" ? "Click again to confirm" : "Stop generating"}
-              >
-                {stopConfirmState === "confirm" ? (
-                  <span className="text-[10px] font-bold tracking-wider uppercase">Click again</span>
-                ) : (
-                  <Square className="w-5 h-5 fill-current" />
-                )}
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!input.trim() || !activeSessionId}
-                className="absolute right-2 top-2 sm:right-2.5 sm:top-2.5 p-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 transition-all font-semibold"
-                title="Send message"
-              >
-                <Send className="w-5 h-5" />
-              </button>
-            )}
-          </form>
+            isLoading={isLoading}
+            activeSessionId={activeSessionId}
+            isLoadingChats={isLoadingChats}
+            stopConfirmState={stopConfirmState}
+            onStopClick={handleStopClick}
+          />
           <p className="text-center text-[10px] text-white/20 mt-4 uppercase tracking-[0.2em]">
             Powered by Notion & OpenAI
           </p>

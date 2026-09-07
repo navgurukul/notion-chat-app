@@ -149,6 +149,11 @@ export async function resolvePersonName(
   if (partialMatches.length > 1)
     return { exact: null, candidates: partialMatches.map((p) => p.name) };
 
+  if (looksLikePersonName(input)) {
+    const fallbackName = normalizeNameValue(input) || input.trim();
+    return { exact: fallbackName, candidates: [] };
+  }
+
   return { exact: null, candidates: [] };
 }
 

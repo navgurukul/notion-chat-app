@@ -1,20 +1,15 @@
 import type { Session } from "next-auth";
 import type { ParsedQuery } from "@/lib/query/types";
 import { PipelineContext, logChatRoute, logRetrievalDiagnostics } from "./telemetry";
-import { isMetadataOnlyKind, metadataNotFoundAnswer } from "@/lib/chat/routing-policy";
-import { reformulateSearchQuery, shouldReformulate, expandSearchQueries, reformulateAndExpand } from "@/lib/chat/query-tools";
+import { isMetadataOnlyKind, metadataNotFoundAnswer, shouldExpandRagQuery } from "@/lib/chat/routing-policy";
+import { reformulateAndExpand } from "@/lib/chat/query-tools";
 import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
 import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { jsonAnswer } from "./smalltalk";
-
-const BROAD_RAG_KINDS = new Set<ParsedQuery["kind"]>([
-  "semantic",
-  "page_about",
-  "project_summary",
-  "risks_for",
-  "topic_list",
-]);
+import { buildClarificationAnswer } from "@/lib/chat/clarification";
+import { lazyResolveRagEntities } from "@/lib/query/entity-resolver";
+import { gradeRetrieval } from "@/lib/rag/evaluator";
 
 function stripTitleEmoji(title: string) {
   return title
@@ -46,9 +41,6 @@ function isExplicitPageQuestion(message: string, docTitle?: string) {
     .includes(needle.slice(0, Math.min(needle.length, 24)));
 }
 
-import { lazyResolveRagEntities } from "@/lib/query/entity-resolver";
-import type { ChatHistoryItem } from "@/lib/ai/openai";
-
 export async function tryRagAnswer(
   parsed: ParsedQuery,
   ctx: PipelineContext,
@@ -67,19 +59,19 @@ export async function tryRagAnswer(
     return new Response(null, { status: 499 });
   }
 
-  // Everything below can throw (LLM calls, DB calls, network hiccups). Wrapping it
-  // means a failure degrades to a friendly message instead of an unhandled 500.
   try {
-    // Lazily resolve RAG entities
+    // Lazily resolve RAG entities if not pre-resolved
     if (ctx.telemetry) {
       ctx.telemetry.startStep("entity_resolve_ms");
     }
-    const finalParsed = await lazyResolveRagEntities(
-      parsed,
-      ctx.history,
-      ctx.sessionName,
-      { lastPerson: ctx.lastPerson, lastProject: ctx.lastProject, lastMale: ctx.lastMale, lastFemale: ctx.lastFemale }
-    );
+    const finalParsed = parsed.resolvedEntities
+      ? parsed
+      : await lazyResolveRagEntities(
+          parsed,
+          ctx.history,
+          ctx.sessionName,
+          { lastPerson: ctx.lastPerson, lastProject: ctx.lastProject, lastMale: ctx.lastMale, lastFemale: ctx.lastFemale }
+        );
     if (ctx.telemetry) {
       ctx.telemetry.endStep("entity_resolve_ms");
       if (finalParsed.resolvedEntities?.person) {
@@ -97,9 +89,11 @@ export async function tryRagAnswer(
       return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(finalParsed), userEmotion, signal);
     }
 
-    if (finalParsed.resolvedEntities?.person?.ambiguous && finalParsed.resolvedEntities.person.candidates.length > 0) {
-      const candidatesList = finalParsed.resolvedEntities.person.candidates.map((c: string) => `**${c}**`).join(" or ");
-      const clarAnswer = `I found multiple possible matches for that person. Did you mean ${candidatesList}?`;
+    const clarAnswer = buildClarificationAnswer(
+      finalParsed.resolvedEntities?.person,
+      finalParsed.personName || ctx.message
+    );
+    if (clarAnswer) {
       return jsonAnswer(ctx.sessionId, clarAnswer, userEmotion, signal);
     }
 
@@ -109,8 +103,7 @@ export async function tryRagAnswer(
     const titleBoost = isExplicitTitleMatch ? rawTitleBoost : undefined;
 
     const hasExplicitTarget = Boolean(finalParsed.docTitle || finalParsed.personName);
-    const shouldExpand =
-      (BROAD_RAG_KINDS.has(finalParsed.kind) || !!ctx.isWrongAnswerRetry) && !hasExplicitTarget;
+    const shouldExpand = (shouldExpandRagQuery(finalParsed.kind) || !!ctx.isWrongAnswerRetry) && !hasExplicitTarget;
 
     let searchQuery: string;
     let searchQueries: string[];
@@ -120,6 +113,11 @@ export async function tryRagAnswer(
     if (explicitPage && titleBoost) {
       searchQuery = titleBoost;
       searchQueries = [titleBoost];
+    } else if (ctx.reformulatedQuery && !shouldExpand) {
+      // Reuse pre-reformulated query from intent classifier pass
+      searchQuery = ctx.reformulatedQuery;
+      searchQueries = [ctx.reformulatedQuery];
+      method = "pre_reformulated";
     } else {
       if (ctx.telemetry) {
         ctx.telemetry.startStep("reformulation_ms");
@@ -195,6 +193,27 @@ export async function tryRagAnswer(
       console.log(`[retrieval-trace] Message: "${ctx.message}" | SearchQuery: "${searchQuery}" | TitleBoost: "${titleBoost ?? 'none'}" | ConfidenceOK: ${confidence.ok} | TopHit: "${chunkHits[0]?.title ?? 'none'}" (score: ${chunkHits[0]?.final_score ?? 0})`);
     }
 
+    // Gate 1: Corrective RAG (CRAG) Relevance Grader
+    if (notionContext.trim() && !confidence.ok) {
+      const isRelevant = await gradeRetrieval(ctx.message, notionContext);
+      if (!isRelevant) {
+        if (process.env.NODE_ENV !== "production" || process.env.DEBUG_RETRIEVAL === "true") {
+          console.log("[CRAG] Gate 1 Grade: IRRELEVANT. Triggering corrective query rewrite...");
+        }
+        const rewritten = await reformulateAndExpand(ctx.message, ctx.history, finalParsed.kind, false);
+        const retryResult = await buildNotionContextWithConfidence(rewritten.queries, {
+          titleBoost: titleBoost || undefined,
+          loosenThreshold: true,
+        });
+
+        if (retryResult.context.trim()) {
+          notionContext = retryResult.context;
+          confidence = retryResult.confidence;
+          chunkHits = retryResult.chunkHits;
+        }
+      }
+    }
+
     if (!confidence.ok) {
       if (process.env.NODE_ENV !== "production" || process.env.DEBUG_RETRIEVAL === "true") {
         console.log("[retrieval] confidence low, attempting retry...", { confidence });
@@ -207,7 +226,6 @@ export async function tryRagAnswer(
         return cleaned;
       }).filter(Boolean);
 
-      // Only append titleBoost to retry if explicit or vague follow-up
       if (isExplicitTitleMatch && titleBoost && !broaderQueries.includes(titleBoost)) {
         broaderQueries.push(titleBoost);
       }
@@ -221,17 +239,16 @@ export async function tryRagAnswer(
           loosenThreshold: !!ctx.isWrongAnswerRetry,
         });
 
-        // Keep the retry result if:
-        //  - it clears the confidence bar outright, OR
-        //  - the original attempt had nothing at all, OR
-        //  - the retry scored strictly better than the original, even if still
-        //    below the "ok" threshold (previously this case was discarded entirely,
-        //    silently losing a better-but-imperfect match).
+        const targetEntity = (titleBoost || finalParsed.personName)?.toLowerCase();
+        const topHitTitle = retryResult.chunkHits[0]?.title?.toLowerCase();
+        const hasEntityAlignment = !targetEntity || !topHitTitle || topHitTitle.includes(targetEntity);
+
         const retryIsBetter =
-          retryResult.confidence.ok ||
+          (retryResult.confidence.ok && hasEntityAlignment) ||
           (retryResult.context.trim() && !notionContext.trim()) ||
           (retryResult.context.trim() &&
-            retryResult.confidence.topScore > confidence.topScore);
+            retryResult.confidence.topScore > confidence.topScore &&
+            hasEntityAlignment);
 
         if (retryIsBetter) {
           if (process.env.NODE_ENV !== "production" || process.env.DEBUG_RETRIEVAL === "true") {

@@ -30,9 +30,10 @@ function stripInternalReasoningPrefix(text: string) {
     const starLine = text.indexOf("\n*");
 
     const cutPoints = [doubleNewline, hashLine, dashLine, starLine].filter((n) => n > 0);
-    const cutAt = cutPoints.length > 0 ? Math.min(...cutPoints) : text.length;
-
-    return text.slice(cutAt).trim();
+    if (cutPoints.length > 0) {
+      const cutAt = Math.min(...cutPoints);
+      return text.slice(cutAt).trim();
+    }
   }
 
   return text.trim();

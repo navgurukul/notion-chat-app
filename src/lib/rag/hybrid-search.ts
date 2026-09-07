@@ -56,7 +56,7 @@ function applyRelevanceFloor(rows: ChunkHybridRow[]) {
   if (rows.length <= 1) return rows;
   const topScore = rows[0].final_score;
   if (topScore <= 0) return rows;
-  const ratio = readFloatEnv("HYBRID_RELATIVE_FLOOR_RATIO", 0.35);
+  const ratio = readFloatEnv("HYBRID_RELATIVE_FLOOR_RATIO", 0.45);
   const floor = topScore * ratio;
   const kept = rows.filter((row) => row.final_score >= floor);
   return kept.length ? kept : rows.slice(0, 1);
@@ -201,6 +201,10 @@ export async function fetchHybridChunkRows(
   const embedding = await embedText(raw);
   const vectorLiteral = embedding ? `[${embedding.join(",")}]` : null;
 
+  const embeddingSelect = isMmrEnabled()
+    ? "c.embedding::text AS embedding_literal"
+    : "NULL AS embedding_literal";
+
   if (vectorLiteral) {
     return bounds
       ? query<ChunkHybridRow>(
@@ -257,7 +261,7 @@ export async function fetchHybridChunkRows(
   ELSE 0
 END
             )::float8 AS final_score,
-            c.embedding::text AS embedding_literal
+            ${embeddingSelect}
           FROM ids
           JOIN notion_chunks c ON c.id = ids.id
           JOIN notion_pages p ON p.id = c.page_id
@@ -318,7 +322,7 @@ END
   ELSE 0
 END
             )::float8 AS final_score,
-            c.embedding::text AS embedding_literal
+            ${embeddingSelect}
           FROM ids
           JOIN notion_chunks c ON c.id = ids.id
           JOIN notion_pages p ON p.id = c.page_id

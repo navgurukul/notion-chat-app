@@ -92,8 +92,6 @@ async function attachSession(
 }
 
 async function tryNotionLinkAnswer(ctx: PipelineContext, emotion?: string, signal?: AbortSignal) {
-  // kept identical to previous behavior
-  // eslint-disable-next-line @typescript-eslint/no-shadow
   if (!isNotionLinkRequest(ctx.message)) return null;
 
   const linkTitle = extractReferencedTitle(ctx.message, ctx.history);
@@ -140,19 +138,14 @@ function buildSmalltalkWarmPoolFallback(type: ReturnType<typeof detectSmalltalkT
 async function tryWarmReplyOrFallback(opts: {
   message: string;
   history: ChatHistoryItem[];
-sessionId: string | null;
-userName?: string;
-    smalltalkType: ReturnType<typeof detectSmalltalkType>;
-    userEmotion?: string;
-signal?: AbortSignal;
+  sessionId: string | null;
+  userName?: string;
+  smalltalkType: ReturnType<typeof detectSmalltalkType>;
+  userEmotion?: string;
+  signal?: AbortSignal;
 }): Promise<Response> {
-
-
   const fallbackAnswer = buildSmalltalkWarmPoolFallback(opts.smalltalkType, opts.userName ?? undefined, opts.message);
 
-
-
-  // warm reply via LLM (Gemini) using a short prompt; if anything fails => fallback
   const warmPrompt = `User message: ${opts.message}
 
 Smalltalk type: ${opts.smalltalkType}
@@ -162,7 +155,7 @@ Write a single short, friendly warm reply (1-2 sentences). Do NOT repeat the exa
 If relevant, ask a lightweight next question about what they'd like to check in NavGurukul Notion.`;
 
   try {
-      return await streamOpenAIAnswer(
+    return await streamOpenAIAnswer(
       warmPrompt,
       "",
       opts.history,
@@ -219,7 +212,6 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
               await addChatMessage(sessionId, "user", rawMessage, "neutral");
             }
 
-            // repeat detection based on history user messages only
             const stType = detectSmalltalkType(rawMessage);
             const repeats = countSmalltalkRepeats(history, stType);
             if (repeats >= 3) {
@@ -229,11 +221,9 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
                 sessionId,
                 userName: session.user?.name ?? undefined,
                 smalltalkType: stType,
-
                 userEmotion: "neutral",
                 signal,
               });
-              // ensure bot message persistence if warm reply used fallback jsonAnswer path
               return response;
             }
 
@@ -264,14 +254,13 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       return NextResponse.json({ answer, emotion: "neutral", sessionId: attachedSessionId });
     }
 
-    // 2. Preprocessing
+    // 2. Preprocessing & Parallel Emotion Detection
     const lastEntities = await extractLastEntityFromHistory(history);
-    let userEmotion = "neutral";
+    const emotionPromise = analyzeUserEmotion(rawMessage).catch(() => ({ emotion: "neutral" as const, isFunny: false, explanation: "Fallback" }));
 
     // Fast LLM-friendly utility: current date/time (general question)
     const utilityDateTimeRegex = /\b(today\s*['’]?\s*s\s+date|today\s+date|today\s+is\s+date|what\s+date\s+is\s+it\s+today|what\s+is\s+today\s*['’]?\s*s\s+date|what\s+day\s+is\s+it\s+today|day\s+today|current\s+time|what\s+time\s+is\s+it|time\s+now|current\s+date)\b/i;
 
-    // Utility response bypasses Notion retrieval.
     if (utilityDateTimeRegex.test(rawMessage)) {
       const now = new Date();
       const isoDate = now.toISOString().slice(0, 10);
@@ -282,6 +271,8 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
           ? `Current time is **${time}** (local to the server).`
           : `Today is **${weekday}**, **${isoDate}** (local to the server).`;
 
+      const emotionResult = await emotionPromise;
+      const userEmotion = emotionResult.emotion;
       const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion, body.isRegenerate);
       if (attachedSessionId) {
         await addChatMessage(attachedSessionId, "bot", answer, userEmotion).catch(err => console.error("[DB Write Error] Failed to save utility bot message:", err));
@@ -290,8 +281,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       return NextResponse.json({ answer, emotion: userEmotion, sessionId: attachedSessionId });
     }
 
-    const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion, body.isRegenerate);
-
+    const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, "neutral", body.isRegenerate);
 
     // merge DB state
     let dbStateProject: string | undefined;
@@ -327,7 +317,8 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
 
     if (correction) {
       if (correction.clarifyingQuestion) {
-        return jsonAnswer(attachedSessionId, correction.clarifyingQuestion, userEmotion, signal);
+        const emotionResult = await emotionPromise;
+        return jsonAnswer(attachedSessionId, correction.clarifyingQuestion, emotionResult.emotion, signal);
       }
       if (correction.rewrittenMessage) {
         finalQuery = correction.rewrittenMessage;
@@ -336,6 +327,15 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       }
       if (correction.isWrongAnswerRetry) isWrongAnswerRetry = true;
     }
+
+    // 3. Intent classification & emotion resolution in parallel
+    telemetry.startStep("intent_classifier_ms");
+    const parsedPromise = resolveQuery(finalQuery, history, sessionDisplayName || undefined, mergedEntities);
+    const [parsed, emotionResult] = await Promise.all([parsedPromise, emotionPromise]);
+    const userEmotion = emotionResult.emotion;
+    telemetry.endStep("intent_classifier_ms");
+    telemetry.setIntent(parsed.kind, parsed.confidence, parsed.source);
+    if (parsed.source !== "regex") telemetry.incrementLlmCalls();
 
     const saveState = async () => {
       if (!attachedSessionId) return;
@@ -416,13 +416,6 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       if (changed) await updateSessionState(attachedSessionId, currentState);
     };
 
-    // 3. Intent classification
-    telemetry.startStep("intent_classifier_ms");
-    const parsed = await resolveQuery(finalQuery, history, sessionDisplayName || undefined, mergedEntities);
-    telemetry.endStep("intent_classifier_ms");
-    telemetry.setIntent(parsed.kind, parsed.confidence, parsed.source);
-    if (parsed.source !== "regex") telemetry.incrementLlmCalls();
-
     const ctx: PipelineContext = {
       message: finalQuery,
       history,
@@ -453,9 +446,8 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       telemetry.setExecutionPath("Smalltalk/Fastpath");
       telemetry.incrementLlmCalls();
 
-      if (attachedSessionId) await saveState().catch(err => console.error("Error saving session state:", err));
+      if (attachedSessionId) await saveState().catch((err: any) => console.error("Error saving session state:", err));
 
-      // warm reply on 3rd+ repeats; fallback to variation pool answer
       if (repeats >= 3) {
         return await tryWarmReplyOrFallback({
           message: rawMessage,
@@ -463,7 +455,6 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
           sessionId: attachedSessionId,
           userName: session.user?.name ?? undefined,
           smalltalkType: stType,
-
           userEmotion,
           signal,
         });
@@ -507,7 +498,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
 
     if (sqlResponse) {
       telemetry.setExecutionPath("SQL Hit");
-      if (attachedSessionId) await saveState().catch(err => console.error("Error saving session state:", err));
+      if (attachedSessionId) await saveState().catch((err: any) => console.error("Error saving session state:", err));
       response = sqlResponse;
       return response;
     }
@@ -535,7 +526,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
     telemetry.endStep("rag_ms");
     telemetry.setExecutionPath("RAG Fallback");
 
-    if (attachedSessionId) await saveState().catch(err => console.error("Error saving session state:", err));
+    if (attachedSessionId) await saveState().catch((err: any) => console.error("Error saving session state:", err));
     response = ragResponse;
     return response;
   } finally {

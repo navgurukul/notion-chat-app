@@ -11,6 +11,8 @@ import {
 import { logChatRoute } from "./telemetry";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { jsonAnswer } from "./smalltalk";
+import { buildClarificationAnswer } from "@/lib/chat/clarification";
+import { lazyResolveSqlEntities } from "@/lib/query/entity-resolver";
 
 export function isSynthesisRequest(message: string): boolean {
   if (/\b(role|job|responsibilit|position|designation|title|summariz|summary|overview|analy[sz]|explain|opinion|think)\b/i.test(message)) {
@@ -21,8 +23,6 @@ export function isSynthesisRequest(message: string): boolean {
   }
   return false;
 }
-
-import { lazyResolveSqlEntities } from "@/lib/query/entity-resolver";
 
 export async function trySqlAnswer(
   parsed: ParsedQuery,
@@ -37,17 +37,18 @@ export async function trySqlAnswer(
 ) {
   if (parsed.kind === "semantic" || parsed.kind === "smalltalk") return null;
 
-  // Lazily resolve SQL entities
-  const tEntStart = performance.now();
+  // Lazily resolve SQL entities if not pre-resolved
   if (ctx.telemetry) {
     ctx.telemetry.startStep("entity_resolve_ms");
   }
-  const finalParsed = await lazyResolveSqlEntities(
-    parsed,
-    ctx.history,
-    ctx.sessionName,
-    { lastPerson: ctx.lastPerson, lastProject: ctx.lastProject, lastMale: ctx.lastMale, lastFemale: ctx.lastFemale }
-  );
+  const finalParsed = parsed.resolvedEntities
+    ? parsed
+    : await lazyResolveSqlEntities(
+        parsed,
+        ctx.history,
+        ctx.sessionName,
+        { lastPerson: ctx.lastPerson, lastProject: ctx.lastProject, lastMale: ctx.lastMale, lastFemale: ctx.lastFemale }
+      );
   if (ctx.telemetry) {
     ctx.telemetry.endStep("entity_resolve_ms");
     if (finalParsed.resolvedEntities?.person) {
@@ -61,16 +62,9 @@ export async function trySqlAnswer(
   }
 
   const resolvedPerson = finalParsed.resolvedEntities?.person;
-  if (resolvedPerson) {
-    if (resolvedPerson.ambiguous && resolvedPerson.candidates.length > 0) {
-      const candidatesList = resolvedPerson.candidates.map((c: string) => `**${c}**`).join(" or ");
-      const clarAnswer = `I found multiple possible matches for that person. Did you mean ${candidatesList}?`;
-      return jsonAnswer(ctx.sessionId, clarAnswer, emotion, signal);
-    }
-    if (resolvedPerson.confidence < 0.7 && resolvedPerson.value) {
-      const clarAnswer = `I found a partial match for "${parsed.personName || ctx.message}". Did you mean **${resolvedPerson.value}**?`;
-      return jsonAnswer(ctx.sessionId, clarAnswer, emotion, signal);
-    }
+  const clarAnswer = buildClarificationAnswer(resolvedPerson, parsed.personName || ctx.message);
+  if (clarAnswer) {
+    return jsonAnswer(ctx.sessionId, clarAnswer, emotion, signal);
   }
 
   const metadataOnly = isMetadataOnlyKind(finalParsed.kind);
