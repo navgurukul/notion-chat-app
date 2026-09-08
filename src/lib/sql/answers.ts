@@ -2066,7 +2066,11 @@ async function handleMetadataQueryInner(
     const members = await aggregatePeopleOnProject(pages);
 
     const isOwnerQuery = /\b(owner|manager|pm|lead)\b/i.test(parsed.raw);
-    const targetMember = members.find(m => normalizePersonNameForMatch(m.name) === person);
+    const targetKey = personDedupeKey(person);
+    const targetMember = members.find(m => {
+      const memberKey = personDedupeKey(m.name);
+      return memberKey === targetKey || memberKey.split(" ")[0] === targetKey.split(" ")[0];
+    });
 
     if (targetMember) {
       if (isOwnerQuery) {

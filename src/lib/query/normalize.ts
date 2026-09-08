@@ -20,7 +20,7 @@ export type PersonRecord = {
 };
 
 const NOISE_WORDS = new Set([
-  "unknown", "n/a", "none", "navgurukul", "navgurkul", "notion", "unassigned", "tbd",
+  "all", "everyone", "nobody", "each", "unknown", "n/a", "none", "navgurukul", "navgurkul", "notion", "unassigned", "tbd",
   "me", "team", "project", "backend", "frontend", "fullstack", "datapivots",
   "design", "scope", "item", "user", "admin", "administrator", "coordinator",
   "qa", "pm", "hr", "pnc", "finance", "accounts", "intern", "trainee", "fellow",
