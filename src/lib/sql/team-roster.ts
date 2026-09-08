@@ -25,10 +25,10 @@ export type ProjectMember = {
 };
 
 const PERSON_FIELD_NOISE =
-  /^(unknown|n\/a|none|navgurukul|notion|unassigned|tbd|me|team|project|-+)$/i;
+  /^(unknown|n\/a|none|navgurukul|notion|unassigned|tbd|me|team|project|all|everyone|nobody|each|-+)$/i;
 
 const MENTION_NOISE =
-  /^(untitled|backend|datapivots|navgurkul|design|scope|item|user|admin|qa|dev|pm|billing|rate|total|due|gmail|please|cost|price|rs|invoice|sow|proposal|value|fee|fees|charges|usd|inr|pay|payment)$/i;
+  /^(untitled|backend|datapivots|navgurkul|design|scope|item|user|admin|qa|dev|pm|billing|rate|total|due|gmail|please|cost|price|rs|invoice|sow|proposal|value|fee|fees|charges|usd|inr|pay|payment|all|team|each|everyone)$/i;
 
 function personDedupeKey(name: string) {
   return normalizePersonNameForMatch(name).toLowerCase();
@@ -42,11 +42,12 @@ function cleanPersonVariant(name: string) {
   let cleaned = name.replace(/\s+[a-z]$/i, "").trim();
   cleaned = cleaned.replace(/\s+(NAFPO|NG|AI|Dev|Team|Org)\b/gi, "").trim();
   cleaned = cleaned.replace(/\s+(OOO|AFK|PTO|WFH)\b.*$/i, "").trim();
+  cleaned = cleaned.replace(/\s+(Each|you|When|Uploading|Effort|quality|set)\b.*$/i, "").trim();
   cleaned = cleaned.replace(/(Discussion|Notes|MoM|Meeting|Points|Action|Status|Task|Item|Agenda|Review|Demo|Scope).*$/i, "").trim();
   return cleaned;
 }
 
-function parseNotionMention(raw: string): string | null {
+function parseNotionMention(raw: string, directory?: Array<{ name: string; normalized: string }>): string | null {
   const cleaned = raw.replace(/[,.;:]+$/g, "").trim();
   const parts = cleaned.split(/\s+/);
   const stop = new Set([
@@ -63,6 +64,14 @@ function parseNotionMention(raw: string): string | null {
     "add",
     "check",
     "needs",
+    "ooo",
+    "afk",
+    "pto",
+    "wfh",
+    "when",
+    "set",
+    "each",
+    "you",
   ]);
   const nameParts: string[] = [];
 
@@ -75,8 +84,16 @@ function parseNotionMention(raw: string): string | null {
     if (nameParts.length >= 3) break;
   }
 
-  const name = cleanPersonVariant(normalizePersonNameForMatch(nameParts.join(" ")));
-  return looksLikePersonName(name) ? name : null;
+  const rawCandidate = cleanPersonVariant(normalizePersonNameForMatch(nameParts.join(" ")));
+
+  if (directory && directory.length > 0) {
+    const canonical = findCanonicalName(rawCandidate, directory);
+    if (canonical && looksLikePersonName(canonical, directory)) {
+      return canonical;
+    }
+  }
+
+  return looksLikePersonName(rawCandidate) ? rawCandidate : null;
 }
 
 /** Looks like a human name (not a sentence fragment). */
@@ -123,6 +140,7 @@ export function splitPersonField(value: string | null | undefined): string[] {
 /** Pull assignee / captain / team lines from synced page body text. */
 export function extractPeopleFromContent(
   content: string | null | undefined,
+  directory?: Array<{ name: string; normalized: string }>,
 ): Array<{ name: string; role: string }> {
   if (!content?.trim()) return [];
 
@@ -154,7 +172,7 @@ export function extractPeopleFromContent(
   }
 
   for (const match of content.matchAll(/@([A-Za-z][\w'.-]*(?:\s+[A-Za-z][\w'.-]*){0,3})/g)) {
-    const name = parseNotionMention(match[1]);
+    const name = parseNotionMention(match[1], directory);
     if (name) {
       found.push({ name, role: "mentioned" });
     }
@@ -166,7 +184,7 @@ export function extractPeopleFromContent(
     for (const line of match[1].matchAll(/^\s*(?:[-*]|\d+\.)\s*([^\n]+)/gim)) {
       const chunk = line[1].trim();
       for (const name of splitPersonField(chunk)) {
-        if (looksLikePersonName(name)) {
+        if (looksLikePersonName(name, directory)) {
           found.push({ name, role: "team roster" });
         }
       }
@@ -177,8 +195,36 @@ export function extractPeopleFromContent(
     /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s*[-–—]\s*Rs\b/gim,
   )) {
     const name = normalizePersonNameForMatch(match[1].trim());
-    if (looksLikePersonName(name)) {
+    if (looksLikePersonName(name, directory)) {
       found.push({ name, role: "billing roster" });
+    }
+  }
+
+  // Plain-text scanning for directory members in context lines
+  if (directory && directory.length > 0) {
+    const seenKeys = new Set(found.map((f) => personDedupeKey(f.name)));
+    const lines = content.split("\n");
+    for (const line of lines) {
+      const lowerLine = line.toLowerCase();
+      if (lowerLine.includes("http://") || lowerLine.includes("https://")) continue;
+
+      const isActionLine = /\b(forwarded|discussed|discuss|bug|bugs|fix|fixed|testing|working|worked|assign|assigned|email|connect|review|ticket|release|console|landing)\b/i.test(line);
+      if (!isActionLine) continue;
+
+      for (const person of directory) {
+        if (person.normalized.length < 3) continue;
+        const key = personDedupeKey(person.name);
+        if (seenKeys.has(key)) continue;
+
+        const firstName = person.normalized.split(/\s+/)[0];
+        if (firstName.length < 3) continue;
+
+        const nameRegex = new RegExp(`\\b${firstName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+        if (nameRegex.test(line)) {
+          found.push({ name: person.name, role: "mentioned" });
+          seenKeys.add(key);
+        }
+      }
     }
   }
 
@@ -351,8 +397,10 @@ export function isBugOrIncidentTitle(title: string | null | undefined) {
   );
 }
 
+const CROSS_PROJECT_HUB_TITLES = /^(poc\s+documents|outline\s+of\s+final\s+presentation|🤖?\s*notion\s+chatbot|employee\s+onboarding|employee\s+onboarding\s+hub|onboarding\s+tracker|admission\s+chatbot|teacher\s+dashboard)$/i;
+
 /**
- * Keep pages that belong to a project topic (hub, MVP, PRD, scoped tasks) — drop noise tickets.
+ * Keep pages that belong to a project topic (hub, MVP, PRD, scoped tasks) — drop noise tickets and generic cross-project hubs.
  */
 export function filterPagesForProjectTopic<T extends { title?: string | null; content?: string | null }>(
   topic: string,
@@ -372,6 +420,14 @@ export function filterPagesForProjectTopic<T extends { title?: string | null; co
     const content = row.content ?? "";
     if (isBugOrIncidentTitle(title)) return false;
 
+    // Exclude generic cross-project dump pages unless the topic is specifically about them
+    if (CROSS_PROJECT_HUB_TITLES.test(title.trim())) {
+      const topicLower = topic.toLowerCase();
+      if (!topicLower.includes("onboarding") && !topicLower.includes("chatbot") && !topicLower.includes("poc")) {
+        return false;
+      }
+    }
+
     const titleScore = scoreTitleForTopic(topic, title);
     if (titleScore >= minScore) return true;
 
@@ -386,8 +442,11 @@ export function filterPagesForProjectTopic<T extends { title?: string | null; co
 
     if (content) {
       const contentLower = content.toLowerCase();
-      if (tokens.length > 0 && tokens.some((t) => contentLower.includes(t))) {
-        return true;
+      for (const token of tokens) {
+        const tokenRegex = new RegExp(`\\b${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+        if (tokenRegex.test(contentLower)) {
+          return true;
+        }
       }
     }
 
