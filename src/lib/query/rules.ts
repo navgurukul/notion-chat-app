@@ -13,6 +13,7 @@ import {
   isCrossDocSummaryQuestion,
   looksLikeSinglePageTitle,
   normalizePersonNameForMatch,
+  stripTemporalSuffixFromPerson,
   stripYearSuffixFromPerson,
   isNoiseTopic,
   stripDocWords,
@@ -83,7 +84,9 @@ function cleanPersonName(value: string | null) {
     return null;
   }
   const cleaned = stripYearSuffixFromPerson(
-    stripDocWords(val)
+    stripTemporalSuffixFromPerson(
+      stripDocWords(val)
+    )
       .replace(/\s+(?:is|are|was|were|has|have|had)\s*$/i, "")
       .replace(/^(?:did|does|do|is|are|was|were|has|have|had)\s+/i, ""),
   ).trim();
