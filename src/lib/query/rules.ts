@@ -74,7 +74,11 @@ function cleanComparePageTitle(value: string) {
 
 function cleanPersonName(value: string | null) {
   if (!value) return null;
-  const val = value.trim().replace(/\s+(on|in|for|at|during|since|before|after)$/i, "").trim();
+  const val = value
+    .trim()
+    .replace(/^(?:please\s+)?(?:what\s+about\s+)?(?:show|list|get|display|tell\s+me|find)(?:\s+down)?\s+/i, "")
+    .replace(/\s+(on|in|for|at|during|since|before|after)$/i, "")
+    .trim();
   if (/\b(project|projects|page|pages|doc|docs|document|documents)\b/i.test(val)) {
     return null;
   }

@@ -88,7 +88,7 @@ function parseNotionMention(raw: string, directory?: Array<{ name: string; norma
 
   if (directory && directory.length > 0) {
     const canonical = findCanonicalName(rawCandidate, directory);
-    if (canonical && looksLikePersonName(canonical, directory)) {
+    if (canonical && looksLikePersonName(canonical)) {
       return canonical;
     }
   }
@@ -184,7 +184,7 @@ export function extractPeopleFromContent(
     for (const line of match[1].matchAll(/^\s*(?:[-*]|\d+\.)\s*([^\n]+)/gim)) {
       const chunk = line[1].trim();
       for (const name of splitPersonField(chunk)) {
-        if (looksLikePersonName(name, directory)) {
+        if (looksLikePersonName(name)) {
           found.push({ name, role: "team roster" });
         }
       }
@@ -195,7 +195,7 @@ export function extractPeopleFromContent(
     /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s*[-–—]\s*Rs\b/gim,
   )) {
     const name = normalizePersonNameForMatch(match[1].trim());
-    if (looksLikePersonName(name, directory)) {
+    if (looksLikePersonName(name)) {
       found.push({ name, role: "billing roster" });
     }
   }

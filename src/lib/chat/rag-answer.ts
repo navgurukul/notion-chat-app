@@ -9,7 +9,6 @@ import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { jsonAnswer } from "./smalltalk";
 import { buildClarificationAnswer } from "@/lib/chat/clarification";
 import { lazyResolveRagEntities } from "@/lib/query/entity-resolver";
-import { gradeRetrieval } from "@/lib/rag/evaluator";
 
 function stripTitleEmoji(title: string) {
   return title
@@ -39,6 +38,83 @@ function isExplicitPageQuestion(message: string, docTitle?: string) {
   return message
     .toLowerCase()
     .includes(needle.slice(0, Math.min(needle.length, 24)));
+}
+
+type RagSearchPlan = {
+  searchQuery: string;
+  searchQueries: string[];
+  method: string;
+  multiQueryMethod: string;
+  titleBoost?: string;
+  explicitPage: boolean;
+  shouldExpand: boolean;
+  isVagueFollowUp: boolean;
+  lastProject?: string;
+  lastPerson?: string;
+  usePreReformulated: boolean;
+};
+
+function buildRagSearchPlan(parsed: ParsedQuery, ctx: PipelineContext): RagSearchPlan {
+  const rawTitleBoost = resolveRagTitleBoost(parsed, ctx.message);
+  const explicitPage = isExplicitPageQuestion(ctx.message, parsed.docTitle);
+  const isExplicitTitleMatch = explicitPage || (rawTitleBoost ? ctx.message.toLowerCase().includes(rawTitleBoost.toLowerCase()) : false);
+  const titleBoost = isExplicitTitleMatch ? rawTitleBoost : undefined;
+
+  const hasExplicitTarget = Boolean(parsed.docTitle || parsed.personName);
+  const shouldExpand = (shouldExpandRagQuery(parsed.kind) || !!ctx.isWrongAnswerRetry) && !hasExplicitTarget;
+
+  let searchQuery = ctx.message;
+  let searchQueries = [ctx.message];
+  let method = "original";
+  const multiQueryMethod = "primary_only";
+  let usePreReformulated = false;
+
+  if (explicitPage && titleBoost) {
+    searchQuery = titleBoost;
+    searchQueries = [titleBoost];
+  } else if (ctx.reformulatedQuery && !shouldExpand) {
+    searchQuery = ctx.reformulatedQuery;
+    searchQueries = [ctx.reformulatedQuery];
+    method = "pre_reformulated";
+    usePreReformulated = true;
+  }
+
+  const lastProject = ctx.lastProject;
+  const lastPerson = ctx.lastPerson;
+
+  const isVagueFollowUp =
+    !parsed.docTitle &&
+    !parsed.personName &&
+    /\b(this|that|it|more|explain|project|core|detail|in depth|elaborate|tell me more|what about|only for|for \d{4}|in \d{4}|more information|more about|about it)\b/i.test(
+      ctx.message,
+    ) &&
+    ctx.message.trim().split(/\s+/).length < 20;
+
+  if (isVagueFollowUp) {
+    if (lastProject && !titleBoost) {
+      searchQuery = `${lastProject} ${searchQuery}`.trim();
+      searchQueries = [searchQuery];
+      method = "history_entity";
+    } else if (lastPerson && !parsed.personName) {
+      searchQuery = `${lastPerson} ${searchQuery}`.trim();
+      searchQueries = [searchQuery];
+      method = "history_entity";
+    }
+  }
+
+  return {
+    searchQuery,
+    searchQueries,
+    method,
+    multiQueryMethod,
+    titleBoost,
+    explicitPage,
+    shouldExpand,
+    isVagueFollowUp,
+    lastProject,
+    lastPerson,
+    usePreReformulated,
+  };
 }
 
 export async function tryRagAnswer(
@@ -97,28 +173,11 @@ export async function tryRagAnswer(
       return jsonAnswer(ctx.sessionId, clarAnswer, userEmotion, signal);
     }
 
-    const rawTitleBoost = resolveRagTitleBoost(finalParsed, ctx.message);
-    const explicitPage = isExplicitPageQuestion(ctx.message, finalParsed.docTitle);
-    const isExplicitTitleMatch = explicitPage || (rawTitleBoost ? ctx.message.toLowerCase().includes(rawTitleBoost.toLowerCase()) : false);
-    const titleBoost = isExplicitTitleMatch ? rawTitleBoost : undefined;
+    const searchPlan = buildRagSearchPlan(finalParsed, ctx);
+    const { titleBoost, explicitPage, shouldExpand, isVagueFollowUp, lastProject, lastPerson, usePreReformulated } = searchPlan;
+    let { searchQuery, searchQueries, method, multiQueryMethod } = searchPlan;
 
-    const hasExplicitTarget = Boolean(finalParsed.docTitle || finalParsed.personName);
-    const shouldExpand = (shouldExpandRagQuery(finalParsed.kind) || !!ctx.isWrongAnswerRetry) && !hasExplicitTarget;
-
-    let searchQuery: string;
-    let searchQueries: string[];
-    let method = "original";
-    let multiQueryMethod = "primary_only";
-
-    if (explicitPage && titleBoost) {
-      searchQuery = titleBoost;
-      searchQueries = [titleBoost];
-    } else if (ctx.reformulatedQuery && !shouldExpand) {
-      // Reuse pre-reformulated query from intent classifier pass
-      searchQuery = ctx.reformulatedQuery;
-      searchQueries = [ctx.reformulatedQuery];
-      method = "pre_reformulated";
-    } else {
+    if (!explicitPage && !usePreReformulated) {
       if (ctx.telemetry) {
         ctx.telemetry.startStep("reformulation_ms");
         ctx.telemetry.incrementLlmCalls();
@@ -139,29 +198,8 @@ export async function tryRagAnswer(
       multiQueryMethod = unified.multiQueryMethod;
     }
 
-    const lastProject = ctx.lastProject;
-    const lastPerson = ctx.lastPerson;
-
-    const isVagueFollowUp =
-      !finalParsed.docTitle &&
-      !finalParsed.personName &&
-      /\b(this|that|it|more|explain|project|core|detail|in depth|elaborate|tell me more|what about|only for|for \d{4}|in \d{4}|more information|more about|about it)\b/i.test(
-        ctx.message,
-      ) &&
-      ctx.message.trim().split(/\s+/).length < 20;
-
-    if (isVagueFollowUp) {
-      if (lastProject && !titleBoost) {
-        searchQuery = `${lastProject} ${searchQuery}`.trim();
-        method = "history_entity";
-      } else if (lastPerson && !finalParsed.personName) {
-        searchQuery = `${lastPerson} ${searchQuery}`.trim();
-        method = "history_entity";
-      }
-    }
-
     const hints: string[] = [];
-    if (titleBoost && isExplicitTitleMatch) hints.push(`Project/Topic: ${titleBoost}`);
+    if (titleBoost && explicitPage) hints.push(`Project/Topic: ${titleBoost}`);
     if (finalParsed.personName?.trim()) hints.push(`Person: ${finalParsed.personName.trim()}`);
     if (finalParsed.year) hints.push(`Year: ${finalParsed.year}`);
     if (hints.length && !explicitPage) {
@@ -193,27 +231,6 @@ export async function tryRagAnswer(
       console.log(`[retrieval-trace] Message: "${ctx.message}" | SearchQuery: "${searchQuery}" | TitleBoost: "${titleBoost ?? 'none'}" | ConfidenceOK: ${confidence.ok} | TopHit: "${chunkHits[0]?.title ?? 'none'}" (score: ${chunkHits[0]?.final_score ?? 0})`);
     }
 
-    // Gate 1: Corrective RAG (CRAG) Relevance Grader
-    if (notionContext.trim() && !confidence.ok) {
-      const isRelevant = await gradeRetrieval(ctx.message, notionContext);
-      if (!isRelevant) {
-        if (process.env.NODE_ENV !== "production" || process.env.DEBUG_RETRIEVAL === "true") {
-          console.log("[CRAG] Gate 1 Grade: IRRELEVANT. Triggering corrective query rewrite...");
-        }
-        const rewritten = await reformulateAndExpand(ctx.message, ctx.history, finalParsed.kind, false);
-        const retryResult = await buildNotionContextWithConfidence(rewritten.queries, {
-          titleBoost: titleBoost || undefined,
-          loosenThreshold: true,
-        });
-
-        if (retryResult.context.trim()) {
-          notionContext = retryResult.context;
-          confidence = retryResult.confidence;
-          chunkHits = retryResult.chunkHits;
-        }
-      }
-    }
-
     if (!confidence.ok) {
       if (process.env.NODE_ENV !== "production" || process.env.DEBUG_RETRIEVAL === "true") {
         console.log("[retrieval] confidence low, attempting retry...", { confidence });
@@ -226,7 +243,7 @@ export async function tryRagAnswer(
         return cleaned;
       }).filter(Boolean);
 
-      if (isExplicitTitleMatch && titleBoost && !broaderQueries.includes(titleBoost)) {
+      if (explicitPage && titleBoost && !broaderQueries.includes(titleBoost)) {
         broaderQueries.push(titleBoost);
       }
 
