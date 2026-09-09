@@ -85,7 +85,7 @@ function cleanCache() {
 // repeat the word "task" (e.g. Employee Onboarding Hub). Date + task-word is
 // unambiguous enough to resolve with a regex before ever calling the LLM.
 const DATE_PATTERN =
-  /\b(\d{1,2}(st|nd|rd|th)?[\s\-\/]?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s\-\/]?\d{2,4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\btoday\b|\btomorrow\b|\byesterday\b)/i;
+  /\b(\d{1,2}(st|nd|rd|th)?[\s\-\/]?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s\-\/]?\d{2,4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\btoday\b|\btomorrow\b|\byesterday\b|\b(last|this|next|past|previous)\s+(month|week|year)\b|\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec)\s*(month)?(?:\s+20\d{2})?\b)/i;
 const TASK_QUERY_PATTERN = /\b(task|tasks|to[\s-]?do|assigned)\b/i;
 
 function tryFastPathIntent(question: string): ParsedQuery | null {
