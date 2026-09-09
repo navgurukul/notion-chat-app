@@ -223,6 +223,12 @@ export function stripYearSuffixFromPerson(name: string): string {
   return name.replace(/\s+(?:in|for|year)?\s*20\d{2}$/i, "").trim();
 }
 
+const TEMPORAL_SUFFIX_PATTERN = /\s+(?:(?:in|on|at|by|for|during)\s+)?(?:the\s+)?(?:(?:today|yesterday|tomorrow|now)|(?:(?:last|this|next|past|previous)\s+(?:month|week|year))|(?:(?:\d{1,2}(?:st|nd|rd|th)?\s+)?(?:january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec)(?:\s+month)?(?:\s+20\d{2})?)|(?:20\d{2})|(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}))\s*$/i;
+
+export function stripTemporalSuffixFromPerson(name: string): string {
+  return name.replace(TEMPORAL_SUFFIX_PATTERN, "").trim();
+}
+
 export function isNoiseTopic(topic: string): boolean {
   const norm = topic.trim().toLowerCase();
   return ["all", "everything", "stuff", "pages", "docs", "documents"].includes(norm);

@@ -69,6 +69,7 @@ function normalizeTopic(value: string) {
 function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd: string | null } {
   const q = rawQuery.toLowerCase();
   const now = new Date();
+  const currentYear = now.getUTCFullYear();
 
   // Support explicit dates: e.g. "23 july 2026", "july 23, 2026", "2026-07-23", "23-07-2026"
   const months = "january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec";
@@ -78,25 +79,28 @@ function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd
     october: 9, oct: 9, november: 10, nov: 10, december: 11, dec: 11
   };
 
-  // 1. "23 july 2026" or "23rd july 2026"
-  const pattern1 = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${months})\\s+(20\\d{2})\\b`, "i");
+  const explicitYearMatch = q.match(/\b(20\d{2})\b/);
+  const explicitYear = explicitYearMatch ? parseInt(explicitYearMatch[1], 10) : null;
+
+  // 1. "23 july 2026" or "23rd july 2026" or "23 july"
+  const pattern1 = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${months})(?:\\s+(20\\d{2}))?\\b`, "i");
   const match1 = q.match(pattern1);
   if (match1) {
     const day = parseInt(match1[1], 10);
-    const month = MONTH_MAP[match1[2]];
-    const yearVal = parseInt(match1[3], 10);
+    const month = MONTH_MAP[match1[2].toLowerCase()];
+    const yearVal = match1[3] ? parseInt(match1[3], 10) : (explicitYear ?? currentYear);
     const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
     const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
   }
 
-  // 2. "july 23, 2026" or "july 23 2026"
-  const pattern2 = new RegExp(`\\b(${months})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?\\s+(20\\d{2})\\b`, "i");
+  // 2. "july 23, 2026" or "july 23 2026" or "july 23"
+  const pattern2 = new RegExp(`\\b(${months})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?(?:\\s+(20\\d{2}))?\\b`, "i");
   const match2 = q.match(pattern2);
   if (match2) {
-    const month = MONTH_MAP[match2[1]];
+    const month = MONTH_MAP[match2[1].toLowerCase()];
     const day = parseInt(match2[2], 10);
-    const yearVal = parseInt(match2[3], 10);
+    const yearVal = match2[3] ? parseInt(match2[3], 10) : (explicitYear ?? currentYear);
     const start = new Date(Date.UTC(yearVal, month, day, 0, 0, 0, 0));
     const end = new Date(Date.UTC(yearVal, month, day + 1, 0, 0, 0, 0));
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
@@ -136,77 +140,126 @@ function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd
   }
 
   if (/\btoday\b/i.test(q) || /\bdaily\b/i.test(q)) {
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0));
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
   }
 
   if (/\byesterday\b/i.test(q)) {
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() - 1);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
   }
 
   if (/\bthis\s+week\b/i.test(q) || /\bweekly\b/i.test(q)) {
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    const day = start.getDay();
-    const diff = start.getDate() - day + (day === 0 ? -6 : 1);
-    start.setDate(diff);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 7);
+    const day = now.getUTCDay();
+    const diff = now.getUTCDate() - day + (day === 0 ? -6 : 1);
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), diff, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), diff + 7, 0, 0, 0, 0));
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
   }
 
   if (/\blast\s+week\b/i.test(q)) {
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    const day = start.getDay();
-    const diff = start.getDate() - day + (day === 0 ? -6 : 1) - 7;
-    start.setDate(diff);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 7);
+    const day = now.getUTCDay();
+    const diff = now.getUTCDate() - day + (day === 0 ? -6 : 1) - 7;
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), diff, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), diff + 7, 0, 0, 0, 0));
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
   }
 
   if (/\bthis\s+month\b/i.test(q) || /\bmonthly\b/i.test(q)) {
-    const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-    const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0));
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
   }
 
-  if (/\blast\s+month\b/i.test(q)) {
-    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
-    const end = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  if (/\blast\s+month\b/i.test(q) || /\bprevious\s+month\b/i.test(q) || /\bpast\s+month\b/i.test(q)) {
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
+    return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+  }
+
+  // 5. Named Month query (e.g. "april", "april month", "in april", "april 2026")
+  const namedMonthPattern = new RegExp(`\\b(?:in\\s+|for\\s+|during\\s+|of\\s+)?(${months})(?:\\s+month)?(?:\\s+(?:in\\s+|of\\s+)?(20\\d{2}))?\\b`, "i");
+  const namedMonthMatch = q.match(namedMonthPattern);
+  if (namedMonthMatch) {
+    const month = MONTH_MAP[namedMonthMatch[1].toLowerCase()];
+    const yearVal = namedMonthMatch[2] ? parseInt(namedMonthMatch[2], 10) : (explicitYear ?? currentYear);
+    const start = new Date(Date.UTC(yearVal, month, 1, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(yearVal, month + 1, 1, 0, 0, 0, 0));
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
   }
 
   if (/\bthis\s+year\b/i.test(q)) {
-    const start = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
-    const end = new Date(now.getFullYear() + 1, 0, 1, 0, 0, 0, 0);
+    const start = new Date(Date.UTC(now.getUTCFullYear(), 0, 1, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(now.getUTCFullYear() + 1, 0, 1, 0, 0, 0, 0));
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
   }
 
-  if (/\blast\s+year\b/i.test(q)) {
-    const start = new Date(now.getFullYear() - 1, 0, 1, 0, 0, 0, 0);
-    const end = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+  if (/\blast\s+year\b/i.test(q) || /\bprevious\s+year\b/i.test(q) || /\bpast\s+year\b/i.test(q)) {
+    const start = new Date(Date.UTC(now.getUTCFullYear() - 1, 0, 1, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(now.getUTCFullYear(), 0, 1, 0, 0, 0, 0));
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
   }
 
-  const explicitYearMatch = q.match(/\b(20\d{2})\b/);
-  if (explicitYearMatch) {
-    const yearVal = Number(explicitYearMatch[1]);
-    const start = new Date(yearVal, 0, 1, 0, 0, 0, 0);
-    const end = new Date(yearVal + 1, 0, 1, 0, 0, 0, 0);
+  if (explicitYear) {
+    const start = new Date(Date.UTC(explicitYear, 0, 1, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(explicitYear + 1, 0, 1, 0, 0, 0, 0));
     return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
   }
 
   return { dateStart: null, dateEnd: null };
+}
+
+function formatDateNote(rawQuery: string, dateStart: string | null, dateEnd: string | null, year?: number): string {
+  const q = rawQuery.toLowerCase();
+  if (/\btoday\b/i.test(q) || /\bdaily\b/i.test(q)) return " for today";
+  if (/\byesterday\b/i.test(q)) return " for yesterday";
+  if (/\bthis\s+week\b/i.test(q) || /\bweekly\b/i.test(q)) return " for this week";
+  if (/\blast\s+week\b/i.test(q)) return " for last week";
+  if (/\bthis\s+month\b/i.test(q) || /\bmonthly\b/i.test(q)) return " for this month";
+  if (/\blast\s+month\b/i.test(q) || /\bprevious\s+month\b/i.test(q) || /\bpast\s+month\b/i.test(q)) return " for last month";
+  if (/\bthis\s+year\b/i.test(q)) return " for this year";
+  if (/\blast\s+year\b/i.test(q) || /\bprevious\s+year\b/i.test(q) || /\bpast\s+year\b/i.test(q)) return " for last year";
+
+  const MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+
+  if (dateStart && dateEnd) {
+    const start = new Date(dateStart);
+    const end = new Date(dateEnd);
+    const diffDays = Math.round(Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (diffDays === 1) {
+      return ` on ${start.toISOString().split('T')[0]}`;
+    }
+
+    const startDay = start.getUTCDate();
+    const endDay = end.getUTCDate();
+    const startMonth = start.getUTCMonth();
+    const endMonth = end.getUTCMonth();
+    const startYear = start.getUTCFullYear();
+    const endYear = end.getUTCFullYear();
+
+    const isFullMonth = startDay === 1 && endDay === 1 &&
+      ((endMonth === (startMonth + 1) % 12 && (endYear === startYear || (startMonth === 11 && endYear === startYear + 1))));
+
+    if (isFullMonth) {
+      return ` for ${MONTH_NAMES[startMonth]} ${startYear}`;
+    }
+
+    const isFullYear = startDay === 1 && startMonth === 0 && endDay === 1 && endMonth === 0 && endYear === startYear + 1;
+    if (isFullYear) {
+      return ` in ${startYear}`;
+    }
+
+    return ` from ${start.toISOString().split('T')[0]} to ${end.toISOString().split('T')[0]}`;
+  }
+
+  if (year) return ` in ${year}`;
+  return "";
 }
 
 /** Notion pages often lack an Owner property; fall back to creator / editor. */
@@ -1735,27 +1788,7 @@ async function handleMetadataQueryInner(
       );
     }
 
-    let dateNote = "";
-    if (/\btoday\b/i.test(parsed.raw) || /\bdaily\b/i.test(parsed.raw)) dateNote = " for today";
-    else if (/\byesterday\b/i.test(parsed.raw)) dateNote = " for yesterday";
-    else if (/\bthis\s+week\b/i.test(parsed.raw) || /\bweekly\b/i.test(parsed.raw)) dateNote = " for this week";
-    else if (/\blast\s+week\b/i.test(parsed.raw)) dateNote = " for last week";
-    else if (/\bthis\s+month\b/i.test(parsed.raw) || /\bmonthly\b/i.test(parsed.raw)) dateNote = " for this month";
-    else if (/\blast\s+month\b/i.test(parsed.raw)) dateNote = " for last month";
-    else if (/\bthis\s+year\b/i.test(parsed.raw)) dateNote = " for this year";
-    else if (/\blast\s+year\b/i.test(parsed.raw)) dateNote = " for last year";
-    else if (dateStart && dateEnd) {
-      const start = new Date(dateStart);
-      const end = new Date(dateEnd);
-      const diffDays = Math.round(Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-      if (diffDays === 1) {
-        dateNote = ` on ${start.toISOString().split('T')[0]}`;
-      } else {
-        dateNote = ` from ${start.toISOString().split('T')[0]} to ${end.toISOString().split('T')[0]}`;
-      }
-    }
-    else if (year) dateNote = ` in ${year}`;
-
+    const dateNote = formatDateNote(parsed.raw, dateStart, dateEnd, year);
     const yearNote = dateNote;
 
     if (!rows.length) {
@@ -1892,27 +1925,7 @@ async function handleMetadataQueryInner(
     );
     if (!rows.length) return null;
 
-    let dateNote = "";
-    if (/\btoday\b/i.test(parsed.raw) || /\bdaily\b/i.test(parsed.raw)) dateNote = " for today";
-    else if (/\byesterday\b/i.test(parsed.raw)) dateNote = " for yesterday";
-    else if (/\bthis\s+week\b/i.test(parsed.raw) || /\bweekly\b/i.test(parsed.raw)) dateNote = " for this week";
-    else if (/\blast\s+week\b/i.test(parsed.raw)) dateNote = " for last week";
-    else if (/\bthis\s+month\b/i.test(parsed.raw) || /\bmonthly\b/i.test(parsed.raw)) dateNote = " for this month";
-    else if (/\blast\s+month\b/i.test(parsed.raw)) dateNote = " for last month";
-    else if (/\bthis\s+year\b/i.test(parsed.raw)) dateNote = " for this year";
-    else if (/\blast\s+year\b/i.test(parsed.raw)) dateNote = " for last year";
-    else if (yearStart && yearEnd) {
-      const start = new Date(yearStart);
-      const end = new Date(yearEnd);
-      const diffDays = Math.round(Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-      if (diffDays === 1) {
-        dateNote = ` on ${start.toISOString().split('T')[0]}`;
-      } else {
-        dateNote = ` from ${start.toISOString().split('T')[0]} to ${end.toISOString().split('T')[0]}`;
-      }
-    }
-    else if (year) dateNote = ` in ${year}`;
-
+    const dateNote = formatDateNote(parsed.raw, dateStart, dateEnd, year);
     const yearNote = dateNote;
 
     const label = taskListQuery
@@ -2480,27 +2493,7 @@ async function handleMetadataQueryInner(
       topResult: rows[0]?.title ?? null,
     });
 
-    let dateNote = "";
-    if (/\btoday\b/i.test(parsed.raw)) dateNote = " for today";
-    else if (/\byesterday\b/i.test(parsed.raw)) dateNote = " for yesterday";
-    else if (/\bthis\s+week\b/i.test(parsed.raw)) dateNote = " for this week";
-    else if (/\blast\s+week\b/i.test(parsed.raw)) dateNote = " for last week";
-    else if (/\bthis\s+month\b/i.test(parsed.raw)) dateNote = " for this month";
-    else if (/\blast\s+month\b/i.test(parsed.raw)) dateNote = " for last month";
-    else if (/\bthis\s+year\b/i.test(parsed.raw)) dateNote = " for this year";
-    else if (/\blast\s+year\b/i.test(parsed.raw)) dateNote = " for last year";
-    else if (yearStart && yearEnd) {
-      const start = new Date(yearStart);
-      const end = new Date(yearEnd);
-      const diffDays = Math.round(Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-      if (diffDays === 1) {
-        dateNote = ` on **${start.toISOString().split('T')[0]}**`;
-      } else {
-        dateNote = ` from **${start.toISOString().split('T')[0]}** to **${end.toISOString().split('T')[0]}**`;
-      }
-    }
-    else if (year) dateNote = ` in **${year}**`;
-
+    const dateNote = formatDateNote(parsed.raw, dateStart, dateEnd, year);
     const yearNote = dateNote;
 
     if (!rows.length) {

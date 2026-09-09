@@ -13,6 +13,7 @@ import {
   isCrossDocSummaryQuestion,
   looksLikeSinglePageTitle,
   normalizePersonNameForMatch,
+  stripTemporalSuffixFromPerson,
   stripYearSuffixFromPerson,
   isNoiseTopic,
   stripDocWords,
@@ -83,7 +84,9 @@ function cleanPersonName(value: string | null) {
     return null;
   }
   const cleaned = stripYearSuffixFromPerson(
-    stripDocWords(val)
+    stripTemporalSuffixFromPerson(
+      stripDocWords(val)
+    )
       .replace(/\s+(?:is|are|was|were|has|have|had)\s*$/i, "")
       .replace(/^(?:did|does|do|is|are|was|were|has|have|had)\s+/i, ""),
   ).trim();
@@ -383,9 +386,9 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  const showTasksMatch = q.match(/^(?:show|list|get|display|tell\s+me|what\s+is|what\s+are)\s+(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|project\s+names?)\s+(?:assigned\s+)?(?:to|for|of)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i)
-    ?? q.match(/^(?:show|list|get|display|tell\s+me|what\s+is|what\s+are)?\s*(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:assigned\s+)?(?:to|for|of)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i)
-    ?? q.match(/^(?:show|list|get|display|tell\s+me)?\s*(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})'s\s+(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|project\s+names?)/i);
+  const showTasksMatch = q.match(/^(?:show|list|get|display|tell\s+me|give\s+me|give|what\s+is|what\s+are)\s+(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|project\s+names?)\s+(?:assigned\s+)?(?:to|for|of)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,3})/i)
+    ?? q.match(/^(?:show|list|get|display|tell\s+me|give\s+me|give|what\s+is|what\s+are)?\s*(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:assigned\s+)?(?:to|for|of)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,3})/i)
+    ?? q.match(/^(?:show|list|get|display|tell\s+me|give\s+me|give)?\s*(?:all\s+)?(?:of\s+)?(?:all\s+)?(?:the\s+)?([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,3})'s\s+(?:assigned\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?|projects?|project\s+names?)/i);
   if (showTasksMatch) {
     const person = cleanPersonName(showTasksMatch[1]);
     if (person) {
