@@ -12,6 +12,7 @@
     "search:s3": "tsx scripts/search-s3.ts",
     "sync:notion": "tsx scripts/sync-notion.ts",
     "sync:notion:full": "tsx scripts/sync-notion.ts --force --refresh-content",
+    "sync:cron": "tsx scripts/cron-scheduler.ts",
     "embed:missing": "tsx scripts/embed-missing.ts",
     "verify:chat-routes": "tsx scripts/verify-chat-routes.ts",
     "test:e2e": "tsx scripts/e2e-pipeline-test.ts",
