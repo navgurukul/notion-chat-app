@@ -639,30 +639,43 @@ async function processOnePage(
 }
 
 // ---------------------------------------------------------------------------
-// Main export
+// Main export & Lock state
 // ---------------------------------------------------------------------------
+
+let isSyncRunning = false;
+
+export function isSyncInProgress(): boolean {
+  return isSyncRunning;
+}
 
 export async function syncNotionToPostgres(
   options: SyncNotionOptions = {},
 ): Promise<SyncResult> {
-  await ensureSchema();
+  if (isSyncRunning) {
+    console.warn("[sync] Notion sync is already in progress. Skipping duplicate execution.");
+    throw new Error("Sync already in progress");
+  }
 
-  // Reset stuck "processing" pages from a previous crashed run
-  await query(`
-    UPDATE notion_pages
-    SET embedding_status = 'failed',
-        last_error = 'Interrupted — previous sync did not complete'
-    WHERE embedding_status = 'processing'
-      AND synced_at IS NOT NULL
-      AND synced_at < NOW() - INTERVAL '2 hours'
-  `);
+  isSyncRunning = true;
+  try {
+    await ensureSchema();
 
-  const notion = getNotionClient();
-  const embed = options.embed !== false && isEmbeddingsEnabled();
-  const concurrency = getSyncConcurrency();
-  const runStartedAt = new Date().toISOString();
+    // Reset stuck "processing" pages from a previous crashed run
+    await query(`
+      UPDATE notion_pages
+      SET embedding_status = 'failed',
+          last_error = 'Interrupted — previous sync did not complete'
+      WHERE embedding_status = 'processing'
+        AND synced_at IS NOT NULL
+        AND synced_at < NOW() - INTERVAL '2 hours'
+    `);
 
-  if (options.resume) {
+    const notion = getNotionClient();
+    const embed = options.embed !== false && isEmbeddingsEnabled();
+    const concurrency = getSyncConcurrency();
+    const runStartedAt = new Date().toISOString();
+
+    if (options.resume) {
     console.log("[sync] Resume mode — skipping pages already marked completed.");
   }
 
@@ -726,4 +739,7 @@ export async function syncNotionToPostgres(
     embeddingsSkipped: !embed,
     synced_at,
   };
+  } finally {
+    isSyncRunning = false;
+  }
 }
