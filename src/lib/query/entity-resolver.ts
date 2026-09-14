@@ -546,6 +546,33 @@ export function resolveDates(message: string): { year?: number; dateRange?: { da
   return {};
 }
 
+// Filler phrases like "tell me about X", "help me understand Y", "give me a
+// summary" use "me" as the direct object of the verb (addressing the
+// assistant), not a first-person self-reference about the query's subject.
+// Masking "me" inside these collocations before any pronoun detection
+// prevents queries like "Tell me about the Notion RAG chatbot project" from
+// being misread as being about the current session user. This masking is
+// shared by every first-person check in this module (resolvePronouns,
+// isFollowUpNeedingContext) and by resolve-query.ts's own pronoun checks —
+// previously each site had its own copy of the same regex, so fixing one
+// silently left the others broken.
+const FILLER_ME_REGEX = /\b(tell|let|show|give|help|remind|notify|email|message|ping|send|walk|guide|assist|update)\s+me\b/gi;
+// Must not itself contain "my"/"me"/"myself"/"i" as a whole word, or the
+// first-person regex would just match the placeholder instead of skipping it.
+const ME_PLACEHOLDER = "XFILLERWORDX";
+
+export function maskFillerMe(text: string): string {
+  return text.replace(FILLER_ME_REGEX, (m) => m.replace(/\bme\b/i, ME_PLACEHOLDER));
+}
+
+export function unmaskFillerMe(text: string): string {
+  return text.split(ME_PLACEHOLDER).join("me");
+}
+
+export function hasGenuineFirstPersonReference(text: string): boolean {
+  return /\b(my|me|myself|i)\b/i.test(maskFillerMe(text));
+}
+
 export function resolvePronouns(
   message: string,
   sessionName?: string,
@@ -555,12 +582,17 @@ export function resolvePronouns(
   let resolvedPerson: string | undefined;
   let resolvedQuality = ResolutionQuality.NONE;
 
+  const maskedText = maskFillerMe(text);
+
   const firstPersonRegex = /\b(my|me|myself|i)\b/i;
-  if (sessionName && firstPersonRegex.test(text)) {
+  if (sessionName && firstPersonRegex.test(maskedText)) {
     resolvedPerson = sessionName;
     resolvedQuality = ResolutionQuality.EXACT;
-    text = text.replace(/\b(my|me|myself|i)\b/gi, sessionName);
+    text = maskedText.replace(/\b(my|me|myself|i)\b/gi, sessionName);
+  } else {
+    text = maskedText;
   }
+  text = text.split(ME_PLACEHOLDER).join("me");
 
   const thirdPersonRegex = /\b(he|him|his|she|her|hers|they|them|their)\b/i;
   if (lastPerson && thirdPersonRegex.test(text)) {
@@ -647,7 +679,7 @@ if (!personName) {
 export function isFollowUpNeedingContext(message: string, history: ChatHistoryItem[]): boolean {
   const lower = message.trim().toLowerCase();
 
-  if (/\b(he|him|his|she|her|hers|they|them|their|it|its|this|that|me|my|i)\b/i.test(lower)) {
+  if (/\b(he|him|his|she|her|hers|they|them|their|it|its|this|that)\b/i.test(lower) || hasGenuineFirstPersonReference(lower)) {
     return true;
   }
 
@@ -773,9 +805,6 @@ export async function lazyResolveSqlEntities(
         rawPerson = pronounInfo.resolvedPerson;
       }
     }
-    if (!rawPerson && sessionName && /\b(me|my|myself|i)\b/i.test(rawMessage)) {
-      rawPerson = sessionName;
-    }
     if (!rawPerson && needsFollowUpContext && lastEntities?.lastPerson) {
       rawPerson = lastEntities.lastPerson;
     }
@@ -895,9 +924,6 @@ export async function lazyResolveRagEntities(
     if (pronounInfo.resolvedPerson) {
       rawPerson = pronounInfo.resolvedPerson;
     }
-  }
-  if (!rawPerson && sessionName && /\b(me|my|myself|i)\b/i.test(rawMessage)) {
-    rawPerson = sessionName;
   }
   if (!rawPerson && needsFollowUpContext && lastEntities?.lastPerson) {
     rawPerson = lastEntities.lastPerson;

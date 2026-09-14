@@ -11,7 +11,7 @@ import {
   shouldReformulate,
   reformulateSearchQuery,
 } from "@/lib/chat/query-tools";
-import { isFollowUpNeedingContext, getGenderOfPerson } from "./entity-resolver";
+import { isFollowUpNeedingContext, getGenderOfPerson, hasGenuineFirstPersonReference } from "./entity-resolver";
 
 const INTENT_KIND_HINTS: Record<string, Set<ParsedQuery["kind"]>> = {
   PERSON_ACTIVITY: new Set([
@@ -272,7 +272,7 @@ export async function resolveQuery(
     if (!docTitle && refRules.docTitle) {
       docTitle = refRules.docTitle;
     }
-    const originalHasPronoun = /\b(he|him|his|she|her|hers|they|them|their|me|my|myself|i)\b/i.test(question);
+    const originalHasPronoun = /\b(he|him|his|she|her|hers|they|them|their)\b/i.test(question) || hasGenuineFirstPersonReference(question);
     if (!personName && refRules.personName && !originalHasPronoun) {
       personName = refRules.personName;
     }
@@ -283,7 +283,7 @@ export async function resolveQuery(
   }
 
   if (!personName && isFollowUpNeedingContext(question, history)) {
-    const hasFirstPerson = /\b(my|me|myself|i)\b/i.test(question);
+    const hasFirstPerson = hasGenuineFirstPersonReference(question);
     const hasMalePronoun = /\b(he|him|his)\b/i.test(question);
     const hasFemalePronoun = /\b(she|her|hers)\b/i.test(question);
     if (hasFirstPerson && sessionName) {
