@@ -14,10 +14,13 @@ const globalForPostgres = globalThis as unknown as {
   schemaPromise: Promise<void> | null | undefined;
 };
 
-const poolConfig: any = {
-  connectionString: databaseUrl,
-  lookup: dns.lookup,
-};
+   const poolConfig: any = {
+     connectionString: databaseUrl,
+     lookup: dns.lookup,
+     min: 1,
+     idleTimeoutMillis: 60_000,
+     keepAlive: true,
+   };
 
 export const pool =
   globalForPostgres.pool ??
@@ -215,11 +218,6 @@ async function ensureNotionChunksSchema(client: PoolClient) {
 
   await client.query(`
     CREATE INDEX IF NOT EXISTS notion_chunks_embedding_idx
-    ON notion_chunks
-    USING hnsw (embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
-
-    CREATE INDEX IF NOT EXISTS idx_notion_chunks_embedding
     ON notion_chunks
     USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
@@ -517,5 +515,33 @@ export async function query<T = unknown>(
       return retryResult.rows as T[];
     }
     throw error;
+  }
+}
+
+
+/**
+ * Runs a query with sequential scan disabled for this transaction only.
+ * Use for ORDER BY embedding <=> ... queries — the planner's cost model
+ * underestimates TOAST fetch cost on wide vector columns and picks a much
+ * slower seq scan by default. Scoped to one transaction so it never affects
+ * other queries sharing the pool.
+ */
+export async function vectorQuery<T = unknown>(
+  text: string,
+  params?: unknown[],
+): Promise<T[]> {
+  await ensureSchema();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL enable_seqscan = off");
+    const result = await client.query(text, params);
+    await client.query("COMMIT");
+    return result.rows as T[];
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
   }
 }

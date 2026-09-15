@@ -240,12 +240,13 @@ export async function getChatResponse(
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
+              body: JSON.stringify({
           model,
           messages,
           temperature: 0,
           max_tokens: Number(process.env.OPENAI_CHAT_MAX_TOKENS || 600),
         }),
+        signal: AbortSignal.timeout(8000),
       });
 
       if (!response.ok) throw await createHttpError(response);
@@ -285,6 +286,7 @@ export async function getJsonCompletion(systemPrompt: string, prompt: string) {
           max_tokens: Number(process.env.OPENAI_JSON_MAX_TOKENS || 220),
           response_format: { type: "json_object" },
         }),
+        signal: AbortSignal.timeout(8000),
       });
 
       if (!response.ok) throw await createHttpError(response);
@@ -346,6 +348,7 @@ export async function getChatStream(
             max_tokens: Number(process.env.OPENAI_CHAT_MAX_TOKENS || 600),
             stream: true,
           }),
+            signal: AbortSignal.timeout(8000),
         });
         if (!res.ok) throw await createHttpError(res);
         return res;
