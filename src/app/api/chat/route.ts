@@ -48,13 +48,13 @@ export async function POST(req: NextRequest) {
           error: OPENAI_QUOTA_USER_MESSAGE,
           answer: OPENAI_QUOTA_USER_MESSAGE,
         },
-        { status: 429 },
+        { status: 429, headers: { "X-Accel-Buffering": "no" } },
       );
     }
 
     return NextResponse.json(
       { error: "Failed to get response" },
-      { status: 500 },
+      { status: 500, headers: { "X-Accel-Buffering": "no" } },
     );
   }
 }

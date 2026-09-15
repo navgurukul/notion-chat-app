@@ -81,6 +81,37 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function formatErrorMessage(status: number, rawText: string | null): string {
+  const text = rawText || "";
+  const isHtml = /<html|<doctype|<head|<body|<h[1-6]|<title>/i.test(text);
+  const isTimeout = status === 504 || /504\s+gateway|gateway\s+time-out|timed\s+out/i.test(text);
+  const isBadGateway = status === 502 || /502\s+bad\s+gateway|bad\s+gateway/i.test(text);
+  const isServiceUnavailable = status === 503 || /503\s+service|service\s+unavailable/i.test(text);
+
+  if (isTimeout) {
+    return "The request timed out. The server took too long to respond. Please try again or rephrase your question.";
+  }
+  if (isBadGateway) {
+    return "The server is temporarily unavailable (Bad Gateway). Please try again in a few moments.";
+  }
+  if (isServiceUnavailable) {
+    return "The service is temporarily unavailable. Please try again in a few moments.";
+  }
+
+  if (isHtml) {
+    if (status >= 500) {
+      return "A server error occurred. Please try again later.";
+    }
+    return "An unexpected server response was received. Please try again.";
+  }
+
+  if (text && text.trim().length > 0 && text.length < 300) {
+    return text.trim();
+  }
+
+  return "Failed to get response. Please try again.";
+}
+
 const ChatInputForm = memo(function ChatInputForm({
   onSubmit,
   isLoading,
@@ -629,7 +660,8 @@ const createNewChat = async () => {
         }
 
         if (!response.ok) {
-          setBotMessageAt(botIndex, errorText || answer || "Failed to get response");
+          const safeMsg = formatErrorMessage(response.status, errorText || answer);
+          setBotMessageAt(botIndex, safeMsg);
           clearThinkingAt(botIndex);
           return;
         }
@@ -639,7 +671,8 @@ const createNewChat = async () => {
 
       if (!response.ok) {
         const errText = await response.text().catch(() => "");
-        setBotMessageAt(botIndex, errText || "Failed to get response");
+        const safeMsg = formatErrorMessage(response.status, errText);
+        setBotMessageAt(botIndex, safeMsg);
         clearThinkingAt(botIndex);
         return;
       }
@@ -686,7 +719,10 @@ const createNewChat = async () => {
       }
 
       rawStream += decoder.decode();
-      const answerText = extractFinalAnswer(rawStream);
+      let answerText = extractFinalAnswer(rawStream);
+      if (/<html|<doctype|<head|<body|<h[1-6]|<title>/i.test(answerText) || /504\s+gateway/i.test(answerText)) {
+        answerText = formatErrorMessage(504, answerText);
+      }
       setBotMessageAt(botIndex, answerText);
       clearThinkingAt(botIndex);
 
@@ -695,7 +731,7 @@ const createNewChat = async () => {
 
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
-        setBotMessageAt(botIndex, "Failed to connect to the server.");
+        setBotMessageAt(botIndex, "Failed to connect to the server. Please check your connection or try again.");
       }
       clearThinkingAt(botIndex);
     } finally {

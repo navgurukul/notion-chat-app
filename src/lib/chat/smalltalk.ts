@@ -286,5 +286,13 @@ export async function jsonAnswer(sessionId: string | null, answer: string, emoti
   if (sessionId) {
     await addChatMessage(sessionId, "bot", answer, emotion).catch(err => console.error("[DB Write Error] Failed to save bot message:", err));
   }
-  return NextResponse.json({ answer, emotion });
+  return NextResponse.json(
+    { answer, emotion },
+    {
+      headers: {
+        "X-Accel-Buffering": "no",
+        "Cache-Control": "no-cache",
+      },
+    },
+  );
 }
