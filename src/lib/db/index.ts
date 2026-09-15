@@ -1,4 +1,4 @@
-export { ensureSchema, query, getClient } from "./postgres";
+export { ensureSchema, query, getClient, vectorQuery } from "./postgres";
 export { escapeLike, likePattern } from "./sql-utils";
 export {
   getNotionLastSyncRun,
