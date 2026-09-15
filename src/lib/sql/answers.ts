@@ -1430,6 +1430,8 @@ async function lookupByTitle(title: string, includeContent = false) {
     ? "id, title, url, owner, created_by, last_edited_by, doc_type, status, content"
     : "id, title, url, owner, created_by, last_edited_by, doc_type, status";
 
+
+
   for (const lookupTitle of lookupTitles) {
     const exact = await query<NotionPageRow>(
       `
@@ -1448,8 +1450,8 @@ async function lookupByTitle(title: string, includeContent = false) {
     SELECT ${columns}
     FROM notion_pages
     WHERE
-      lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
-      OR to_tsvector('english', coalesce(title, '')) @@ plainto_tsquery('english', $2)
+          lower(coalesce(title, '')) LIKE lower($1) ESCAPE '\\'
+      OR fts @@ plainto_tsquery('simple', $2)
     LIMIT ${SQL_RESULT_LIMIT}
     `,
     [term, title],

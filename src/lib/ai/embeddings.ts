@@ -209,6 +209,7 @@ async function requestEmbeddings(
         model: getEmbeddingModel(),
         input,
       }),
+      signal: AbortSignal.timeout(8000),
     }
   );
 
@@ -283,6 +284,9 @@ export async function embedText(
   cleanEmbeddingCache();
   const cached = embeddingCache.get(cacheKey);
   if (cached && Date.now() < cached.expiry) {
+    if (process.env.CHAT_DEBUG === "true") {
+      console.log("[embed-timing] cache hit", { chars: trimmed.length });
+    }
     return cached.embedding;
   }
 
@@ -290,6 +294,11 @@ export async function embedText(
     return null;
   }
 
+  // DIAGNOSTIC (temporary, gated behind CHAT_DEBUG): isolate how much of
+  // retrieval_ms is the OpenAI embeddings API round-trip vs. the Postgres
+  // query, since retrieval_ms alone (14-16s observed) doesn't say which side
+  // is the bottleneck.
+  const embedApiStart = Date.now();
   try {
     const data = await withRetry(
       () => requestEmbeddings(trimmed),
@@ -297,6 +306,13 @@ export async function embedText(
     );
 
     const embedding = validateEmbedding(data?.data?.[0]?.embedding);
+
+    if (process.env.CHAT_DEBUG === "true") {
+      console.log("[embed-timing] api call", {
+        chars: trimmed.length,
+        ms: Date.now() - embedApiStart,
+      });
+    }
 
     if (embeddingCache.size >= EMBEDDING_CACHE_MAX_SIZE) {
       const firstKey = embeddingCache.keys().next().value;
