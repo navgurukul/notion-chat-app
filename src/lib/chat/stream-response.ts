@@ -220,6 +220,9 @@ export async function streamOpenAIAnswer(
   return new Response(readableStream, {
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
+      "X-Accel-Buffering": "no",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
       ...(userEmotion ? { "X-User-Emotion": userEmotion } : {}),
     },
   });
