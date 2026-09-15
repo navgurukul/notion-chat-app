@@ -19,7 +19,9 @@
     "backfill:notion-edited-at": "tsx scripts/backfill-notion-edited-at.ts",
     "eval": "tsx scripts/evaluate-rag.ts",
     "eval:retrieval": "tsx scripts/evaluate-retrieval.ts",
-    "eval:faithfulness": "tsx scripts/evaluate-faithfulness.ts"
+    "eval:faithfulness": "tsx scripts/evaluate-faithfulness.ts",
+    "diag:latency": "tsx scripts/diag-latency.ts",
+    "diag:latency2": "tsx scripts/diag-latency-2.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.971.0",

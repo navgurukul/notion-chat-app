@@ -517,3 +517,31 @@ export async function query<T = unknown>(
     throw error;
   }
 }
+
+
+/**
+ * Runs a query with sequential scan disabled for this transaction only.
+ * Use for ORDER BY embedding <=> ... queries — the planner's cost model
+ * underestimates TOAST fetch cost on wide vector columns and picks a much
+ * slower seq scan by default. Scoped to one transaction so it never affects
+ * other queries sharing the pool.
+ */
+export async function vectorQuery<T = unknown>(
+  text: string,
+  params?: unknown[],
+): Promise<T[]> {
+  await ensureSchema();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL enable_seqscan = off");
+    const result = await client.query(text, params);
+    await client.query("COMMIT");
+    return result.rows as T[];
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}

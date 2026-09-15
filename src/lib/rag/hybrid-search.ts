@@ -1,5 +1,5 @@
 import { embedText } from "@/lib/ai/embeddings";
-import { query } from "@/lib/db";
+import { query, vectorQuery } from "@/lib/db";
 import { simplifySearchQuery } from "@/lib/shared/search-query";
 import {
   dedupeByTextOverlap,
@@ -222,9 +222,9 @@ export async function fetchHybridChunkRows(
     return rows;
   };
 
-  if (vectorLiteral) {
+   if (vectorLiteral) {
     return bounds
-      ? query<ChunkHybridRow>(
+      ? vectorQuery<ChunkHybridRow>(
           `
           WITH sem AS (
             SELECT
@@ -291,7 +291,7 @@ END
           `,
           [vectorLiteral, ftsInput, cand, wSem, wKw, wSum, boostPattern, bounds.start, bounds.end],
         ).then(logDbTiming)
-      : query<ChunkHybridRow>(
+      : vectorQuery<ChunkHybridRow>(
           `
           WITH sem AS (
             SELECT
