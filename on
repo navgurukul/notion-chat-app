@@ -1,0 +1,687 @@
+[33mcommit 40bb71a07ff5c7f0b1fe5f286012a52d55da90c8[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mtamanna/planning-v.0.0.1[m[33m)[m
+Author: Tamanna Tanwar <tamanna22@navgurkul.org>
+Date:   Wed Jul 15 13:53:39 2026 +0530
+
+    feat: Enhance smalltalk interactions and improve response generation
+    
+    - Added examples of natural conversational responses in the system prompt for better user engagement.
+    - Refactored smalltalk detection and response generation logic to include a variety of responses based on user input.
+    - Implemented warm reply fallback mechanism for repeated smalltalk interactions to maintain conversational flow.
+    - Improved regex routing for smalltalk detection and added user name personalization in responses.
+    - Updated intent classification to include smalltalk examples for better training and accuracy.
+    - Introduced a new database schema management strategy to improve performance and maintainability.
+    - Added software design and architecture diagrams for better understanding of system components and data flow.
+    - Created a code review report highlighting strengths, weaknesses, and recommendations for future improvements.
+
+[33mcommit c78a2320dfd8b4ac9769de6ce86c097181bcca89[m[33m ([m[1;31morigin/tamanna/planning-v.0.0.1[m[33m)[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Tue Jul 7 23:06:44 2026 +0530
+
+    feat: enhance query resolution and noise topic handling; add test scripts
+
+[33mcommit 8e2f8b3b7b6f1973f9f64a82559160d8341502c6[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Tue Jul 7 20:30:19 2026 +0530
+
+    feat: enhance chat correction handling and API documentation
+    
+    - Added PendingClarification type to manage user clarifications in chat state.
+    - Improved entity resolution logic in lazyResolveRagEntities to handle pronouns and session names.
+    - Updated buildNotionContextWithConfidence to include loosenThreshold option for confidence assessment.
+    - Enhanced assessRetrievalConfidence to adjust thresholds based on loosen parameter.
+    - Created comprehensive API documentation detailing authentication, chat sessions, and message handling.
+    - Introduced check-people script to fetch and log team member directory.
+    - Implemented correction handling logic in a new correction.ts file to manage user feedback and entity corrections.
+    - Documented authentication and authorization flow for clarity on session management and route protection.
+
+[33mcommit 8d97c5f2f79acc2a8862f1f9201e8f433f740072[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Tue Jul 7 12:15:39 2026 +0530
+
+    feat: implement assignee project check and update related logic
+
+[33mcommit 71f123ebe7624745a918f5cfbb69548619c0b8a5[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Tue Jul 7 11:16:46 2026 +0530
+
+    refactor: enhance entity resolution and message handling logic
+
+[33mcommit 75d729484efa05fe0a6445118da8121a59a2fbae[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jul 6 15:15:44 2026 +0530
+
+    reolved build error
+
+[33mcommit 7dcd7b34cef87378de7d8740612e07f647e0f179[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jul 6 15:11:37 2026 +0530
+
+    improve overall pipeline
+
+[33mcommit 6e4b51af858063af6b1dfc8bd9fb938625f52598[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jul 6 10:04:29 2026 +0530
+
+    rules.ts had added
+
+[33mcommit 480c131c255bacc5a2d78790b8caedcaa4e6f492[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Sat Jul 4 00:18:16 2026 +0530
+
+    worked on latency
+
+[33mcommit e014230e7891dac4deffa6851288f0ee42202371[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Fri Jul 3 02:01:31 2026 +0530
+
+    added table formate for team details
+
+[33mcommit 41f3f75eea8984eeea573c35f6394b07da834b94[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Fri Jul 3 01:17:51 2026 +0530
+
+    Resolved bugs and enhanced code structure
+
+[33mcommit c22c764f0dd1fb971c3a8a60fce027b9fac1a435[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 29 19:35:04 2026 +0530
+
+    improve response quality
+
+[33mcommit 94fea23f4ce35b0b50887d2be57c98be9b1f4ca6[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Fri Jun 26 15:05:19 2026 +0530
+
+    resolve build error
+
+[33mcommit f8bfc18c2aaebfa4677c3a6366544fd28a2bb907[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Fri Jun 26 15:02:57 2026 +0530
+
+    Work on chat response improvement
+
+[33mcommit 42b4d8bf3aa5b28ba7c7a28b33eb05f41e0caf32[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Fri Jun 26 13:23:24 2026 +0530
+
+    improved response quality
+
+[33mcommit 2b1cf48f29121160483a87235ca21ee085fa192f[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Fri Jun 26 10:44:53 2026 +0530
+
+    improve retrival to understand emotions
+
+[33mcommit 584d60e6fc6aac8eb37f0208a027f7c86fb1e4d3[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Tue Jun 23 11:24:30 2026 +0530
+
+    private routing for cost-report page
+
+[33mcommit 8108c1dd2a7374390b4c497bec423ccb5df4a4a0[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Tue Jun 23 10:58:11 2026 +0530
+
+    enahnced and tested kowledge base
+
+[33mcommit c126ce91b0228a8016f014f369ca1b4af6cd3d0c[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 22 22:29:10 2026 +0530
+
+    updated postgres and sync with latest changes
+
+[33mcommit 0e51ae4b940591cef7d7734c7a8921ce26438f99[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 22 17:06:36 2026 +0530
+
+    work on knowledge base improvment
+
+[33mcommit 43c6d9e83ef8313f957308fa02cd5e75e5c34659[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Wed Jun 17 16:42:33 2026 +0530
+
+    worked on cost estimation page
+
+[33mcommit 083c5505982f0101757120dcfe101a06c6220b78[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Wed Jun 17 14:57:28 2026 +0530
+
+    worked on cost estimation
+
+[33mcommit 2d6093248102ef73f492c3eec2e95db37458d860[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Tue Jun 16 12:56:16 2026 +0530
+
+    Added access restriction for only non-navgurukul users
+
+[33mcommit 1e4ad3d38d2be24c1919784e200de77076be7638[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 15 13:31:31 2026 +0530
+
+    included page for cost estimation
+
+[33mcommit 1f32ebc0868c7debc15c09a50242db7337a50344[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Wed Jun 10 13:10:38 2026 +0530
+
+    updated pipeline.ts for managing history
+
+[33mcommit 0882c9aa3f8b0e6d0024d4fdb749f2640e2f30a9[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Wed Jun 10 12:43:36 2026 +0530
+
+    Imporved retrival for year queries
+
+[33mcommit 9e1e6f345701f8dbfd2a2f42b85294fa7ba7c6bb[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 8 15:17:07 2026 +0530
+
+    feat: reset messages and thinking state when switching chat sessions
+
+[33mcommit fcf9659bd80c37edf92160d53c7a7edad072cef0[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 8 12:19:22 2026 +0530
+
+    feat: add formatting functions for sync time display in chat sessions
+
+[33mcommit 7da7ba459cee07f78b23d28b470c238eb6c36ac1[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 8 11:09:08 2026 +0530
+
+    feat: add message deletion functionality and support for abort signal in chat handling
+
+[33mcommit 598afde8041877df3cedfd0527cf52edd4a2a63c[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 8 09:19:52 2026 +0530
+
+    feat: update chat input button to toggle between sending and stopping message generation
+
+[33mcommit b93a943cea467ac6bd31b0e7dc55f337a78cdfc9[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 8 09:13:38 2026 +0530
+
+    feat: enhance chat functionality with abort feature and year-based search queries
+    
+    - Added abort functionality to stop ongoing chat requests in the ChatPage component.
+    - Introduced a loading indicator that allows users to stop the current answer.
+    - Updated multi-query logic to preserve explicit names and years in search queries.
+    - Enhanced the pipeline to handle year constraints in various search functions.
+    - Modified query reformulation to maintain explicit year references.
+    - Implemented year-based filtering in the semantic search and hybrid search processes.
+    - Improved database queries to consider the edited date of Notion pages based on the specified year.
+
+[33mcommit 1d524e7dc177066661972d3f7b53ea8fcffa7bf8[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Thu Jun 4 16:23:21 2026 +0530
+
+    feat: enhance chunking logic for Notion pages with heading-aware section splitting and metadata tracking
+
+[33mcommit 2b850d0d1acda7f681b54df3eadc35e56ca665f0[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Wed Jun 3 11:50:10 2026 +0530
+
+    feat: add team member whitelist for person extraction
+
+[33mcommit cf7132ede1e9635ace7f1f592512cbd9a5976276[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Wed Jun 3 11:48:24 2026 +0530
+
+    feat: improve person name validation and add retrieval benchmarks documentation
+
+[33mcommit 9a8bb8639b500a4e21176ed92107e157f3f091e9[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 1 15:53:33 2026 +0530
+
+    feat: add functionality to retrieve existing empty chat sessions before creating a new one
+
+[33mcommit ea23c82ad3919a40481c9400de52d96cf787c818[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 1 13:46:27 2026 +0530
+
+    feat: update rate limiting logic to include retry-after response and adjust max requests
+
+[33mcommit d03cda7a47d4caba1d06a12c1b62fe38f6a006d1[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 1 13:43:07 2026 +0530
+
+    feat: implement rate limiting for chat API and increase max requests to 60
+
+[33mcommit 31fa84984f149e0d474708a0e6356db5a16c4254[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 1 12:39:17 2026 +0530
+
+    Refactor SQL answer handling and add language normalization utility
+    
+    - Improved code readability by formatting and organizing imports in `src/lib/sql/answers.ts`.
+    - Enhanced the `normalizeTopic`, `resolvePageOwner`, and other functions for better clarity and maintainability.
+    - Introduced a new utility in `src/lib/chat/normalize-language.ts` for normalizing user messages using Google Generative AI, ensuring intent preservation while correcting grammar and spelling.
+    - Implemented safety checks in the normalization process to prevent returning overly altered messages.
+
+[33mcommit b87462f7ac8bae270c8159fdf9e73fb006c66b20[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 1 10:03:06 2026 +0530
+
+    feat: enhance query parsing to support person and project assignments, and replace first-person pronouns with user's first name
+
+[33mcommit d38fb8836509e087e8a30e97859be1c38572e519[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon Jun 1 09:15:38 2026 +0530
+
+    feat: refactor chat API to remove rate limit checks and enhance RAG answer handling
+
+[33mcommit 754fd682ce4e4cc87d213ac9fae6cbd27e126898[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Fri May 29 13:07:04 2026 +0530
+
+    feat: implement access control and rate limiting for sync operations
+
+[33mcommit 693e266e8330c77dc85eac793b7609c0e69fba2b[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Fri May 29 12:48:42 2026 +0530
+
+    feat: implement cost-aware routing with LLM generation budget checks and retrieval-only answers
+
+[33mcommit 81c91a432953b0127c4a18fc81ea8238af3a4589[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Wed May 27 15:41:33 2026 +0530
+
+    feat: update logout message for clarity on chat data retention
+
+[33mcommit 33ba8f231204a06d394d2f41998c758665c48d23[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Wed May 27 15:36:54 2026 +0530
+
+    feat: enhance sidebar functionality with toggle and user email display
+
+[33mcommit 1075e5a939f7b93f141ec14d16f7506e0c4ab13d[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Wed May 27 14:05:03 2026 +0530
+
+    feat: add error handling and diagnostics for AI provider and chat routing
+    
+    - Implemented error message retrieval and Gemini quota error detection in provider-errors.ts.
+    - Introduced answer quality checks and fallback logic for SQL responses in answer-quality.ts.
+    - Added logging for chat routing decisions and retrieval diagnostics in retrieval-diagnostics.ts.
+    - Established routing policies for metadata-only queries in routing-policy.ts.
+    - Developed topic resolution functions for matching Notion page titles with user queries in topic-resolution.ts.
+    - Created retrieval confidence assessment for chunk hits in retrieval-confidence.ts.
+    - Enhanced SQL display formatting for chat answers in format-display.ts.
+    - Implemented project scope filtering and team roster extraction in project-scope.ts and team-roster.ts.
+
+[33mcommit 796b07183ef67868384adcb9c9d6254ade43fe8a[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon May 25 21:51:25 2026 +0530
+
+    feat: implement multi-query expansion and query reformulation for enhanced search capabilities
+    
+    - Added multi-query generation logic in `multi-query.ts` to create diverse search queries based on user input.
+    - Introduced query reformulation in `query-reformulation.ts` to convert chat questions into standalone search queries.
+    - Created metadata synchronization functions in `sync-metadata.ts` to track the last sync time with Notion.
+    - Defined embedding status management in `sync-status.ts` to handle embedding processing states.
+    - Implemented Maximum Marginal Relevance (MMR) selection in `mmr.ts` to improve retrieval of relevant chunks.
+    - Developed functions to extract search terms and titles from user questions in `question-terms.ts` and `search-titles.ts`.
+    - Added utility functions for text manipulation in `text-utils.ts` to support various text processing tasks.
+
+[33mcommit 2bf25f35c162966c261d87d6638baeb99daff218[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Fri May 22 12:21:14 2026 +0530
+
+    feat: enhance type safety in ChatPage and backfill script by refining session and message handling
+
+[33mcommit 5c909c21bcb18964713d69a10ee0c920a9c6c1e8[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Thu May 21 23:56:44 2026 +0530
+
+    feat: streamline sync UI by removing old format functions and enhancing sync button design
+
+[33mcommit a79be7ffaf17c086e4ee2b0054720efb5aa73ea7[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Thu May 21 20:56:52 2026 +0530
+
+    feat(sql): add SQL layer for direct answers from synced Notion rows,modular code, refactored codebase
+
+[33mcommit add222fe2957f83e7f29c1f12a562e53e849826f[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Thu May 21 12:51:41 2026 +0530
+
+    feat: add Notion to S3 export script and related utilities
+    
+    - Implemented a new script to export Notion pages to S3, including environment variable validation.
+    - Added utility functions for handling debug routes, environment presence checks, and error handling.
+    - Introduced rate limiting functionality to manage user requests.
+    - Created SQL utility functions for safe LIKE pattern usage.
+    - Developed stream tag utilities for processing streamed responses.
+    - Added chat handler for managing chat interactions and responses.
+    - Established API authentication utilities for session management.
+    - Introduced query handling and classification utilities for improved query resolution.
+    
+    move old , unused files into extra-old-files folder
+
+[33mcommit f6df7ecebf1ecba5d7bf873c8411eca0b4530bf6[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Wed May 20 16:17:31 2026 +0530
+
+    feat: Enhance query handling and entity resolution
+    
+    - Added new regex patterns to skip certain user turns for link requests in chat.
+    - Refactored metadata search to utilize new Notion types and improve query efficiency.
+    - Introduced cross-document topic extraction for better context understanding in queries.
+    - Removed deprecated query verifier and streamlined query parsing logic.
+    - Implemented entity resolution for ambiguous document titles to improve accuracy.
+    - Enhanced intent classification with LLM integration for better query understanding.
+    - Added telemetry logging for query routing to monitor performance and confidence levels.
+    - Created new utility functions for scoring regex parses and managing query confidence.
+
+[33mcommit 017b1190ec87b2d8052e7beb8272b7e5673380bc[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Wed May 20 00:13:08 2026 +0530
+
+    feat: enhance query handling with new types for project summaries, comparisons, risks, and onboarding tasks
+    
+    - Added support for new query types: project_summary, compare_pages, risks_for, and onboarding_tasks.
+    - Implemented functions to build project summaries and compare pages.
+    - Enhanced metadata handling to resolve page owners and provide fallback options.
+    - Improved query parsing to handle new question formats and extract relevant titles.
+    - Updated verification logic to include new query types in allowed kinds and intents.
+
+[33mcommit b1a00500c09ce4cf91943cee024961d4b3206a8b[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon May 18 00:11:09 2026 +0530
+
+    feat: add new query types for task ownership and enhance metadata handling
+
+[33mcommit 8b6c078d2a6025054753a7b5de9c59470a7c1133[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Sun May 17 21:59:05 2026 +0530
+
+    feat: enhance query parsing with year extraction and activity summary handling
+
+[33mcommit b3428bb7ecbfc35e04c520c206724812f6ce8f7a[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Sun May 17 19:05:44 2026 +0530
+
+    feat: add new query types and enhance metadata handling
+    
+    - Introduced new query types: team_activity, blocker_list, and project_eta.
+    - Updated query parsing logic to handle new query types and improve existing ones.
+    - Enhanced metadata query functions to support additional data retrieval and formatting.
+    - Implemented a verification script for smoke-testing query routing and SQL answers.
+    - Refactored chat route to utilize new context building functions for improved responses.
+    - Added utility functions for prefetching pages and extracting question terms from user queries.
+    - Improved response formatting to include more detailed information from Notion pages.
+
+[33mcommit 913234bfb0c7cdaecefa40983d8d9737d27eff56[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Sun May 17 11:04:17 2026 +0530
+
+    feat: enhance Notion sync with chunking and embedding support
+    
+    - Introduced chunking of page content for better embedding management.
+    - Added `notion_chunks` table to store chunked content and embeddings.
+    - Implemented logic to backfill `notion_edited_at` from Notion API.
+    - Enhanced sync functionality to limit the number of pages processed.
+    - Added scripts for embedding missing chunks and syncing Notion data.
+    - Improved query handling for activity summaries and page overviews.
+    - Updated database schema to accommodate new fields and indices.
+
+[33mcommit 11324a205817a1793bfe28cec810a295a9431a5f[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Wed May 13 10:03:11 2026 +0530
+
+    feat: enhance chat functionality with rate limiting, session management, and improved message storage
+
+[33mcommit 63c0fe4e688e3308ab2a25be7717443c3844aa9a[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Tue May 12 20:51:46 2026 +0530
+
+    feat: refactor chat functionality with PostgreSQL integration and enhance message handling
+
+[33mcommit 437161080c67961591b9bc370c058714a7052829[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Tue May 12 11:01:39 2026 +0530
+
+    feat: implement AI query verification and enhance chat message processing
+
+[33mcommit 32fb4d9ff0897cf050a4c5cd12e37bbc38260812[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Mon May 11 15:18:31 2026 +0530
+
+    feat: enhance sync functionality and query parsing for project management and assignments
+
+[33mcommit 71a41cfca96feb958297cdee588eaca8792c5787[m
+Author: Tamannatanwa <tamanna22@navgurukul.org>
+Date:   Fri May 8 23:02:22 2026 +0530
+
+    feat: implement Notion sync functionality with PostgreSQL integration
+    
+    - Add notion-sync.ts for syncing Notion pages to PostgreSQL, including error handling and retry logic.
+    - Create postgres.ts to manage PostgreSQL connection pooling and schema setup.
+    - Introduce query-router.ts for parsing user queries related to document ownership and status.
+    - Implement vector-search.ts for semantic and full-text search capabilities using embeddings and PostgreSQL's full-text search.
+
+[33mcommit fa25c67ef6e44bd17e71837f33ade832c59663cd[m[33m ([m[1;31morigin/integrate/deepseek[m[33m)[m
+Author: mahendra-shah <mahendra.workmail2@gmail.com>
+Date:   Mon May 4 12:54:00 2026 +0530
+
+    feat: Implement authentication with NextAuth and Google provider
+    
+    feat: Enhance AWS integration for Bedrock with improved query handling and context formatting
+    
+    feat: Add chat history sanitization and contextual search query building
+    
+    feat: Introduce debug utilities for environment variable checks and error handling
+    
+    refactor: Update Gemini integration to support DeepSeek as an alternative AI provider
+    
+    docs: Revise architecture and configuration documentation to reflect new AWS Bedrock and Notion export processes
+
+[33mcommit df491023ca3ea41ea976f8ea703edfa93f483ea8[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m
+Merge: 6aa98c5 5dce29d
+Author: Komal Ahire <komala18@navgurukul.org>
+Date:   Mon Feb 2 11:37:02 2026 +0530
+
+    Merge pull request #2 from navgurukul/featre/updated-script
+    
+    Featre/updated script
+
+[33mcommit 5dce29debc9ffcddf40aa91cb33e4b677da2f383[m[33m ([m[1;31morigin/featre/updated-script[m[33m)[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Mon Feb 2 11:35:53 2026 +0530
+
+    updated code
+
+[33mcommit a459874ce7e487b7abb427c4f916a411aaaa7e8c[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Sun Feb 1 11:25:22 2026 +0530
+
+    workend on new sript file
+
+[33mcommit 014ad61e18249d694f6e141bd058df710f3e35a7[m[33m ([m[1;31morigin/feature/new-script[m[33m)[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Sat Jan 31 21:15:15 2026 +0530
+
+    added new script
+
+[33mcommit cc49b9463bb5fb74203726338154eea48f52f543[m
+Author: Shivansh3218 <shivanshrawat587@gmail.com>
+Date:   Fri Jan 30 19:59:52 2026 +0530
+
+    fix import script
+
+[33mcommit 6aa98c5d32bf94931dc3db97b596e6dd92b9804f[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Wed Jan 28 16:29:47 2026 +0530
+
+    fixed type errors
+
+[33mcommit 4909a08f9d735a8b050fdb1fb5b6b44f2a5f84ed[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Sat Jan 17 15:14:56 2026 +0530
+
+    integration notion s3 and Bedrock
+
+[33mcommit 1da62d66e450740b0f63ce954fbefc73d61da309[m
+Author: Abhishek Gupta <abhishekgupta.iitd@gmail.com>
+Date:   Thu Jan 15 21:21:14 2026 +0530
+
+    feat: Implement AWS Bedrock knowledge base integration for RAG and Gemini for chat streaming, including debug endpoints.
+
+[33mcommit a661584943b1b24a1c51e6591e766ca9d0a95307[m
+Author: Abhishek Gupta <abhishekgupta.iitd@gmail.com>
+Date:   Thu Jan 15 19:57:13 2026 +0530
+
+    Notion integration, and AWS-backed database synchronization.
+
+[33mcommit a53c2da9a5ca7344982cd4fe70f489a7bef46f3f[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Thu Jan 15 17:58:18 2026 +0530
+
+    Bedrock integration
+
+[33mcommit baa58b810650fd310636a56a4b15ac2bea89a7af[m
+Author: Abhishek Gupta <abhishekgupta.iitd@gmail.com>
+Date:   Wed Jan 14 13:35:07 2026 +0530
+
+    feat: Implement RAG using AWS Bedrock Knowledge Bases
+
+[33mcommit e45940d15553420e892171f99cf48ae330bf046a[m
+Merge: 3bfe5f0 70f7b99
+Author: Komal Ahire <komala18@navgurukul.org>
+Date:   Wed Jan 14 13:23:33 2026 +0530
+
+    Merge pull request #1 from navgurukul/basic-flow-v1
+    
+    Basic flow v1
+
+[33mcommit 70f7b99d74d4959de9e840a0c034cf2fc15b09df[m[33m ([m[1;31morigin/basic-flow-v1[m[33m)[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Wed Jan 14 13:22:55 2026 +0530
+
+    notion integration
+
+[33mcommit 783cbd7013de69199a7839eb4674d8f3f125431b[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Tue Jan 13 16:59:45 2026 +0530
+
+    added new route
+
+[33mcommit 72a24248672036277f4dff5bcf7c9b026ac134d4[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Tue Jan 13 15:59:48 2026 +0530
+
+    Use NEXT_PUBLIC_ env vars per .env updates
+
+[33mcommit 48c422dbe280043dee1a5986836a39354bfec5bc[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Tue Jan 13 15:47:21 2026 +0530
+
+    Use NEXT_PUBLIC_ env vars per .env updates
+
+[33mcommit 9df711e4c67b129eb9491973fb87e9a499fa50f7[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Tue Jan 13 14:39:45 2026 +0530
+
+    Add environment variable debugging and amplify.yml
+
+[33mcommit abbca16dcf73473b7a2c79dad71423abd384752d[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Tue Jan 13 14:08:22 2026 +0530
+
+    Add environment variable debugging and amplify.yml
+
+[33mcommit cb251806ae998327d7f50451e639afa211749a8a[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Tue Jan 13 13:41:53 2026 +0530
+
+    Remove standalone output for Amplify compatibility
+
+[33mcommit 650d8a97a4884725fd34c63b12d627f25c446d67[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Tue Jan 13 13:27:54 2026 +0530
+
+    Add explicit callback URL to signIn
+
+[33mcommit e012f104cd20ca791cf11286303279fb003af45b[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Tue Jan 13 13:14:04 2026 +0530
+
+    added nextaurth secret
+
+[33mcommit 3f3a1c9eb6baf46fa3cdd07d3caafca7338225ef[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Tue Jan 13 10:50:04 2026 +0530
+
+    build
+
+[33mcommit 1ff5bf6c4175ebe5e690e4ff065c0c849d8d29be[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Tue Jan 13 10:42:29 2026 +0530
+
+    fix: enable standalone output for amplify
+
+[33mcommit 4a79cdbe3a5cf247a24f5afe64175bd2c79b8569[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Tue Jan 13 10:29:25 2026 +0530
+
+    Implemented alldocs notion page
+
+[33mcommit e69551df7f15a734f0586ad718023798d4b5b081[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Tue Jan 13 09:32:27 2026 +0530
+
+    working flow
+
+[33mcommit 0c801f28581c469ce161f784a18e77f4cc26bf4b[m[33m ([m[1;31morigin/basic-flow[m[33m)[m
+Author: komalahire <komala@navgurukul.org>
+Date:   Mon Jan 12 22:22:14 2026 +0530
+
+    Configure environment variables and fix API integrations for Notion chat with Gemini AI
+
+[33mcommit 3bfe5f092655770c5f405f52a73b21f3c4be7269[m
+Author: Abhishek Gupta <abhishekgupta.iitd@gmail.com>
+Date:   Sun Jan 11 15:10:56 2026 +0530
+
+    Implement Persistent Chat History, Markdown Rendering, and Streaming AI Responses
+
+[33mcommit d034382dbd476bfd8c85d9e3344eee6f40379e4b[m
+Author: Abhishek Gupta <abhishekgupta.iitd@gmail.com>
+Date:   Sun Jan 11 12:31:21 2026 +0530
+
+    Add project wiki documentation
+
+[33mcommit 764e3c769c4e55bd84f6f110d9c5510e6ff7a79a[m
+Author: Abhishek Gupta <abhishekgupta.iitd@gmail.com>
+Date:   Sun Jan 11 12:30:27 2026 +0530
+
+    Update license to GPL-3.0 in README and package.json
+
+[33mcommit ff7474feec555a067ff1b4ac9e57fe98126821e5[m
+Author: Abhishek Gupta <abhishekgupta.iitd@gmail.com>
+Date:   Sun Jan 11 12:09:18 2026 +0530
+
+    Update README with project purpose and documentation
+
+[33mcommit 69131469bbfa44a89cf97110e0d6c2d8d31d2b28[m
+Merge: 1e38e8e 72d3029
+Author: Abhishek Gupta <abhishekgupta.iitd@gmail.com>
+Date:   Sun Jan 11 12:06:53 2026 +0530
+
+    Merge branch 'main' of https://github.com/navgurukul/notion-chat-app
+
+[33mcommit 1e38e8e32837b1b30476f1cd31b7e96e72ca6b2f[m
+Author: Abhishek Gupta <abhishekgupta.iitd@gmail.com>
+Date:   Sun Jan 11 12:06:26 2026 +0530
+
+    Initial commit: Notion AI Chat App
+
+[33mcommit 72d302956855918c490e0695833e8afa1390d25e[m
+Author: Abhishek Gupta <abhishekgupta.iitd@gmail.com>
+Date:   Sun Jan 11 12:06:21 2026 +0530
+
+    Initial commit
+
+[33mcommit 6d594f30424cce1a9e3a9de3c5d12d0f7a7552e3[m
+Author: Abhishek Gupta <abhishekgupta.iitd@gmail.com>
+Date:   Sun Jan 11 11:06:48 2026 +0530
+
+    Initial commit from Create Next App

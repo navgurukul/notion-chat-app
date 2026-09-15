@@ -1,6 +1,6 @@
 # Notion AI Chat Assistant
 
-A premium AI-powered web application that allows users to chat with their Notion databases. Users can authenticate using their Google accounts to interact with their Notion data through a sleek, modern interface powered by Gemini 1.5 Flash.
+A premium AI-powered web application that allows users to chat with a Notion workspace exported into an S3-backed Amazon Bedrock Knowledge Base. Users authenticate with Google, ask questions in the chat UI, and receive ai-powered answers grounded in retrieved Notion context.
 
 ## 🌟 Purpose
 
@@ -9,9 +9,10 @@ The **Notion AI Chat Assistant** is designed to bridge the gap between static No
 ## ✨ Features
 
 -   **Google OAuth Login**: Seamless authentication using `next-auth`.
--   **Notion Integration**: Real-time content fetching from Notion databases using the official SDK.
--   **Gemini AI Engine**: Leveraging Google's Gemini 1.5 Flash for high-speed, intelligent responses.
--   **Premium Design**: A high-end dark mode interface built with Tailwind CSS and glassmorphism.
+-   **Notion Workspace Export**: Manual Notion-to-S3 export script using the official Notion SDK.
+-   **Hybrid Vector & SQL Search**: Direct Postgres SQL lookup and vector search context retrieval.
+-   **AI Engine**: Unified OpenAI provider (`gpt-4o-mini` / `text-embedding-3-small`) for fast, intelligent responses.
+-   **Premium Design**: A high-end interface built with modern CSS and dynamic animations.
 -   **Context-Aware**: AI responses are strictly grounded in your Notion database content.
 
 ## 🚀 Getting Started
@@ -21,7 +22,7 @@ The **Notion AI Chat Assistant** is designed to bridge the gap between static No
 You will need the following API keys:
 -   **Google Cloud Console**: For OAuth Client ID and Secret.
 -   **Notion Integrations**: For the Internal Integration Token.
--   **Google AI Studio**: For the Gemini API Key.
+-   **OpenAI**: For `OPENAI_API_KEY` (used for embeddings, intent resolution, and response generation).
 
 ### Installation
 
@@ -47,15 +48,20 @@ You will need the following API keys:
     npm run dev
     ```
 
-5.  Open [http://localhost:3000](http://localhost:3000) in your browser.
+5.  Run E2E pipeline test suite:
+    ```bash
+    npm run test:e2e
+    ```
+
+6.  Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## 🛠 Tech Stack
 
 -   **Framework**: [Next.js](https://nextjs.org/) (App Router)
 -   **Authentication**: [NextAuth.js](https://next-auth.js.org/)
--   **AI**: [Google Gemini SDK](https://ai.google.dev/)
--   **Database API**: [@notionhq/client](https://www.npmjs.com/package/@notionhq/client)
--   **Styling**: Tailwind CSS & Lucide Icons
+-   **AI**: [OpenAI SDK](https://platform.openai.com/docs/api-reference) (Embeddings, Completions, and Streaming)
+-   **Database / RAG**: Neon PostgreSQL with `pgvector` + OpenAI Embeddings
+-   **Workspace Export**: [@notionhq/client](https://www.npmjs.com/package/@notionhq/client)
 
 ## 📜 License
 
