@@ -2,7 +2,7 @@ import type { Session } from "next-auth";
 import type { ParsedQuery } from "@/lib/query/types";
 import { PipelineContext, logChatRoute, logRetrievalDiagnostics } from "./telemetry";
 import { isMetadataOnlyKind, metadataNotFoundAnswer, shouldExpandRagQuery } from "@/lib/chat/routing-policy";
-import { reformulateAndExpand } from "@/lib/chat/query-tools";
+import { reformulateAndExpand, expandSearchQueries, type UnifiedSearchQuery } from "@/lib/chat/query-tools";
 import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
 import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
@@ -180,14 +180,53 @@ export async function tryRagAnswer(
     if (!explicitPage && !usePreReformulated) {
       if (ctx.telemetry) {
         ctx.telemetry.startStep("reformulation_ms");
-        ctx.telemetry.incrementLlmCalls();
       }
-      const unified = await reformulateAndExpand(
-        ctx.message,
-        ctx.history,
-        finalParsed.kind,
-        !shouldExpand
-      );
+
+      let unified: UnifiedSearchQuery;
+
+      // FIX (latency): this branch used to always call reformulateAndExpand()
+      // with the RAW ctx.message, which silently re-derives the follow-up
+      // rewrite from scratch via a fresh LLM call even when Layer 4
+      // (resolve-query.ts -> reformulateSearchQuery) already paid for that
+      // exact rewrite this turn (ctx.reformulatedQuery). That double LLM
+      // round-trip only happened when shouldExpand was true, since the
+      // cheaper "usePreReformulated" branch above already handles the
+      // shouldExpand=false case. Reusing ctx.reformulatedQuery here and only
+      // calling the (cheaper, single-purpose) expansion step removes one
+      // full LLM call for every expand-eligible follow-up query.
+      if (ctx.reformulatedQuery) {
+        if (shouldExpand) {
+          if (ctx.telemetry) ctx.telemetry.incrementLlmCalls();
+          const expanded = await expandSearchQueries(
+            ctx.reformulatedQuery,
+            ctx.history,
+            ctx.reformulatedQuery,
+            finalParsed.kind
+          );
+          unified = {
+            searchQuery: ctx.reformulatedQuery,
+            queries: expanded.queries,
+            reformulationMethod: "llm", // already reformulated by Layer 4
+            multiQueryMethod: expanded.method,
+          };
+        } else {
+          unified = {
+            searchQuery: ctx.reformulatedQuery,
+            queries: [ctx.reformulatedQuery],
+            reformulationMethod: "llm",
+            multiQueryMethod: "disabled",
+          };
+        }
+      } else {
+        if (ctx.telemetry) ctx.telemetry.incrementLlmCalls();
+        unified = await reformulateAndExpand(
+          ctx.message,
+          ctx.history,
+          finalParsed.kind,
+          !shouldExpand
+        );
+      }
+
       if (ctx.telemetry) {
         ctx.telemetry.endStep("reformulation_ms");
         ctx.telemetry.setReformulatedQuery(unified.searchQuery);
