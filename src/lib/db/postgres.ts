@@ -14,10 +14,13 @@ const globalForPostgres = globalThis as unknown as {
   schemaPromise: Promise<void> | null | undefined;
 };
 
-const poolConfig: any = {
-  connectionString: databaseUrl,
-  lookup: dns.lookup,
-};
+   const poolConfig: any = {
+     connectionString: databaseUrl,
+     lookup: dns.lookup,
+     min: 1,
+     idleTimeoutMillis: 60_000,
+     keepAlive: true,
+   };
 
 export const pool =
   globalForPostgres.pool ??
