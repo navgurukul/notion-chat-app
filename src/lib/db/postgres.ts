@@ -14,10 +14,13 @@ const globalForPostgres = globalThis as unknown as {
   schemaPromise: Promise<void> | null | undefined;
 };
 
-const poolConfig: any = {
-  connectionString: databaseUrl,
-  lookup: dns.lookup,
-};
+   const poolConfig: any = {
+     connectionString: databaseUrl,
+     lookup: dns.lookup,
+     min: 1,
+     idleTimeoutMillis: 60_000,
+     keepAlive: true,
+   };
 
 export const pool =
   globalForPostgres.pool ??
@@ -215,11 +218,6 @@ async function ensureNotionChunksSchema(client: PoolClient) {
 
   await client.query(`
     CREATE INDEX IF NOT EXISTS notion_chunks_embedding_idx
-    ON notion_chunks
-    USING hnsw (embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
-
-    CREATE INDEX IF NOT EXISTS idx_notion_chunks_embedding
     ON notion_chunks
     USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);

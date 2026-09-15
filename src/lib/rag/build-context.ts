@@ -251,8 +251,7 @@ export async function prefetchPagesFromQuestion(
                 )
               ) AS rank
             FROM notion_pages
-            WHERE to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, ''))
-              @@ plainto_tsquery('english', $1)
+                     WHERE fts @@ plainto_tsquery('simple', $1)
               AND notion_edited_at >= $2::timestamptz
               AND notion_edited_at < $3::timestamptz
             ORDER BY rank DESC, notion_edited_at DESC NULLS LAST

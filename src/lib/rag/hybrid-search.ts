@@ -205,6 +205,23 @@ export async function fetchHybridChunkRows(
     ? "c.embedding::text AS embedding_literal"
     : "NULL AS embedding_literal";
 
+  // DIAGNOSTIC (temporary, gated behind CHAT_DEBUG): time the Postgres side
+  // separately from the embedding API call (logged in embeddings.ts) so we
+  // can see which one actually accounts for retrieval_ms.
+  const dbStart = Date.now();
+  const logDbTiming = (rows: ChunkHybridRow[]) => {
+    if (process.env.CHAT_DEBUG === "true") {
+      console.log("[db-timing] hybrid chunk query", {
+        searchQuery: raw.slice(0, 60),
+        rows: rows.length,
+        candidateLimit: cand,
+        usedVector: Boolean(vectorLiteral),
+        ms: Date.now() - dbStart,
+      });
+    }
+    return rows;
+  };
+
   if (vectorLiteral) {
     return bounds
       ? query<ChunkHybridRow>(
@@ -273,7 +290,7 @@ END
           LIMIT $3
           `,
           [vectorLiteral, ftsInput, cand, wSem, wKw, wSum, boostPattern, bounds.start, bounds.end],
-        )
+        ).then(logDbTiming)
       : query<ChunkHybridRow>(
           `
           WITH sem AS (
@@ -332,7 +349,7 @@ END
           LIMIT $3
           `,
           [vectorLiteral, ftsInput, cand, wSem, wKw, wSum, boostPattern],
-        );
+        ).then(logDbTiming);
   }
 
   return bounds
@@ -361,7 +378,7 @@ END
           LIMIT $4
         `,
         [ftsInput, bounds.start, bounds.end, cand],
-      )
+      ).then(logDbTiming)
     : query<ChunkHybridRow>(
         `
           SELECT
@@ -385,7 +402,7 @@ END
           LIMIT $2
         `,
         [ftsInput, cand],
-      );
+      ).then(logDbTiming);
 }
 
 export type HybridChunkRetrieval = {
