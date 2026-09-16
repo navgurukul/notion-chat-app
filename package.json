@@ -22,7 +22,8 @@
     "eval:faithfulness": "tsx scripts/evaluate-faithfulness.ts",
     "diag:latency": "tsx scripts/diag-latency.ts",
     "diag:latency2": "tsx scripts/diag-latency-2.ts",
-    "diag:latency3": "tsx scripts/diag-latency-3.ts"
+    "diag:latency3": "tsx scripts/diag-latency-3.ts",
+    "warm:cache": "tsx scripts/warm-cache.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.971.0",
