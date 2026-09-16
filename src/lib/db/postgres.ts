@@ -261,7 +261,7 @@ async function runColumnMigrations(
   }
 }
 
-const CURRENT_SCHEMA_HASH = "v8_hnsw_fts";
+const CURRENT_SCHEMA_HASH = "v9_title_trgm";
 
 export async function ensureSchema() {
   if (schemaReady) return;
@@ -412,10 +412,18 @@ export async function ensureSchema() {
         `);
       }
 
-      await client.query(`
+         await client.query(`
         CREATE INDEX IF NOT EXISTS notion_pages_fts_idx
         ON notion_pages
         USING gin (fts);
+      `);
+
+      await client.query(`
+        CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+        CREATE INDEX IF NOT EXISTS notion_pages_title_trgm_idx
+        ON notion_pages
+        USING gin (title gin_trgm_ops);
       `);
 
       await ensureNotionChunksSchema(client);
