@@ -22,6 +22,8 @@ const globalForPostgres = globalThis as unknown as {
      keepAlive: true,
    };
 
+const isNewPool = !globalForPostgres.pool;
+
 export const pool =
   globalForPostgres.pool ??
   new Pool(poolConfig);
@@ -32,6 +34,33 @@ pool.on("error", (error) => {
 
 if (process.env.NODE_ENV !== "production") {
   globalForPostgres.pool = pool;
+}
+
+// FIX (Latency): `min` in poolConfig above is NOT a real node-postgres option —
+// pg-pool only reads `options.min` to decide whether an *already-open* idle
+// client may be pruned; it never eagerly opens connections at startup. So the
+// pool was always cold: the very first query on a fresh process/instance paid
+// the full TCP+TLS handshake to Neon (and any autosuspend wake-up), often
+// several seconds, even though the query itself executes in <1ms. Confirmed
+// via scripts/check-resolve-document.ts: identical EXPLAIN ANALYZE query took
+// 3326ms cold vs 265ms once the pool already had a live connection.
+//
+// Fix: eagerly open one real connection as soon as this module loads, so the
+// handshake cost is paid once at process/instance boot instead of on a user's
+// first request. Then keep it alive with a lightweight ping so it never sits
+// idle past idleTimeoutMillis and forces a reconnect on the next request.
+if (isNewPool) {
+  pool.query("SELECT 1").catch((error) => {
+    console.error("[postgres] Pool warm-up query failed:", error);
+  });
+
+  const keepAliveMs = Math.max(1_000, (poolConfig.idleTimeoutMillis ?? 60_000) - 10_000);
+  const keepAliveTimer = setInterval(() => {
+    pool.query("SELECT 1").catch((error) => {
+      console.error("[postgres] Keep-alive ping failed:", error);
+    });
+  }, keepAliveMs);
+  keepAliveTimer.unref?.();
 }
 
 let schemaReady = globalForPostgres.schemaReady ?? false;
