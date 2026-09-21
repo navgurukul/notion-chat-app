@@ -1587,11 +1587,57 @@ async function handleProjectMemberBreakdown(): Promise<string> {
   return `## Project member breakdown\n\n${tableMarkdown}\n\n_Counts distinct people found as owner, creator, last editor, or in team-roster/assignee text on synced pages, grouped by inferred project area._`;
 }
 
+async function handleProjectList(): Promise<string> {
+  const ranked = await collectProjectMemberCounts();
+
+  const additionalRows = await query<{ title: string | null; url: string | null }>(`
+    SELECT DISTINCT title, url
+    FROM notion_pages
+    WHERE lower(coalesce(doc_type, '')) LIKE '%project%'
+       OR lower(coalesce(title, '')) LIKE '% project'
+       OR lower(coalesce(title, '')) LIKE '% hub'
+    ORDER BY title
+  `);
+
+  const seen = new Set(ranked.map((p) => p.title.toLowerCase()));
+  const extraList: string[] = [];
+
+  for (const r of additionalRows) {
+    if (!r.title) continue;
+    const norm = r.title.trim().toLowerCase();
+    if (!seen.has(norm)) {
+      seen.add(norm);
+      const formattedTitle = r.url ? `[**${r.title.trim()}**](${r.url})` : `**${r.title.trim()}**`;
+      extraList.push(`- ${formattedTitle}`);
+    }
+  }
+
+  if (!ranked.length && !extraList.length) {
+    return "No projects found in the synced Notion data.";
+  }
+
+  const mainList = ranked
+    .map((p) => `- **${p.title}** (${p.dev_count} contributor${p.dev_count === 1 ? "" : "s"})`)
+    .join("\n");
+
+  let result = `## Projects in NavGurukul (${ranked.length + extraList.length})\n\nHere are all the main projects found in the synced Notion data:\n\n${mainList}`;
+
+  if (extraList.length > 0) {
+    result += `\n\n### Additional Project Hubs & Pages:\n${extraList.join("\n")}`;
+  }
+
+  result += `\n\n*Note: This list represents all active project areas and project pages in the synced Notion workspace.*`;
+  return result;
+}
+
 async function handleMetadataQueryInner(
   parsed: ParsedQuery,
 ): Promise<string | null> {
   if (parsed.kind === "people_list") {
     return handlePeopleList();
+  }
+  if (parsed.kind === "project_list") {
+    return handleProjectList();
   }
   if (parsed.kind === "project_most_devs") {
     return handleProjectMostDevs();

@@ -54,7 +54,7 @@ const ALL_KINDS: QueryKind[] = [
   "assigned_list", "assigned_to_of", "worked_on_list", "project_manager_of",
   "topic_list", "type_of", "status_of", "activity_summary", "team_activity",
   "team_roster", "blocker_list", "project_eta", "compare_pages", "page_about",
-  "project_summary", "risks_for", "onboarding_tasks", "people_list",
+  "project_summary", "risks_for", "onboarding_tasks", "people_list", "project_list",
   "analytics", "project_most_devs", "project_member_breakdown", "semantic",
   "smalltalk", "person_project_membership", "assignee_project_check",
 ];
@@ -121,6 +121,7 @@ Intent guide:
 - team_activity: most/least active person in a team/project (based on question wording)
 - team_roster: who is working on a project (all contributors, not only owner)
 - people_list: directory lists, listing all developers, listing all team members ("Who are all developers?", "List team members")
+- project_list: directory list of all projects or project names in the workspace ("give all project name in navgurukul", "list all projects", "what are all the project names")
 - analytics: statistical aggregation queries ("Which project has the most developers?", "project with most assignees")
 - compare_pages: compare two pages, projects, or documents ("compare Oscar MVP and Oscar App")
 - project_most_devs: identify the project with the largest developer count
