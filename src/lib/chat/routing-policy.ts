@@ -29,6 +29,7 @@ export const QUERY_KIND_CONFIG: Record<QueryKind, QueryKindConfig> = {
   onboarding_tasks: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: true, shouldExpandRag: false },
   risks_for: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: true, shouldExpandRag: true },
   people_list: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
+  project_list: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
   project_most_devs: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
   project_member_breakdown: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
   person_project_membership: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
@@ -116,6 +117,8 @@ export function metadataNotFoundAnswer(parsed: ParsedQuery): string {
         : "No project name found — e.g. **Who all are working on datapivots ai?**";
     case "project_member_breakdown":
       return `No project data found to generate a member breakdown. Try **Sync changes** or ask about a specific project with **"who is working on [project]?"**`;
+    case "project_list":
+      return "No projects found in the synced Notion workspace data. Use **Sync changes** to sync your Notion workspace.";
     case "person_project_membership":
       return person && title
         ? `No. I couldn't find **${person}** associated with the **${title}** project in synced Notion data.`

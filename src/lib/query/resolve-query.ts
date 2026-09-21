@@ -23,7 +23,7 @@ const INTENT_KIND_HINTS: Record<string, Set<ParsedQuery["kind"]>> = {
   PROJECT_TEAM: new Set(["team_roster", "team_activity"]),
   PROJECT_SUMMARY: new Set(["project_summary", "page_about"]),
   PROJECT_STATUS: new Set(["status_of", "project_eta"]),
-  ANALYTICS: new Set(["analytics", "project_most_devs", "project_member_breakdown", "people_list"]),
+  ANALYTICS: new Set(["analytics", "project_most_devs", "project_member_breakdown", "people_list", "project_list"]),
   COMPARISON: new Set(["compare_pages"]),
   UNKNOWN: new Set(),
 };

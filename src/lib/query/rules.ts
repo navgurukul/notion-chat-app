@@ -33,7 +33,7 @@ function withYear(question: string, partial: Omit<RulesQuery, "raw" | "year">): 
 
 // ─── Reusable keyword groups ────────────────────────────────────────────────
 const PEOPLE_WORDS = ["developers", "developer", "devs", "dev", "engineers", "engineer", "people", "team members", "team member"];
-const LIST_WORDS = ["list", "show", "display", "get"];
+const LIST_WORDS = ["list", "show", "display", "get", "give", "give me", "provide"];
 const COUNT_WORDS = ["how many", "number of", "total", "count"];
 
 function keywordsPattern(words: string[], flags = "i"): RegExp {
@@ -306,15 +306,28 @@ export function parseQueryByRules(question: string): RulesQuery {
   }
 
   const memberBreakdownPatterns = [
-    /\b(?:show|list|get|display|give)\s+(?:all\s+)?(?:projects?|teams?)\s+(?:with\s+)?(?:members?|people|team\s+members?|team\s+size|member\s+count)\b/i,
-    /\b(?:project|team|project\s+wise)\s*(?:members?|people|member\s+count|team\s+size|strength)\b/i,
-    /\b(?:which|what)\s+(?:projects?|teams?)\s+(?:have|has)\s+(?:how\s+many|the\s+most|most)\s+(?:members?|people|devs|developers)\b/i,
+    /\b(?:show|list|get|display|give)\s+(?:all\s+)?(?:projects?)\s+(?:with\s+)?(?:members?|people|team\s+members?|team\s+size|member\s+count)\b/i,
+    /\b(?:project|project\s+wise)\s*(?:members?|people|member\s+count|team\s+size|strength)\b/i,
+    /\b(?:which|what)\s+(?:projects?)\s+(?:have|has)\s+(?:how\s+many|the\s+most|most)\s+(?:members?|people|devs|developers)\b/i,
     /\bgroup\s+(?:by|per)\s+(?:project|team)\b/i,
     /\b(?:per|by)\s+project\s+(?:member|team|people|strength)\b/i,
     /\bbreakdown\s+(?:of\s+)?(?:members?|people|team)\s+(?:by|per)\s+(?:project|team)\b/i,
   ];
   if (memberBreakdownPatterns.some(p => p.test(q))) {
     return { kind: "project_member_breakdown", raw: question, parserConfidence: 0.90 };
+  }
+
+  const projectListPatterns = [
+    /^(?:give|show|list|get|display|what\s+are)\s+(?:all\s+)?(?:the\s+)?(?:project\s+names?|projects?|list\s+of\s+projects?)(?:\s+(?:in|of|for|at)\s+(?:navgurukul|ng|the\s+workspace|workspace))?[.?!]?\s*$/i,
+    /^(?:all\s+)?(?:project\s+names?|list\s+of\s+projects?)(?:\s+(?:in|of|for|at)\s+(?:navgurukul|ng|the\s+workspace|workspace))?[.?!]?\s*$/i,
+    /\b(?:list|show|get|display|give)\s+(?:all\s+)?(?:the\s+)?(?:project\s+names?|projects?)\b/i,
+    /\bwhat\s+are\s+(?:all\s+)?(?:the\s+)?(?:project\s+names?|projects?)\b/i,
+    /\bwhich\s+projects?\s+(?:exist|are\s+there|do\s+we\s+have)\b/i,
+    /\bprojects?\s+in\s+navgurukul\b/i,
+    /\ball\s+projects?\s+(?:in|at|of)\b/i,
+  ];
+  if (projectListPatterns.some(p => p.test(q))) {
+    return { kind: "project_list", raw: question, parserConfidence: 0.95 };
   }
 
   if (/\bwho\s+(?:is|are)\s+(?:the\s+)?(?:project\s+)?(?:manager|lead|pm)\s+(?:of|for|on)\b/i.test(q)) {
@@ -812,6 +825,7 @@ const HIGH_PRECISION_KINDS = new Set<QueryKind>([
   "team_activity",
   "team_roster",
   "people_list",
+  "project_list",
   "analytics"
 ]);
 

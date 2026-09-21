@@ -56,10 +56,8 @@ export function startBackgroundSyncScheduler(): void {
 
   console.log(`[scheduler] Background Notion sync scheduler initialized (Running every ${hours} hour(s)).`);
 
-  // Run initial background sync after a short delay on server boot
-  setTimeout(() => {
-    runBackgroundSync("startup");
-  }, 10_000);
+  // Automatic startup sync on dev/server boot removed to avoid repetitive full syncs on restart.
+  // Sync will run on the scheduled interval (e.g., every 4 hours) or when manually triggered.
 
   // Schedule recurring sync every 4 hours
   globalForScheduler.syncSchedulerTimer = setInterval(() => {
