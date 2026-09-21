@@ -83,7 +83,7 @@ function createConcurrencyLimit(limit: number) {
 function getSyncConcurrency(): number {
   const parsed = Number(process.env.SYNC_CONCURRENCY);
   if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
-  return 8; // safe default: 8 parallel pages
+  return 4; // safe default: 4 parallel pages (prevents API rate-limit throttling during chat)
 }
 
 // ---------------------------------------------------------------------------

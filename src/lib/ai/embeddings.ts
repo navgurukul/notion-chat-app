@@ -11,8 +11,8 @@ const RETRYABLE_STATUS_CODES = new Set([500, 502, 503, 504]);
 
 export const EMBEDDING_DIMENSIONS = 1536;
 
-/** OpenAI embedding models accept up to 8192 tokens per input. */
-const DEFAULT_MAX_EMBEDDING_CHARS = 28_000;
+/** OpenAI embedding models accept up to 8192 tokens per input (~12k-16k chars). */
+const DEFAULT_MAX_EMBEDDING_CHARS = 12_000;
 
 export type EmbeddingTextSource = {
   title?: string | null;
@@ -209,7 +209,7 @@ async function requestEmbeddings(
         model: getEmbeddingModel(),
         input,
       }),
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(30000),
     }
   );
 
@@ -360,7 +360,8 @@ async function embedBatchSlice(batch: string[]) {
 
     const results: (number[] | null)[] = [];
     for (const text of batch) {
-      const single = truncateForEmbedding(text);
+      // Aggressively truncate to 6000 chars on token limit error to guarantee OpenAI <=8192 token acceptance
+      const single = truncateForEmbedding(text).slice(0, 6000);
       if (!single) {
         results.push(null);
         continue;
