@@ -99,13 +99,23 @@ export function createEmptyTimings(): PipelineTimings {
 }
 
 // Latency Budgets (in milliseconds)
+//
+// FIX (Latency): these were set far below anything achievable given a single
+// DB round-trip to Neon measures ~300-400ms even on a warm connection, and a
+// single LLM classification/reformulation call routinely takes 500ms-2s+.
+// At the old values, budgetWarnings fired on nearly every request regardless
+// of whether anything was actually wrong, which buries genuine regressions
+// in constant noise instead of flagging them. Recalibrated around measured
+// baselines with real margin, and total_ms now matches the project's own
+// stated target ("Response Time < 5 sec" in the DREAM SCORECARD) instead of
+// an arbitrary tighter number.
 export const LATENCY_BUDGETS = {
-  entity_resolve_ms: 50,
-  intent_classifier_ms: 150,
-  sql_ms: 25,
-  rag_ms: 150,
-  reformulation_ms: 100,
-  total_ms: 2800,
+  entity_resolve_ms: 500,
+  intent_classifier_ms: 1500,
+  sql_ms: 500,
+  rag_ms: 800,
+  reformulation_ms: 1200,
+  total_ms: 5000,
 };
 
 // ---------------------------------------------------------------------------

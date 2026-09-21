@@ -1,4 +1,4 @@
-import { query, resolvePersonName as dbResolvePersonName, getPeopleDirectory } from "@/lib/db";
+import { query, vectorQuery, resolvePersonName as dbResolvePersonName, getPeopleDirectory } from "@/lib/db";
 import { getJsonCompletion, ChatHistoryItem } from "@/lib/ai/openai";
 import { isNoiseTopic, stripDocWords } from "@/lib/query/normalize";
 import type { ParsedQuery } from "@/lib/query/types";
@@ -159,27 +159,25 @@ export async function resolveDocument(topic: string): Promise<ResolvedDocument> 
     return { value: null, url: null, quality: ResolutionQuality.NONE };
   }
   const likePatterns = searchTerms.map((term) => `%${term.replace(/[%_\\]/g, "\\$&")}%`);
-
-  let pages = await query<{ title: string | null; url: string | null }>(
+  let pages = await vectorQuery<{ title: string | null; url: string | null }>(
     `SELECT title, url FROM notion_pages
-     WHERE title IS NOT NULL AND trim(title) <> ''
-       AND (${likePatterns.map((_, i) => `title ILIKE $${i + 1}`).join(" OR ")})
-     LIMIT 100`,
+   WHERE title IS NOT NULL AND trim(title) <> ''
+     AND (${likePatterns.map((_, i) => `title ILIKE $${i + 1}`).join(" OR ")})
+   LIMIT 100`,
     likePatterns,
   );
 
   if (pages.length === 0) {
     try {
-      pages = await query<{ title: string | null; url: string | null }>(
+      pages = await vectorQuery<{ title: string | null; url: string | null }>(
         `SELECT title, url FROM notion_pages
-         WHERE title IS NOT NULL AND trim(title) <> ''
-           AND similarity(title, $1) > 0.15
-         ORDER BY similarity(title, $1) DESC
-         LIMIT 30`,
+       WHERE title IS NOT NULL AND trim(title) <> ''
+         AND similarity(title, $1) > 0.15
+       ORDER BY similarity(title, $1) DESC
+       LIMIT 30`,
         [trimmed],
       );
     } catch {
-      // Fallback if pg_trgm extension is not installed
       pages = [];
     }
   }
@@ -367,7 +365,13 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Pr
   });
 }
 
-const ENTITY_RESOLVE_TIMEOUT_MS = 300;
+// FIX (Latency): 300ms was tighter than the measured baseline round-trip to
+// the DB itself (~300-400ms even on a warm connection, per debug-ping
+// testing), so resolvePerson/resolveDocument's single DB lookup was
+// guaranteed to time out on close to every call, silently degrading to the
+// empty fallback instead of the real resolution. Raised to give real margin
+// over the measured baseline while still bounding worst-case wait.
+const ENTITY_RESOLVE_TIMEOUT_MS = 1200;
 
 const EMPTY_RESOLVED_PERSON: ResolvedPerson = {
   value: "",
@@ -622,41 +626,41 @@ export async function extractRawEntities(message: string): Promise<{ personName?
     }
   }
 
-// Hindi/Hinglish filler words that sit between a name and "task(s)" —
-// without this, "souvik ke task" wrongly captures "ke" as the name.
-const HINGLISH_FILLERS = new Set(["ke", "ka", "ki", "ko", "ne", "se", "ka", "wale", "waale"]);
+  // Hindi/Hinglish filler words that sit between a name and "task(s)" —
+  // without this, "souvik ke task" wrongly captures "ke" as the name.
+  const HINGLISH_FILLERS = new Set(["ke", "ka", "ki", "ko", "ne", "se", "ka", "wale", "waale"]);
 
-const NOISE_WORDS_RE =
-  /^(the|a|an|my|your|his|her|their|our|its|this|that|these|those|all|any|some|few|many|each|every|no|get|list|show|display|find|down|who|what|where|when|why|how|which|whose|task|tasks|project|projects|person|name|pending|urgent|open|new|recent|old|current|upcoming|overdue|today|yesterday|tomorrow|now|abhi|aaj|kal)$/i;
+  const NOISE_WORDS_RE =
+    /^(the|a|an|my|your|his|her|their|our|its|this|that|these|those|all|any|some|few|many|each|every|no|get|list|show|display|find|down|who|what|where|when|why|how|which|whose|task|tasks|project|projects|person|name|pending|urgent|open|new|recent|old|current|upcoming|overdue|today|yesterday|tomorrow|now|abhi|aaj|kal)$/i;
 
-if (!personName) {
-  const patterns = [
-    // Hindi possessive: "X ke/ka/ki task" — must come BEFORE the plain
-    // English "for X" pattern, else "for today" wins first.
-    /\b([a-zA-Z][a-zA-Z'.-]*)\s+(?:ke|ka|ki|ko)\s+(?:tasks?|kaam|kaan)\b/i,
-    // "assigned to X" / "tasks of X" / "by X" — but NOT bare "for X",
-    // which too easily grabs a trailing time-word ("for today").
-    /\b(?:assigned\s+to|tasks\s+of)\s+([a-zA-Z][a-zA-Z'.-]*(?:\s+[a-zA-Z][a-zA-Z'.-]*){0,2})\b/i,
-    /\b([a-zA-Z][a-zA-Z'.-]*)\s*'s\s+tasks?\b/i,
-    /\bfor\s+([a-zA-Z][a-zA-Z'.-]*(?:\s+[a-zA-Z][a-zA-Z'.-]*){0,2})\s+(?:today|yesterday|tomorrow|now)\b/i,
-    /\bfor\s+([a-zA-Z][a-zA-Z'.-]*(?:\s+[a-zA-Z][a-zA-Z'.-]*){0,2})\b/i,
-    /\b([a-zA-Z][a-zA-Z'.-]*)\s+tasks?\b/i,
-  ];
-  for (const pat of patterns) {
-    const match = message.match(pat);
-    if (match?.[1]) {
-      const candidate = match[1].trim();
-      if (
-        !isNoiseTopic(candidate) &&
-        !HINGLISH_FILLERS.has(candidate.toLowerCase()) &&
-        !NOISE_WORDS_RE.test(candidate)
-      ) {
-        personName = candidate;
-        break;
+  if (!personName) {
+    const patterns = [
+      // Hindi possessive: "X ke/ka/ki task" — must come BEFORE the plain
+      // English "for X" pattern, else "for today" wins first.
+      /\b([a-zA-Z][a-zA-Z'.-]*)\s+(?:ke|ka|ki|ko)\s+(?:tasks?|kaam|kaan)\b/i,
+      // "assigned to X" / "tasks of X" / "by X" — but NOT bare "for X",
+      // which too easily grabs a trailing time-word ("for today").
+      /\b(?:assigned\s+to|tasks\s+of)\s+([a-zA-Z][a-zA-Z'.-]*(?:\s+[a-zA-Z][a-zA-Z'.-]*){0,2})\b/i,
+      /\b([a-zA-Z][a-zA-Z'.-]*)\s*'s\s+tasks?\b/i,
+      /\bfor\s+([a-zA-Z][a-zA-Z'.-]*(?:\s+[a-zA-Z][a-zA-Z'.-]*){0,2})\s+(?:today|yesterday|tomorrow|now)\b/i,
+      /\bfor\s+([a-zA-Z][a-zA-Z'.-]*(?:\s+[a-zA-Z][a-zA-Z'.-]*){0,2})\b/i,
+      /\b([a-zA-Z][a-zA-Z'.-]*)\s+tasks?\b/i,
+    ];
+    for (const pat of patterns) {
+      const match = message.match(pat);
+      if (match?.[1]) {
+        const candidate = match[1].trim();
+        if (
+          !isNoiseTopic(candidate) &&
+          !HINGLISH_FILLERS.has(candidate.toLowerCase()) &&
+          !NOISE_WORDS_RE.test(candidate)
+        ) {
+          personName = candidate;
+          break;
+        }
       }
     }
   }
-}
 
   const docMatch = message.match(
     /\b(?:about|status\s+of|details\s+of|project|notes?\s+on|page\s+on)\s+([a-zA-Z][a-zA-Z0-9]+(?:\s+[a-zA-Z0-9]+)?)\b/i,

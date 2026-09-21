@@ -216,23 +216,46 @@ export async function resolveQuery(
   }
 
   // 1.5 Early Query Reformulation for follow-up turns
+  //
+  // FIX (Latency): previously `await reformulateSearchQuery(...)` (an LLM
+  // call) ran to completion BEFORE even checking whether the intent
+  // classifier (a second, separate LLM call) would be needed — and for most
+  // follow-up-shaped questions ("today?", "what about X?"), both fired,
+  // strictly sequentially, costing their sum (often 1.5-3s combined). This
+  // was flagged as a planned-but-unshipped fix in this project's own notes.
+  //
+  // Now: a cheap synchronous regex pass on the ORIGINAL question decides
+  // whether the classifier will likely be needed, and if so, it's fired
+  // CONCURRENTLY with reformulation rather than waiting for it — collapsing
+  // the cost to roughly max(reformulation, classification) instead of their
+  // sum. TRADE-OFF: the speculative classifier call sees the raw follow-up
+  // text ("today?") rather than the reformulated standalone question
+  // ("what tasks are assigned to me today"), so it has less context in
+  // exactly the cases this path targets. Rules-parsed entities (person/doc)
+  // still come from the reformulated text either way — only the LLM kind
+  // classification uses less context in the parallelized path. NEEDS
+  // VALIDATION against the eval set (npm run eval:retrieval /
+  // eval:faithfulness) before relying on this in production — same caution
+  // this file already applies to routing changes in mergeRulesAndLlm above.
   let processedQuestion = question;
   let reformulatedQueryText: string | undefined;
-  // FIX: rules-safe input is kept separate from the reformulated one.
-  // buildContextualSearchQuery's fallback (used when the reformulation LLM
-  // call fails, or QUERY_REFORMULATION=false) returns a multi-line
-  // "Conversation context: ...\n\nCurrent question: ..." block — most of
-  // rules.ts's regexes are ^-anchored and cannot match that shape, so this
-  // fallback firing on a follow-up question (the exact class of message
-  // shouldReformulate() targets) silently broke regex-based intent parsing
-  // for that turn. Only a genuine LLM rewrite (method: "llm") is a clean
-  // standalone question safe to hand to parseQueryByRules; the
-  // contextual_fallback/original text still flows into the LLM classifier
-  // and downstream RAG retrieval via reformulatedQueryText, where extra
-  // prose context is harmless or even helpful.
   let rulesInputQuestion = question;
-  if (shouldReformulate(question, history)) {
-    const reformulated = await reformulateSearchQuery(question, history);
+
+  const needsReformulation = shouldReformulate(question, history);
+  const reformulationPromise = needsReformulation
+    ? reformulateSearchQuery(question, history)
+    : null;
+
+  const preliminaryRules = applyIntentHint(
+    question,
+    withRegexScores(parseQueryByRules(question)),
+  );
+  const speculativeLlmPromise = shouldUseLlm(preliminaryRules)
+    ? classifyQueryIntent(question)
+    : null;
+
+  if (needsReformulation) {
+    const reformulated = await reformulationPromise!;
     processedQuestion = reformulated.searchQuery;
     reformulatedQueryText = reformulated.searchQuery;
     const hasPersonPronoun = /\b(he|him|his|she|her|hers|they|them|their|me|my|myself|i)\b/i.test(question);
@@ -242,10 +265,13 @@ export async function resolveQuery(
   }
 
   // 2. Regex rules parsing on the rules-safe question
-  const rules = applyIntentHint(
-    rulesInputQuestion,
-    withRegexScores(parseQueryByRules(rulesInputQuestion)),
-  );
+  const rules =
+    rulesInputQuestion === question
+      ? preliminaryRules // same input already parsed above — avoid recomputing
+      : applyIntentHint(
+          rulesInputQuestion,
+          withRegexScores(parseQueryByRules(rulesInputQuestion)),
+        );
 
   let parsed: ParsedQuery;
   let usedLlm = false;
@@ -255,7 +281,17 @@ export async function resolveQuery(
     parsed = rules;
   } else {
     usedLlm = true;
-    const llmPromise = classifyQueryIntent(processedQuestion);
+    // Reuse the speculative call fired above whenever we decided to fire it.
+    // When reformulation didn't run (or returned the same text), this is
+    // input-identical to firing fresh — pure speedup, no trade-off. When
+    // reformulation DID change the text, this deliberately still reuses the
+    // raw-question classification rather than waiting for a fresh call on
+    // the reformulated text — that's the actual latency win for follow-ups,
+    // at the documented context-tradeoff cost above. If we never fired the
+    // speculative call at all (regex-on-original looked confident enough),
+    // fall back to firing fresh now on processedQuestion — identical to
+    // pre-parallelization behavior, no regression.
+    const llmPromise = speculativeLlmPromise ?? classifyQueryIntent(processedQuestion);
     const timeoutLimit = process.env.IS_EVALUATION === "true" ? 6000 : 2500;
     const llm = await withTimeout(llmPromise, timeoutLimit, null);
     if (!llm) {

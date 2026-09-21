@@ -22,6 +22,8 @@ const globalForPostgres = globalThis as unknown as {
      keepAlive: true,
    };
 
+const isNewPool = !globalForPostgres.pool;
+
 export const pool =
   globalForPostgres.pool ??
   new Pool(poolConfig);
@@ -32,6 +34,33 @@ pool.on("error", (error) => {
 
 if (process.env.NODE_ENV !== "production") {
   globalForPostgres.pool = pool;
+}
+
+// FIX (Latency): `min` in poolConfig above is NOT a real node-postgres option —
+// pg-pool only reads `options.min` to decide whether an *already-open* idle
+// client may be pruned; it never eagerly opens connections at startup. So the
+// pool was always cold: the very first query on a fresh process/instance paid
+// the full TCP+TLS handshake to Neon (and any autosuspend wake-up), often
+// several seconds, even though the query itself executes in <1ms. Confirmed
+// via scripts/check-resolve-document.ts: identical EXPLAIN ANALYZE query took
+// 3326ms cold vs 265ms once the pool already had a live connection.
+//
+// Fix: eagerly open one real connection as soon as this module loads, so the
+// handshake cost is paid once at process/instance boot instead of on a user's
+// first request. Then keep it alive with a lightweight ping so it never sits
+// idle past idleTimeoutMillis and forces a reconnect on the next request.
+if (isNewPool) {
+  pool.query("SELECT 1").catch((error) => {
+    console.error("[postgres] Pool warm-up query failed:", error);
+  });
+
+  const keepAliveMs = Math.max(1_000, (poolConfig.idleTimeoutMillis ?? 60_000) - 10_000);
+  const keepAliveTimer = setInterval(() => {
+    pool.query("SELECT 1").catch((error) => {
+      console.error("[postgres] Keep-alive ping failed:", error);
+    });
+  }, keepAliveMs);
+  keepAliveTimer.unref?.();
 }
 
 let schemaReady = globalForPostgres.schemaReady ?? false;
@@ -261,7 +290,7 @@ async function runColumnMigrations(
   }
 }
 
-const CURRENT_SCHEMA_HASH = "v8_hnsw_fts";
+const CURRENT_SCHEMA_HASH = "v10_content_trgm";
 
 export async function ensureSchema() {
   if (schemaReady) return;
@@ -285,13 +314,15 @@ export async function ensureSchema() {
           globalForPostgres.schemaReady = true;
           return;
         }
+        console.log(
+          "[ensureSchema] Hash mismatch or missing, falling through to full migration path.",
+          { found: res.rows[0]?.value, expected: CURRENT_SCHEMA_HASH },
+        );
       } finally {
         client.release();
       }
     } catch (e) {
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[ensureSchema] Fast path check bypassed or failed. Running migrations...");
-      }
+      console.log("[ensureSchema] Fast path check bypassed or failed. Running migrations...", e);
     }
 
     // 2. Full migration / table creation flow (guarded by lock)
@@ -412,10 +443,34 @@ export async function ensureSchema() {
         `);
       }
 
-      await client.query(`
+         await client.query(`
         CREATE INDEX IF NOT EXISTS notion_pages_fts_idx
         ON notion_pages
         USING gin (fts);
+      `);
+
+      await client.query(`
+        CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+        CREATE INDEX IF NOT EXISTS notion_pages_title_trgm_idx
+        ON notion_pages
+        USING gin (title gin_trgm_ops);
+      `);
+
+      // FIX (Latency): assigned_list/worked_on_list queries in sql/answers.ts
+      // fall back to `lower(coalesce(content, '')) LIKE lower($n)` (leading
+      // wildcard) whenever a person isn't in the owner column and has to be
+      // found inside free-text content instead. That pattern can't use a
+      // plain btree index and was forcing a sequential scan over the whole
+      // content column on every such query — measured contributing multiple
+      // seconds to sql_ms, scaling with how much content had to be scanned.
+      // A trigram GIN index (same family as the title index above) lets
+      // Postgres use an index for '%term%' patterns without changing the
+      // query text, semantics, or match results at all.
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS notion_pages_content_trgm_idx
+        ON notion_pages
+        USING gin (content gin_trgm_ops);
       `);
 
       await ensureNotionChunksSchema(client);

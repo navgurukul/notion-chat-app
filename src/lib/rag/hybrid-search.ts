@@ -411,6 +411,30 @@ export type HybridChunkRetrieval = {
   queries: string[];
 };
 
+
+/** Runs `fn` over `items`, at most `limit` in flight at once. */
+async function runWithConcurrencyLimit<T, R>(
+  items: T[],
+  fn: (item: T) => Promise<R>,
+  limit: number,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+
+  return results;
+}
+
 /** Hybrid search with scores (for confidence gate + diagnostics). */
 export async function runHybridChunkRetrieval(
   searchQueries: string[],
@@ -425,9 +449,12 @@ export async function runHybridChunkRetrieval(
   }
 
   const topK = getHybridTopK();
-  const rowSets = await Promise.all(
-    unique.map((q) => fetchHybridChunkRows(q, titleBoost, options)),
+  const rowSets = await runWithConcurrencyLimit(
+    unique,
+    (q) => fetchHybridChunkRows(q, titleBoost, options),
+    2,
   );
+
   const merged = mergeHybridChunkRows(rowSets);
 
   if (!merged.length) {
