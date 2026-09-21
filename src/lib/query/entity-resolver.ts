@@ -365,7 +365,13 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Pr
   });
 }
 
-const ENTITY_RESOLVE_TIMEOUT_MS = 300;
+// FIX (Latency): 300ms was tighter than the measured baseline round-trip to
+// the DB itself (~300-400ms even on a warm connection, per debug-ping
+// testing), so resolvePerson/resolveDocument's single DB lookup was
+// guaranteed to time out on close to every call, silently degrading to the
+// empty fallback instead of the real resolution. Raised to give real margin
+// over the measured baseline while still bounding worst-case wait.
+const ENTITY_RESOLVE_TIMEOUT_MS = 1200;
 
 const EMPTY_RESOLVED_PERSON: ResolvedPerson = {
   value: "",

@@ -290,7 +290,7 @@ async function runColumnMigrations(
   }
 }
 
-const CURRENT_SCHEMA_HASH = "v9_title_trgm";
+const CURRENT_SCHEMA_HASH = "v10_content_trgm";
 
 export async function ensureSchema() {
   if (schemaReady) return;
@@ -314,13 +314,15 @@ export async function ensureSchema() {
           globalForPostgres.schemaReady = true;
           return;
         }
+        console.log(
+          "[ensureSchema] Hash mismatch or missing, falling through to full migration path.",
+          { found: res.rows[0]?.value, expected: CURRENT_SCHEMA_HASH },
+        );
       } finally {
         client.release();
       }
     } catch (e) {
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[ensureSchema] Fast path check bypassed or failed. Running migrations...");
-      }
+      console.log("[ensureSchema] Fast path check bypassed or failed. Running migrations...", e);
     }
 
     // 2. Full migration / table creation flow (guarded by lock)
@@ -453,6 +455,22 @@ export async function ensureSchema() {
         CREATE INDEX IF NOT EXISTS notion_pages_title_trgm_idx
         ON notion_pages
         USING gin (title gin_trgm_ops);
+      `);
+
+      // FIX (Latency): assigned_list/worked_on_list queries in sql/answers.ts
+      // fall back to `lower(coalesce(content, '')) LIKE lower($n)` (leading
+      // wildcard) whenever a person isn't in the owner column and has to be
+      // found inside free-text content instead. That pattern can't use a
+      // plain btree index and was forcing a sequential scan over the whole
+      // content column on every such query — measured contributing multiple
+      // seconds to sql_ms, scaling with how much content had to be scanned.
+      // A trigram GIN index (same family as the title index above) lets
+      // Postgres use an index for '%term%' patterns without changing the
+      // query text, semantics, or match results at all.
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS notion_pages_content_trgm_idx
+        ON notion_pages
+        USING gin (content gin_trgm_ops);
       `);
 
       await ensureNotionChunksSchema(client);
