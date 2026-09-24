@@ -50,7 +50,14 @@ function preprocessQuestion(text: string) {
   return text
     .replace(/\bsummry\b/gi, "summary")
     .replace(/\bsummerrize\b/gi, "summarize")
-    .replace(/\bsummarise\b/gi, "summarize");
+    .replace(/\bsummarise\b/gi, "summarize")
+    .replace(/\bbeed\b/gi, "been")
+    .replace(/\bbeeng\b/gi, "being")
+    .replace(/\bworkd\b/gi, "worked")
+    .replace(/\bworkin\b/gi, "working")
+    .replace(/\bprojct\b/gi, "project")
+    .replace(/\bprojcts\b/gi, "projects")
+    .replace(/\bprojt\b/gi, "project");
 }
 
 function normalize(text: string) {
@@ -75,21 +82,27 @@ function cleanComparePageTitle(value: string) {
 
 function cleanPersonName(value: string | null) {
   if (!value) return null;
-  const val = value
+  let val = value
     .trim()
-    .replace(/^(?:please\s+)?(?:what\s+about\s+)?(?:show|list|get|display|tell\s+me|find)(?:\s+down)?\s+/i, "")
+    .replace(/^(?:can\s+you\s+)?(?:please\s+)?(?:tell\s+me\s+)?(?:what\s+about\s+)?(?:show|list|get|display|find|check)(?:\s+down)?\s+/i, "")
+    .replace(/^(?:the\s+)?(?:project\s+name|person\s+name|user\s+name|assignee\s+name|name\s+of|name|person|user|developer|dev|member|team\s+member)\s+(?:of|for|is|named)?\s+/i, "")
     .replace(/\s+(on|in|for|at|during|since|before|after)$/i, "")
     .trim();
   if (/\b(project|projects|page|pages|doc|docs|document|documents)\b/i.test(val)) {
     return null;
   }
-  const cleaned = stripYearSuffixFromPerson(
+  let cleaned = stripYearSuffixFromPerson(
     stripTemporalSuffixFromPerson(
       stripDocWords(val)
     )
-      .replace(/\s+(?:is|are|was|were|has|have|had)\s*$/i, "")
-      .replace(/^(?:did|does|do|is|are|was|were|has|have|had)\s+/i, ""),
   ).trim();
+
+  cleaned = cleaned
+    .replace(/\s+(?:has|have|had|is|are|was|were)\s+(?:currently\s+)?(?:been|beed|beeng|bin\s+)?(?:working|worked|done|doing|assigned|on).*/i, "")
+    .replace(/\s+(?:has|have|had|is|are|was|were|been|beed|beeng|bin|currently|working|worked|done|doing|assigned|on)\b.*/i, "")
+    .replace(/^(?:did|does|do|is|are|was|were|has|have|had)\s+/i, "")
+    .trim();
+
   if (!cleaned) return null;
   if (/^(what|which|who|when|where|why|how|is|was|are|were|task|tasks|project|projects|work|manager|lead|only|one|there|here|any|some|someone|anyone|no\s+one|nobody|everyone|everybody)$/i.test(cleaned)) {
     return null;
@@ -414,11 +427,12 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
-  const workingOnMatch = q.match(/\b(?:what|which)\s+(?:is|are|has|have)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\b/i)
-    ?? q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\b/i)
-    ?? q.match(/\b(?:what|which)\s+(?:projects?|tasks?|work)\s+(?:is|are|has|have)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:currently\s+)?(?:been\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\b/i)
-    ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)?\s*(?:currently\s+)?(?:working\s+on|assigned\s+to|works?\s+on)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
-    ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:has|have|had)\s+(?:been\s+)?(?:working\s+on|worked\s+on|worked|done|doing)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
+  const NOISE_PREFIXES = "(?:names?|name\\s+of\\s+|name|person\\s+name|person|user|developer|dev|member|team\\s+member)?\\s*";
+  const workingOnMatch = q.match(new RegExp(`\\b(?:what|which)\\s+(?:is|are|has|have)\\s+${NOISE_PREFIXES}([a-z][a-z'.-]*(?:\\s+[a-z][a-z'.-]*){0,2})\\s+(?:currently\\s+)?(?:(?:been|beed|beeng|bin)\\s+)?(?:working\\s+on|worked\\s+on|assigned\\s+to|works?\\s+on)\\b`, "i"))
+    ?? q.match(new RegExp(`\\b(?:what|which)\\s+(?:projects?|tasks?|work)\\s+${NOISE_PREFIXES}([a-z][a-z'.-]*(?:\\s+[a-z][a-z'.-]*){0,2})\\s+(?:is|are|has|have)\\s+(?:currently\\s+)?(?:(?:been|beed|beeng|bin)\\s+)?(?:working\\s+on|worked\\s+on|assigned\\s+to|works?\\s+on)\\b`, "i"))
+    ?? q.match(new RegExp(`\\b(?:what|which)\\s+(?:projects?|tasks?|work)\\s+${NOISE_PREFIXES}(?:is|are|has|have)\\s+${NOISE_PREFIXES}([a-z][a-z'.-]*(?:\\s+[a-z][a-z'.-]*){0,2})\\s+(?:currently\\s+)?(?:(?:been|beed|beeng|bin)\\s+)?(?:working\\s+on|worked\\s+on|assigned\\s+to|works?\\s+on)\\b`, "i"))
+    ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:is|are|has|have)?\s*(?:currently\s+)?(?:working\s+on|worked\s+on|assigned\s+to|works?\s+on)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
+    ?? q.match(/\b([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:has|have|had)\s+(?:(?:been|beed|beeng|bin)\s+)?(?:working\s+on|worked\s+on|worked|done|doing)\s+(?:on\s+)?(?:which|what)\s+(?:tasks?|projects?|work)\b/i)
     ?? q.match(/\b(?:projects?|tasks?|work)\s+(?:worked\s+on|assigned\s+to)\s+by\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})/i);
   if (workingOnMatch?.[1]) {
     const person = cleanPersonName(workingOnMatch[1]);
@@ -525,11 +539,11 @@ export function parseQueryByRules(question: string): RulesQuery {
       /what\s+did\s+(.+?)\s+work\s+on/i,
       /activity\s+(?:for|of|by)\s+(.+?)(?:\?|$)/i,
       /\b(?:on|about|for|of)\s+([A-Za-z][A-Za-z'.-]*(?:\s+[A-Za-z][A-Za-z'.-]*){0,2})\s+(?:tasks?|projects?|work)\b/i,
-      /what\s+(?:tasks?|projects?|work)\s+(.+?)\s+(?:has|have)\s+(?:been\s+)?(?:worked|workd|working|done|doing)(?:\s+on)?/i,
+      /what\s+(?:tasks?|projects?|work)\s+(.+?)\s+(?:has|have|had|is|are)\s+(?:been|beed|beeng|bin\s+)?(?:worked|workd|working|done|doing)(?:\s+on)?/i,
       /what\s+(?:tasks?|projects?|work)\s+(.+?)\s+(?:works|work)\b/i,
-      /(?:total|all|list|show|which|what)\s+(?:tasks?|projects?|work)\s+(.+?)\s+(?:has\s+been\s+|have\s+been\s+|is\s+|are\s+)?(?:working|worked|done|doing)/i,
+      /(?:total|all|list|show|which|what)\s+(?:tasks?|projects?|work)\s+(.+?)\s+(?:has\s+(?:been|beed|beeng|bin)?\s+|have\s+(?:been|beed|beeng|bin)?\s+|is\s+|are\s+)?(?:working|worked|done|doing)/i,
       /(?:total|all|list|show)\s+(?:tasks?|projects?)\s+(?:for|of|by)\s+(.+)$/i,
-      /what\s+has\s+(.+?)\s+been\s+(working|worked)/i,
+      /what\s+has\s+(.+?)\s+(?:been|beed|beeng|bin)\s+(working|worked)/i,
       /worked\s+on\s+by\s+(.+)$/i,
       /\btasks?\s+(?:by|of|for)\s+(.+)$/i,
     ]);
