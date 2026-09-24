@@ -840,7 +840,26 @@ export async function lazyResolveSqlEntities(
           }
         };
       } else {
-        finalParsed.personName = rawPerson;
+        // FIX (Accuracy): total resolution miss (no exact/first-name/
+        // partial/fuzzy match, no candidates at all) previously fell back
+        // to `rawPerson` silently — the raw, still-broken name would flow
+        // straight into the SQL LIKE query, guaranteed to match nothing,
+        // and the user got a blank/generic "no data found" answer with no
+        // signal that their spelling (or the person) was the problem.
+        // Surfacing this through resolvedEntities lets buildClarificationAnswer
+        // give actionable feedback instead of silently dead-ending.
+        finalParsed.personName = "";
+        finalParsed.resolvedEntities = {
+          ...finalParsed.resolvedEntities,
+          person: {
+            value: null,
+            quality: resolved.quality,
+            confidence: 0,
+            ambiguous: false,
+            candidates: [],
+            rawInput: rawPerson,
+          }
+        };
       }
     }
   }

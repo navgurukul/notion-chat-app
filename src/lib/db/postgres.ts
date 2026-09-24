@@ -36,19 +36,6 @@ if (process.env.NODE_ENV !== "production") {
   globalForPostgres.pool = pool;
 }
 
-// FIX (Latency): `min` in poolConfig above is NOT a real node-postgres option —
-// pg-pool only reads `options.min` to decide whether an *already-open* idle
-// client may be pruned; it never eagerly opens connections at startup. So the
-// pool was always cold: the very first query on a fresh process/instance paid
-// the full TCP+TLS handshake to Neon (and any autosuspend wake-up), often
-// several seconds, even though the query itself executes in <1ms. Confirmed
-// via scripts/check-resolve-document.ts: identical EXPLAIN ANALYZE query took
-// 3326ms cold vs 265ms once the pool already had a live connection.
-//
-// Fix: eagerly open one real connection as soon as this module loads, so the
-// handshake cost is paid once at process/instance boot instead of on a user's
-// first request. Then keep it alive with a lightweight ping so it never sits
-// idle past idleTimeoutMillis and forces a reconnect on the next request.
 if (isNewPool) {
   pool.query("SELECT 1").catch((error) => {
     console.error("[postgres] Pool warm-up query failed:", error);
@@ -138,8 +125,6 @@ const NOTION_PAGE_COLUMN_MIGRATIONS: ColumnMigration[] = [
   { table: "notion_pages", column: "last_error", definition: "TEXT" },
 ];
 
-// FIX (Schema): Added heading_path, char_count, token_count migrations.
-// These columns are required by sync.ts bulk insert.
 const NOTION_CHUNK_COLUMN_MIGRATIONS: ColumnMigration[] = [
   { table: "notion_chunks", column: "heading_path", definition: "TEXT" },
   {
@@ -211,9 +196,6 @@ async function reconcileNotionPagesSchema(client: PoolClient) {
 }
 
 async function ensureNotionChunksSchema(client: PoolClient) {
-  // FIX (Schema): CREATE TABLE now includes heading_path, char_count, token_count.
-  // FIX (FTS):    Using 'simple' dictionary consistently (was 'english' in ALTER TABLE).
-  //               'simple' = no stemming, works for all languages in your workspace.
   await safeCreateTable(
     client,
     `
@@ -235,7 +217,6 @@ async function ensureNotionChunksSchema(client: PoolClient) {
   `,
   );
 
-  // FIX (FTS): ALTER TABLE also uses 'simple' now (was 'english' — inconsistent).
   if (!(await columnExists(client, "notion_chunks", "fts"))) {
     await client.query(`
       ALTER TABLE notion_chunks
@@ -256,6 +237,20 @@ async function ensureNotionChunksSchema(client: PoolClient) {
     CREATE INDEX IF NOT EXISTS notion_chunks_fts_idx
     ON notion_chunks
     USING gin (fts);
+  `);
+
+  // FIX (Accuracy): notion_pages already got a pg_trgm content index (see
+  // notion_pages_content_trgm_idx below) but notion_chunks — the table
+  // hybrid-search.ts actually queries for RAG retrieval — never did. FTS
+  // (even after the simple/english config fix above) still can't tolerate a
+  // genuine misspelling ("polcy" for "policy"); trigram similarity can. This
+  // lets hybrid-search.ts fall back to fuzzy matching when exact FTS misses.
+  await client.query(`
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+    CREATE INDEX IF NOT EXISTS notion_chunks_content_trgm_idx
+    ON notion_chunks
+    USING gin (content gin_trgm_ops);
   `);
 }
 
@@ -290,7 +285,7 @@ async function runColumnMigrations(
   }
 }
 
-const CURRENT_SCHEMA_HASH = "v10_content_trgm";
+const CURRENT_SCHEMA_HASH = "v11_chunks_trgm_fts_fix";
 
 export async function ensureSchema() {
   if (schemaReady) return;
@@ -301,7 +296,6 @@ export async function ensureSchema() {
   }
 
   schemaPromise = (async () => {
-    // 1. Try fast-path schema check first without acquiring advisory lock
     try {
       const client = await pool.connect();
       try {
@@ -325,7 +319,6 @@ export async function ensureSchema() {
       console.log("[ensureSchema] Fast path check bypassed or failed. Running migrations...", e);
     }
 
-    // 2. Full migration / table creation flow (guarded by lock)
     const client = await pool.connect();
 
     try {
@@ -421,8 +414,6 @@ export async function ensureSchema() {
 
       await runColumnMigrations(client, NOTION_PAGE_COLUMN_MIGRATIONS);
 
-      // Indexes for resume-mode queries (WHERE embedding_status = 'completed')
-      // and for incremental sync comparisons (notion_edited_at check).
       await client.query(`
         CREATE INDEX IF NOT EXISTS notion_pages_embedding_status_idx
         ON notion_pages (embedding_status);
@@ -457,16 +448,6 @@ export async function ensureSchema() {
         USING gin (title gin_trgm_ops);
       `);
 
-      // FIX (Latency): assigned_list/worked_on_list queries in sql/answers.ts
-      // fall back to `lower(coalesce(content, '')) LIKE lower($n)` (leading
-      // wildcard) whenever a person isn't in the owner column and has to be
-      // found inside free-text content instead. That pattern can't use a
-      // plain btree index and was forcing a sequential scan over the whole
-      // content column on every such query — measured contributing multiple
-      // seconds to sql_ms, scaling with how much content had to be scanned.
-      // A trigram GIN index (same family as the title index above) lets
-      // Postgres use an index for '%term%' patterns without changing the
-      // query text, semantics, or match results at all.
       await client.query(`
         CREATE INDEX IF NOT EXISTS notion_pages_content_trgm_idx
         ON notion_pages
@@ -475,8 +456,6 @@ export async function ensureSchema() {
 
       await ensureNotionChunksSchema(client);
 
-      // FIX (Schema): Run chunk column migrations for existing tables
-      // that were created before heading_path/char_count/token_count were added.
       await runColumnMigrations(client, NOTION_CHUNK_COLUMN_MIGRATIONS);
 
       await safeCreateTable(
@@ -501,7 +480,6 @@ export async function ensureSchema() {
       `,
       );
 
-      // Write current schema version hash to metadata
       await client.query(
         `
         INSERT INTO sync_metadata (key, value, updated_at)
@@ -529,10 +507,6 @@ export async function ensureSchema() {
   await schemaPromise;
 }
 
-/**
- * Get a dedicated pool client for multi-statement transactions.
- * Caller must call client.release() in a finally block.
- */
 export async function getClient() {
   await ensureSchema();
   return pool.connect();
@@ -555,7 +529,6 @@ export async function query<T = unknown>(
       return retryResult.rows as T[];
     }
 
-    // 42P01: undefined_table, 42703: undefined_column
     if (pgError.code === "42P01" || pgError.code === "42703") {
       console.warn(`[postgres] Schema error detected (${pgError.code}). Resetting cache and retrying...`);
       
@@ -573,14 +546,6 @@ export async function query<T = unknown>(
   }
 }
 
-
-/**
- * Runs a query with sequential scan disabled for this transaction only.
- * Use for ORDER BY embedding <=> ... queries — the planner's cost model
- * underestimates TOAST fetch cost on wide vector columns and picks a much
- * slower seq scan by default. Scoped to one transaction so it never affects
- * other queries sharing the pool.
- */
 export async function vectorQuery<T = unknown>(
   text: string,
   params?: unknown[],
