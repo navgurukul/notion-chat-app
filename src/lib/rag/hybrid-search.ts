@@ -46,12 +46,6 @@ function readFloatEnv(name: string, fallback: number) {
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
 }
 
-/**
- * Relative floor: drop rows whose final_score is far below the best row's
- * score. Without this, topK always fills with the K best AVAILABLE rows —
- * even when only 1-2 are actually relevant and the rest are noise from the
- * UNION of sem/kw candidate pools. Always keep at least 1 row.
- */
 function applyRelevanceFloor(rows: ChunkHybridRow[]) {
   if (rows.length <= 1) return rows;
   const topScore = rows[0].final_score;
@@ -192,6 +186,15 @@ export async function fetchHybridChunkRows(
     ? `%${boostTitle.replace(/[%_\\]/g, "")}%`
     : "";
   const ftsInput = simplifySearchQuery(boostTitle || raw).trim() || raw.trim();
+  // FIX (Accuracy): `c.fts @@ plainto_tsquery(...)` requires an exact
+  // lexeme match — a genuine typo ("polcy" for "policy") never matches no
+  // matter which text-search config is used, since typo'd tokens don't
+  // stem/normalize to the correct lexeme. `$N <% c.content` (pg_trgm
+  // word_similarity, index-backed by notion_chunks_content_trgm_idx) is
+  // OR'd in below as a fallback so typo'd queries still surface candidates.
+  // Uses the default pg_trgm.word_similarity_threshold (0.6) — tune via
+  // `SET pg_trgm.word_similarity_threshold = ...` if this proves too
+  // loose/tight against real query traffic.
   const cand = getHybridCandidateLimit();
   const wSem = getSemWeight();
   const wKw = getKwWeight();
@@ -205,9 +208,6 @@ export async function fetchHybridChunkRows(
     ? "c.embedding::text AS embedding_literal"
     : "NULL AS embedding_literal";
 
-  // DIAGNOSTIC (temporary, gated behind CHAT_DEBUG): time the Postgres side
-  // separately from the embedding API call (logged in embeddings.ts) so we
-  // can see which one actually accounts for retrieval_ms.
   const dbStart = Date.now();
   const logDbTiming = (rows: ChunkHybridRow[]) => {
     if (process.env.CHAT_DEBUG === "true") {
@@ -241,10 +241,10 @@ export async function fetchHybridChunkRows(
           kw AS (
             SELECT
               c.id,
-              LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $2)))::float8 AS kw_score
+              LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('simple', $2)))::float8 AS kw_score
             FROM notion_chunks c
             JOIN notion_pages p ON p.id = c.page_id
-            WHERE c.fts @@ plainto_tsquery('english', $2)
+            WHERE (c.fts @@ plainto_tsquery('simple', $2) OR $2 <% c.content)
               AND p.notion_edited_at >= $8::timestamptz
               AND p.notion_edited_at < $9::timestamptz
             ORDER BY kw_score DESC NULLS LAST
@@ -305,9 +305,9 @@ END
           kw AS (
             SELECT
               c.id,
-              LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $2)))::float8 AS kw_score
+              LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('simple', $2)))::float8 AS kw_score
             FROM notion_chunks c
-            WHERE c.fts @@ plainto_tsquery('english', $2)
+            WHERE (c.fts @@ plainto_tsquery('simple', $2) OR $2 <% c.content)
             ORDER BY kw_score DESC NULLS LAST
             LIMIT $3
           ),
@@ -367,11 +367,11 @@ END
             p.created_by,
             p.status,
             0::float8 AS sem_score,
-            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS kw_score,
-            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS final_score
+            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('simple', $1)))::float8 AS kw_score,
+            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('simple', $1)))::float8 AS final_score
           FROM notion_chunks c
           JOIN notion_pages p ON p.id = c.page_id
-          WHERE c.fts @@ plainto_tsquery('english', $1)
+          WHERE (c.fts @@ plainto_tsquery('simple', $1) OR $1 <% c.content)
             AND p.notion_edited_at >= $2::timestamptz
             AND p.notion_edited_at < $3::timestamptz
           ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
@@ -393,11 +393,11 @@ END
             p.created_by,
             p.status,
             0::float8 AS sem_score,
-            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS kw_score,
-            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS final_score
+            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('simple', $1)))::float8 AS kw_score,
+            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('simple', $1)))::float8 AS final_score
           FROM notion_chunks c
           JOIN notion_pages p ON p.id = c.page_id
-          WHERE c.fts @@ plainto_tsquery('english', $1)
+          WHERE (c.fts @@ plainto_tsquery('simple', $1) OR $1 <% c.content)
           ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
           LIMIT $2
         `,
@@ -410,7 +410,6 @@ export type HybridChunkRetrieval = {
   context: string | null;
   queries: string[];
 };
-
 
 /** Runs `fn` over `items`, at most `limit` in flight at once. */
 async function runWithConcurrencyLimit<T, R>(
