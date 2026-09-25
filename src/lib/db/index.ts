@@ -153,15 +153,16 @@ export async function resolvePersonName(
   input: string,
 ): Promise<{ exact: string | null; candidates: string[] }> {
   const dir = await getPeopleDirectory();
-  let q = input.trim().toLowerCase();
+  const q = input.trim().toLowerCase();
   if (!q) return { exact: null, candidates: [] };
 
   const exact = dir.find((p) => p.normalized === q);
   if (exact) return { exact: exact.name, candidates: [] };
 
+  const inputFirstName = q.split(/\s+/)[0];
   const firstNameMatches = dir.filter((p) => {
     const firstName = p.normalized.split(/\s+/)[0];
-    return firstName === q;
+    return firstName === inputFirstName;
   });
   if (firstNameMatches.length === 1)
     return { exact: firstNameMatches[0].name, candidates: [] };

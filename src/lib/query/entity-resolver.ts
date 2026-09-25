@@ -371,7 +371,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Pr
 // guaranteed to time out on close to every call, silently degrading to the
 // empty fallback instead of the real resolution. Raised to give real margin
 // over the measured baseline while still bounding worst-case wait.
-const ENTITY_RESOLVE_TIMEOUT_MS = 1200;
+const ENTITY_RESOLVE_TIMEOUT_MS = 2500;
 
 const EMPTY_RESOLVED_PERSON: ResolvedPerson = {
   value: "",
@@ -726,7 +726,7 @@ export async function resolveAllEntities(
 
   const raw = await extractRawEntities(pronounResolvedMessage);
 
-  let finalPerson = resolvedPerson || raw.personName;
+  const finalPerson = resolvedPerson || raw.personName;
   const entities: ResolvedEntities = {};
 
   if (finalPerson) {
