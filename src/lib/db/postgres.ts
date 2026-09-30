@@ -2,10 +2,19 @@ import "@/lib/dns-hook";
 import dns from "dns";
 import { Pool, type PoolClient } from "pg";
 
-const databaseUrl = process.env.DATABASE_URL;
+let databaseUrl = process.env.DATABASE_URL;
 
 if (!databaseUrl) {
   throw new Error("DATABASE_URL is not defined");
+}
+
+// Convert deprecated sslmode parameters to quiet node-postgres security warning
+if (databaseUrl.includes("sslmode=require")) {
+  databaseUrl = databaseUrl.replace("sslmode=require", "sslmode=verify-full");
+} else if (databaseUrl.includes("sslmode=prefer")) {
+  databaseUrl = databaseUrl.replace("sslmode=prefer", "sslmode=verify-full");
+} else if (databaseUrl.includes("sslmode=verify-ca")) {
+  databaseUrl = databaseUrl.replace("sslmode=verify-ca", "sslmode=verify-full");
 }
 
 const globalForPostgres = globalThis as unknown as {
@@ -14,13 +23,15 @@ const globalForPostgres = globalThis as unknown as {
   schemaPromise: Promise<void> | null | undefined;
 };
 
-   const poolConfig: any = {
-     connectionString: databaseUrl,
-     lookup: dns.lookup,
-     min: 1,
-     idleTimeoutMillis: 60_000,
-     keepAlive: true,
-   };
+const poolConfig: any = {
+  connectionString: databaseUrl,
+  lookup: dns.lookup,
+  min: 0,
+  max: 10,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,
+  keepAlive: true,
+};
 
 const isNewPool = !globalForPostgres.pool;
 
@@ -29,6 +40,17 @@ export const pool =
   new Pool(poolConfig);
 
 pool.on("error", (error) => {
+  const message = error?.message || "";
+  const isIdleTermination =
+    message.includes("Connection terminated unexpectedly") ||
+    message.includes("closed the connection unexpectedly") ||
+    (error as any)?.code === "ECONNRESET";
+
+  if (isIdleTermination) {
+    // Cloud database poolers (Neon/Supabase) periodically terminate idle pooled connections.
+    // Clean up gracefully without flooding logs.
+    return;
+  }
   console.error("[postgres] Unhandled pool error:", error);
 });
 

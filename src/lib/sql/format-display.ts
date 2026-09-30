@@ -10,8 +10,19 @@ export const DISPLAY_SCOPE_BULLETS = 4;
 const PROPERTIES_MARKER = "=== PROPERTIES ===";
 const CONTENT_MARKER = "=== CONTENT ===";
 
+export function normalizeNotionUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  let normalized = url.trim();
+  if (normalized.includes("app.notion.com/p/")) {
+    normalized = normalized.replace("https://app.notion.com/p/", "https://www.notion.so/");
+    normalized = normalized.replace("http://app.notion.com/p/", "https://www.notion.so/");
+  }
+  return normalized;
+}
+
 export function formatDisplayLink(title: string, url: string | null | undefined) {
-  return url ? `[${title}](${url})` : title;
+  const normUrl = normalizeNotionUrl(url);
+  return normUrl ? `[${title}](${normUrl})` : title;
 }
 
 export function stripNotionBodyRaw(content?: string | null, maxLength?: number) {
