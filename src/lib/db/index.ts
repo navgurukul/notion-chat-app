@@ -8,6 +8,7 @@ export {
 
 // --- team-members merged here to reduce file count ---
 import { query as pgQuery } from "./postgres";
+import { levenshtein } from "@/lib/query/normalize";
 
 export type PersonRecord = {
   name: string;
@@ -87,6 +88,16 @@ export async function getPeopleDirectory(): Promise<PersonRecord[]> {
   const now = Date.now();
   if (_directory && now - _lastFetched < CACHE_TTL_MS) return _directory;
 
+  // FIX (Accuracy): previously this directory only pulled from the owner /
+  // created_by / last_edited_by columns. A member who only ever appears as
+  // an "Assignee:" or "Captain:" line inside a page's free-text body (never
+  // as the page owner/creator/editor) was invisible here — so resolvePersonName
+  // could never even attempt a first-name/substring match for them, no
+  // matter how correctly their name was typed. The UNION branch below pulls
+  // those in-content role lines too. `extractPeopleFromContent` in
+  // sql/team-roster.ts does a more thorough version of this same job but
+  // isn't reused here on purpose — it imports getPeopleDirectory from this
+  // same module, so importing it back here would create a circular import.
   const rows = await pgQuery<{ name: string }>(`
     SELECT DISTINCT name FROM (
       SELECT trim(unnest(string_to_array(owner, ','))) AS name FROM notion_pages WHERE owner IS NOT NULL
@@ -94,6 +105,14 @@ export async function getPeopleDirectory(): Promise<PersonRecord[]> {
       SELECT trim(created_by) FROM notion_pages WHERE created_by IS NOT NULL
       UNION
       SELECT trim(last_edited_by) FROM notion_pages WHERE last_edited_by IS NOT NULL
+      UNION
+      SELECT trim(m[1]) FROM notion_pages,
+        LATERAL regexp_matches(
+          content,
+          '(?:assignee|captain|assign|assigned)\\s*:\\s*([^\\n]+)',
+          'gi'
+        ) AS m
+      WHERE content IS NOT NULL
     ) AS people
     WHERE trim(name) <> '' AND length(trim(name)) >= 2
     ORDER BY name
@@ -103,13 +122,19 @@ export async function getPeopleDirectory(): Promise<PersonRecord[]> {
   const dir: PersonRecord[] = [];
 
   for (const r of rows) {
-    const cleaned = normalizeNameValue(r.name);
-    if (!cleaned) continue;
+    // Content-line matches can carry multiple comma/and-separated names on
+    // one line ("Assignee: Ravi, Priya"). Splitting is a no-op for the
+    // single-name owner/created_by/last_edited_by rows, so it's safe to
+    // always run every row through this rather than branching by source.
+    for (const part of r.name.split(/\s*(?:,|;|&|\band\b)\s*/i)) {
+      const cleaned = normalizeNameValue(part);
+      if (!cleaned) continue;
 
-    const normalized = cleaned.toLowerCase();
-    if (!uniqueNames.has(normalized)) {
-      uniqueNames.add(normalized);
-      dir.push({ name: cleaned, normalized });
+      const normalized = cleaned.toLowerCase();
+      if (!uniqueNames.has(normalized)) {
+        uniqueNames.add(normalized);
+        dir.push({ name: cleaned, normalized });
+      }
     }
   }
 
@@ -149,6 +174,27 @@ export async function resolvePersonName(
     return { exact: partialMatches[0].name, candidates: [] };
   if (partialMatches.length > 1)
     return { exact: null, candidates: partialMatches.map((p) => p.name) };
+
+  // FIX (Accuracy): previously, if a name didn't exactly/first-name/substring
+  // match anyone in the directory, we silently accepted the raw (possibly
+  // misspelled) input as if it had resolved — the downstream SQL LIKE query
+  // would then search for a name that doesn't exist and come back empty, or
+  // (worse) a vowel-stripped fallback elsewhere would coincidentally match
+  // the wrong person. A genuine typo ("Tammana", "Rahull") never got
+  // corrected because nothing here ever tried. Single-word inputs now get a
+  // Levenshtein-distance pass against directory first names before we give
+  // up and echo the raw input back. Budget scales with name length so short
+  // names ("Om") don't fuzzy-match everything.
+  if (!q.includes(" ")) {
+    const fuzzy = dir.filter((p) => {
+      const firstName = p.normalized.split(/\s+/)[0];
+      const budget = firstName.length <= 4 ? 1 : 2;
+      return levenshtein(q, firstName) <= budget;
+    });
+    if (fuzzy.length === 1) return { exact: fuzzy[0].name, candidates: [] };
+    if (fuzzy.length > 1)
+      return { exact: null, candidates: fuzzy.map((p) => p.name) };
+  }
 
   if (looksLikePersonName(input)) {
     const fallbackName = normalizeNameValue(input) || input.trim();
