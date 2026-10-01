@@ -1,6 +1,6 @@
 import type { ChatHistoryItem } from "@/lib/ai/openai";
 import type { ParsedQuery } from "@/lib/query/types";
-import type { ChunkRetrievalHit, RetrievalConfidenceResult } from "@/lib/rag";
+import type { ChunkRetrievalHit, RetrievalConfidenceResult } from "@/lib/rag/build-context";
 
 // ---------------------------------------------------------------------------
 // Types & latency budgets (formerly pipeline/timing.ts)

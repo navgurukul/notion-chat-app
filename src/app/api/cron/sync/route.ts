@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { syncNotionToPostgres, isSyncInProgress } from "@/lib/ingestion/sync";
+import { isAutoSyncEnabled } from "@/lib/ingestion/scheduler";
 
 export async function GET(req: NextRequest) {
   return handleCronTrigger(req);
@@ -11,6 +12,12 @@ export async function POST(req: NextRequest) {
 
 async function handleCronTrigger(req: NextRequest) {
   try {
+    if (!isAutoSyncEnabled()) {
+      return NextResponse.json(
+        { message: "Automatic background sync is disabled (ENABLE_AUTO_SYNC=false)" },
+        { status: 200 },
+      );
+    }
     const cronSecret = process.env.CRON_SECRET;
     if (cronSecret) {
       const authHeader = req.headers.get("authorization");
