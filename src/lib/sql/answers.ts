@@ -12,6 +12,7 @@ import type {
 import { normalizePersonNameForMatch, isWorkspaceScope, personDedupeKey } from "@/lib/query/normalize";
 import { isNoiseTopic } from "@/lib/query/rules";
 import type { ParsedQuery } from "@/lib/query/types";
+import { isSqlMissAnswer } from "@/lib/sql/result";
 import {
   compactSnippet,
   formatCompareAnswer,
@@ -1472,6 +1473,7 @@ export async function handleMetadataQuery(
 ): Promise<string | null> {
   const cacheKey = JSON.stringify({
     kind: parsed.kind,
+    raw: parsed.raw.trim().toLowerCase(),
     personName: parsed.personName,
     docTitle: parsed.docTitle,
     compareTitleB: parsed.compareTitleB,
@@ -1483,11 +1485,13 @@ export async function handleMetadataQuery(
     if (process.env.NODE_ENV !== "production") {
       console.log("[sqlMetadataCache] hit for key:", cacheKey);
     }
-    return cached === "__NULL__" ? null : cached;
+    return cached;
   }
 
   const result = await handleMetadataQueryInner(parsed);
-  sqlMetadataCache.set(cacheKey, result === null ? "__NULL__" : result);
+  if (result !== null && !isSqlMissAnswer(result)) {
+    sqlMetadataCache.set(cacheKey, result);
+  }
   return result;
 }
 

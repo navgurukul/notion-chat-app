@@ -1,5 +1,6 @@
 import type { ParsedQuery, QueryKind } from "@/lib/query/types";
 import { isWeakProjectEtaAnswer } from "@/lib/sql/answers";
+import { isSqlMissAnswer } from "@/lib/sql/result";
 
 export type QueryLane = "sql-only" | "rag-only" | "sql-then-rag";
 
@@ -134,25 +135,7 @@ export function metadataNotFoundAnswer(parsed: ParsedQuery): string {
   }
 }
 
-/** SQL response that is an explicit empty/miss (not a substantive metadata answer). */
-export function isSqlMissAnswer(answer: string) {
-  const trimmed = answer.trim();
-  const lower = trimmed.toLowerCase();
-
-  if (
-    lower.includes("couldn't find") ||
-    lower.includes("not found in synced") ||
-    lower.includes("i couldn't find") ||
-    lower.startsWith("no matching result")
-  ) {
-    return true;
-  }
-
-  // Structured SQL answers (## / ###) may mention Sync changes as a footnote — not a miss.
-  if (/^#{2,3}\s+/m.test(trimmed) && trimmed.length > 180) return false;
-
-  return false;
-}
+export { isSqlMissAnswer } from "@/lib/sql/result";
 
 /** SQL could not rank team activity from Owner / Last edited by — hybrid RAG may help. */
 export function isTeamActivityMetadataGap(answer: string | null | undefined) {
