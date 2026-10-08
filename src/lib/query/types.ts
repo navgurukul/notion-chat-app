@@ -21,6 +21,7 @@ export type QueryKind =
   | "risks_for"
   | "onboarding_tasks"
   | "people_list"
+  | "person_profile"
   | "project_list"
   | "project_most_devs"
   | "project_member_breakdown"

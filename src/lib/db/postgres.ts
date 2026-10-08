@@ -27,7 +27,7 @@ const poolConfig: any = {
   connectionString: databaseUrl,
   lookup: dns.lookup,
   min: 0,
-  max: 10,
+  max: Number(process.env.DB_POOL_MAX ?? 10),
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,
   keepAlive: true,
