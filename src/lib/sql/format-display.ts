@@ -63,7 +63,7 @@ export function extractNotionTaskItems(content?: string | null, max = DISPLAY_TA
     const checkbox = trimmed.match(/^[-*]\s+\[([ xX])\]\s+(.+)$/);
     if (checkbox) {
       const done = checkbox[1].toLowerCase() === "x";
-      items.push(`${done ? "✅" : "⬜"} ${checkbox[2].trim()}`);
+      items.push(`${done ? "[x]" : "[ ]"} ${checkbox[2].trim()}`);
       continue;
     }
     if (/^##\s+project tasks/i.test(trimmed)) continue;
@@ -350,8 +350,10 @@ export function formatDetailedListItem(
 
   const lines = [mainLine];
 
-  // Extract Scope/Overview
-  const scope = extractScopeSummary(row.content, 4);
+  // Keep checklist text out of the scope section when Notion repeats it there.
+  const tasks = extractNotionTaskItems(row.content, 5);
+  const taskText = new Set(tasks.map((task) => task.replace(/^\[[ xX]\]\s*/, "").trim().toLowerCase()));
+  const scope = extractScopeSummary(row.content, 4).filter((item) => !taskText.has(item.trim().toLowerCase()));
   if (scope.length) {
     lines.push("  - **What's Inside / Scope**:");
     for (const s of scope) {
@@ -359,8 +361,6 @@ export function formatDetailedListItem(
     }
   }
 
-  // Extract Tasks/Checklist
-  const tasks = extractNotionTaskItems(row.content, 5);
   if (tasks.length) {
     lines.push("  - **Tasks**:");
     for (const t of tasks) {

@@ -28,6 +28,10 @@ export function isCorrectionMessage(content: string): boolean {
     return true;
   }
 
+  if (/\b(?:also\s+there|missed|not\s+added|left\s+out|forgot(?:ten)?)\b/i.test(normalized)) {
+    return true;
+  }
+
   return false;
 }
 

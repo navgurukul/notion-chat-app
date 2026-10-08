@@ -1495,13 +1495,63 @@ export async function handleMetadataQuery(
   return result;
 }
 
-async function handlePeopleList(): Promise<string> {
+async function handlePeopleList(parsed?: ParsedQuery): Promise<string> {
+  if (parsed && /\b(?:only|just|filter|show)\b[\s,]*(?:developer|developers|devs|engineer|engineers)\b/i.test(parsed.raw)) {
+    return "Roles are not available in the synced Notion data, so I cannot reliably filter members by developer or engineer role.";
+  }
   const dir = await getPeopleDirectory();
   if (dir.length === 0) {
     return "No team members found in the synced Notion data.";
   }
   const list = dir.map((p) => `- **${p.name}**`).join("\n");
   return `## Team Members (${dir.length})\n\nHere are all team members found in the synced Notion data:\n${list}\n\n*Note: This list represents all members who own, create, or edit tasks and pages in the synced Notion workspace (including program managers, People & Culture/HR, and other coordinators in addition to developers).*`;
+}
+
+async function handlePersonProfile(personName: string | undefined): Promise<string | null> {
+  if (!personName) return null;
+  const directory = await getPeopleDirectory();
+  const person = directory.find((entry) => entry.name.toLowerCase() === personName.toLowerCase());
+  if (!person) return null;
+
+  const { personTerm, personName: normalizedName } = buildPersonMatchParams(person.name);
+  const pages = await query<NotionPageRow>(
+    `
+    SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
+    FROM notion_pages
+    WHERE ${personColumnMatchSql("owner", 1, 2)}
+       OR ${personColumnMatchSql("created_by", 1, 2)}
+       OR ${personColumnMatchSql("last_edited_by", 1, 2)}
+       OR lower(coalesce(content, '')) LIKE lower($3)
+    ORDER BY
+      CASE
+        WHEN lower(coalesce(status, '')) IN ('in development', 'in progress', 'testing', 'prod ready') THEN 0
+        ELSE 1
+      END,
+      title ASC
+    LIMIT ${SQL_RESULT_LIMIT}
+    `,
+    [personTerm, normalizedName, `%${person.name}%`],
+  );
+
+  const seen = new Set<string>();
+  const evidence = pages
+    .filter((page) => {
+      const key = page.id || page.title || "";
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 30)
+    .map((page) => {
+      const details = [page.doc_type, page.status].filter(Boolean).join(" · ");
+      return `- ${formatDisplayLink(page.title || "Untitled", page.url)}${details ? ` — ${details}` : ""}`;
+    });
+
+  const evidenceText = evidence.length
+    ? `\n\n### Related study, task, and project pages\n\n${evidence.join("\n")}`
+    : "\n\nNo related study, task, or project pages were found in the synced Notion data.";
+
+  return `## ${person.name}\n\nRoles are not available in the synced Notion data. The synced directory contains this person as a task/page owner or editor.${evidenceText}`;
 }
 
 /**
@@ -1588,53 +1638,29 @@ async function handleProjectMemberBreakdown(): Promise<string> {
 }
 
 async function handleProjectList(): Promise<string> {
-  const ranked = await collectProjectMemberCounts();
-
-  const additionalRows = await query<{ title: string | null; url: string | null }>(`
-    SELECT DISTINCT title, url
+  const rows = await query<NotionPageRow>(`
+    SELECT DISTINCT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
     FROM notion_pages
     WHERE lower(coalesce(doc_type, '')) LIKE '%project%'
-       OR lower(coalesce(title, '')) LIKE '% project'
-       OR lower(coalesce(title, '')) LIKE '% hub'
-    ORDER BY title
+      AND lower(coalesce(status, '')) IN ('in progress', 'in development', 'testing', 'scoping')
+    ORDER BY title ASC
+    LIMIT ${SQL_RESULT_LIMIT}
   `);
 
-  const seen = new Set(ranked.map((p) => p.title.toLowerCase()));
-  const extraList: string[] = [];
-
-  for (const r of additionalRows) {
-    if (!r.title) continue;
-    const norm = r.title.trim().toLowerCase();
-    if (!seen.has(norm)) {
-      seen.add(norm);
-      const formattedTitle = r.url ? `[**${r.title.trim()}**](${r.url})` : `**${r.title.trim()}**`;
-      extraList.push(`- ${formattedTitle}`);
-    }
-  }
-
-  if (!ranked.length && !extraList.length) {
+  if (!rows.length) {
     return "No projects found in the synced Notion data.";
   }
-
-  const mainList = ranked
-    .map((p) => `- **${p.title}** (${p.dev_count} contributor${p.dev_count === 1 ? "" : "s"})`)
-    .join("\n");
-
-  let result = `## Projects in NavGurukul (${ranked.length + extraList.length})\n\nHere are all the main projects found in the synced Notion data:\n\n${mainList}`;
-
-  if (extraList.length > 0) {
-    result += `\n\n### Additional Project Hubs & Pages:\n${extraList.join("\n")}`;
-  }
-
-  result += `\n\n*Note: This list represents all active project areas and project pages in the synced Notion workspace.*`;
-  return result;
+  return `## Projects in NavGurukul (${rows.length})\n\n${rows.map((row) => `- ${formatDisplayLink(row.title || "Untitled", row.url)} - **${row.status}**`).join("\n")}\n\n*Only synced pages typed as projects with an active status are included.*`;
 }
 
 async function handleMetadataQueryInner(
   parsed: ParsedQuery,
 ): Promise<string | null> {
   if (parsed.kind === "people_list") {
-    return handlePeopleList();
+    return handlePeopleList(parsed);
+  }
+  if (parsed.kind === "person_profile") {
+    return handlePersonProfile(parsed.personName);
   }
   if (parsed.kind === "project_list") {
     return handleProjectList();
@@ -1826,6 +1852,7 @@ async function handleMetadataQueryInner(
               AND notion_edited_at < $5::timestamptz
             )
           )
+            AND lower(coalesce(status, '')) IN ('not started', 'in progress')
         ORDER BY
           CASE WHEN ${ownerMatchSql} THEN 0 ELSE 1 END,
           notion_edited_at DESC NULLS LAST,
