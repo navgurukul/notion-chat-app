@@ -301,10 +301,10 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
     }
 
     const mergedEntities = {
-      lastProject: dbStateProject || lastEntities.lastProject,
-      lastPerson: dbStatePerson || lastEntities.lastPerson,
-      lastMale: dbStateLastMale,
-      lastFemale: dbStateLastFemale,
+      lastProject: lastEntities.lastProject || dbStateProject,
+      lastPerson: lastEntities.lastPerson || dbStatePerson,
+      lastMale: lastEntities.lastPerson ? undefined : dbStateLastMale,
+      lastFemale: lastEntities.lastPerson ? undefined : dbStateLastFemale,
     };
 
     // correction
@@ -382,6 +382,19 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
           };
           currentState.lastProject = resolvedEntities.page.value;
           changed = true;
+
+          if (parsed.kind === "page_about") {
+            const pagePerson = await getGenderOfPerson(resolvedEntities.page.value);
+            if (pagePerson) {
+              currentState.lastPerson = resolvedEntities.page.value;
+              if (pagePerson === "female") {
+                currentState.lastFemale = resolvedEntities.page.value;
+              } else {
+                currentState.lastMale = resolvedEntities.page.value;
+              }
+              changed = true;
+            }
+          }
         } else if (parsed?.docTitle) {
           currentState.lastProject = parsed.docTitle;
           changed = true;

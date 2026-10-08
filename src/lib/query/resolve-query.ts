@@ -2,7 +2,7 @@ import { parseQueryByRules, withRegexScores, NOISY_ENTITY } from "@/lib/query/ru
 import { classifyQueryIntent, detectIntent, logQueryRouting } from "./intent";
 import type { ParsedQuery } from "./types";
 import type { ChatHistoryItem } from "@/lib/ai/openai";
-import { tryFastPathRegexRoute, isAmbiguousQuery } from "@/lib/chat/smalltalk";
+import { tryFastPathRegexRoute, isAmbiguousQuery, detectSmalltalkType } from "@/lib/chat/smalltalk";
 import {
   isNotionLinkRequest,
   shouldReformulate,
@@ -12,6 +12,7 @@ import {
   isFollowUpNeedingContext,
   getGenderOfPerson,
   hasGenuineFirstPersonReference,
+  hasExplicitSelfReference,
 } from "./entity-resolver";
 
 // ─── Config ──────────────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ const THIRD_PERSON_PRONOUN = /\b(he|him|his|she|her|hers|they|them|their)\b/i;
 const PRONOUN_ONLY = /^(he|him|his|she|her|hers|they|them|their|me|my|myself|i)$/i;
 const MALE_PRONOUN = /\b(he|him|his)\b/i;
 const FEMALE_PRONOUN = /\b(she|her|hers)\b/i;
+const DATE_WORD = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b|\b20\d{2}\b/i;
 
 type LastEntities = {
   lastPerson?: string;
@@ -152,6 +154,10 @@ function instantRoute(question: string, history: ChatHistoryItem[]): ParsedQuery
   return null;
 }
 
+function isPersonProfileQuestion(question: string) {
+  return /\b(?:tell\s+me\s+about|what\s+is\s+my\s+(?:role|job|position|designation)|my\s+(?:role|job|position|designation))\b/i.test(question);
+}
+
 // ─── Step 3: pick the person for pronouns / follow-ups ───────────────────
 
 async function resolveFollowUpPerson(
@@ -159,7 +165,7 @@ async function resolveFollowUpPerson(
   sessionName: string | undefined,
   last: LastEntities | undefined,
 ): Promise<string | undefined> {
-  if (hasGenuineFirstPersonReference(question) && sessionName) return sessionName;
+  if (hasExplicitSelfReference(question) && sessionName) return sessionName;
 
   const pickByGender = async (preferred: string | undefined, blocked: "male" | "female") => {
     if (preferred) return preferred;
@@ -189,6 +195,16 @@ export async function resolveQuery(
   // 1. Instant routes
   const instant = instantRoute(question, history);
   if (instant) return instant;
+
+  if (sessionName && hasGenuineFirstPersonReference(question) && isPersonProfileQuestion(question)) {
+    return {
+      kind: "person_profile",
+      personName: sessionName,
+      confidence: 1.0,
+      source: "regex",
+      raw: question,
+    };
+  }
 
   // 2. Start reformulation and (if the raw question looks weak) the LLM
   //    classifier together, so follow-ups pay max(a, b) instead of a + b.
@@ -228,9 +244,24 @@ export async function resolveQuery(
     if (llm) parsed = mergeRulesAndLlm(rules, llm);
   }
 
+  // The LLM may call short corrections or confirmations smalltalk. Only the
+  // strict local vocabulary is allowed to take the smalltalk lane; everything
+  // else must continue through retrieval with its conversation context.
+  if (parsed.kind === "smalltalk" && !detectSmalltalkType(question)) {
+    parsed = {
+      ...parsed,
+      kind: rules.kind === "smalltalk" ? "semantic" : rules.kind,
+      confidence: Math.min(parsed.confidence, 0.6),
+    };
+  }
+
   // 4. Fill missing doc/person from the reformulated text
   let docTitle = parsed.docTitle;
   let personName = parsed.personName;
+
+  if (DATE_WORD.test(question) && personName && /^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|20\d{2})$/i.test(personName.trim())) {
+    personName = undefined;
+  }
 
   if (reformulatedText) {
     const ref = parseQueryByRules(reformulatedText);
@@ -246,6 +277,11 @@ export async function resolveQuery(
   // 5. Fill person from the conversation ("he", "my", "what about that?")
   if (!personName && isFollowUpNeedingContext(question, history)) {
     personName = await resolveFollowUpPerson(question, sessionName, lastEntities);
+  }
+
+  if (!personName && sessionName && hasExplicitSelfReference(question) &&
+      ["assigned_list", "worked_on_list", "activity_summary", "owner_list"].includes(parsed.kind)) {
+    personName = sessionName;
   }
 
   const result: ParsedQuery = {
