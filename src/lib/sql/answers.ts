@@ -12,6 +12,7 @@ import type {
 import { normalizePersonNameForMatch, isWorkspaceScope, personDedupeKey } from "@/lib/query/normalize";
 import { isNoiseTopic } from "@/lib/query/rules";
 import type { ParsedQuery } from "@/lib/query/types";
+import { isSqlMissAnswer } from "@/lib/sql/result";
 import {
   compactSnippet,
   formatCompareAnswer,
@@ -664,10 +665,12 @@ async function formatAssignedProjectsAnswer(
   const byTheme = new Map<string, ThemeEntry>();
 
   for (const row of rows) {
-    const theme = inferProjectThemeForPage(row);
+    const theme = inferProjectThemeForPage(row) ?? row.title?.trim() ?? "General Work";
     if (!theme) continue;
     const entry = byTheme.get(theme) ?? { tasks: [] };
-    entry.tasks.push(row);
+    if (!entry.tasks.some((t) => t.id === row.id)) {
+      entry.tasks.push(row);
+    }
     byTheme.set(theme, entry);
   }
 
@@ -691,53 +694,47 @@ async function formatAssignedProjectsAnswer(
     })
     .map(([name]) => name);
 
+  const displayPerson = person
+    .split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+
   const lines: string[] = [];
-  lines.push(
-    `## Projects — **${person}**${yearNote}`,
-    "",
-    `_${rows.length} owned/assigned pages + team rosters in synced Notion._`,
-    `_Task list: ask **"What tasks is ${person} assigned to?"**_`,
-    "",
-  );
+  lines.push(`## Projects — **${displayPerson}**${yearNote}`, "");
 
   if (!themes.length) {
     return (
-      `No **projects** found for **${person}**${yearNote} in synced Notion (no owner/assignee tasks and no team roster match).\n\n` +
+      `No **projects** found for **${displayPerson}**${yearNote} in synced Notion.\n\n` +
       `_Try **Sync changes** if assignments were updated recently._`
     );
   }
 
   for (const theme of themes.slice(0, 10)) {
     const entry = byTheme.get(theme)!;
-    const hub =
-      ownedProjectHubForTheme(theme, rows) ??
-      (await lookupProjectHubPage(theme)) ??
-      entry.rosterHub;
-    const activeCount = entry.tasks.filter((row) =>
-      isActiveStatus(row.status),
-    ).length;
-    const hubLink = hub?.url
-      ? formatDisplayLink(hub.title || theme, hub.url)
-      : `**${theme}**`;
+    lines.push(`- **${theme}**`);
 
-    const parts: string[] = [];
-    if (entry.rosterHub && entry.tasks.length === 0) {
-      parts.push("on **project team** (from roster)");
+    if (entry.tasks.length > 0) {
+      const uniqueTasks = new Map<string, NotionPageRow>();
+      for (const t of entry.tasks) {
+        const key = t.url || t.id || t.title || "";
+        if (!uniqueTasks.has(key)) {
+          uniqueTasks.set(key, t);
+        }
+      }
+      const taskList = [...uniqueTasks.values()];
+      for (const task of taskList.slice(0, 8)) {
+        const taskTitle = task.title || "Untitled";
+        const taskLink = formatDisplayLink(taskTitle, task.url);
+        lines.push(`  - ${taskLink}`);
+      }
+      if (taskList.length > 8) {
+        lines.push(`  - _+${taskList.length - 8} more task(s)_`);
+      }
     } else if (entry.rosterHub) {
-      parts.push("on project team + **owner/assignee** on tasks");
-    } else {
-      parts.push(`**${entry.tasks.length}** owned/assigned task(s)`);
+      const hubTitle = entry.rosterHub.title || theme;
+      const hubLink = formatDisplayLink(hubTitle, entry.rosterHub.url);
+      lines.push(`  - ${hubLink}`);
     }
-    if (activeCount) parts.push(`**${activeCount}** active task(s)`);
-
-    const sampleTasks = entry.tasks
-      .filter((row) => isActiveStatus(row.status))
-      .slice(0, 2)
-      .map((row) => row.title || "Untitled");
-
-    let line = `- **${theme}** — ${hubLink} — ${parts.join(", ")}`;
-    if (sampleTasks.length) line += ` (e.g. ${sampleTasks.join(", ")})`;
-    lines.push(line);
   }
 
   if (themes.length > 10) {
@@ -1476,6 +1473,7 @@ export async function handleMetadataQuery(
 ): Promise<string | null> {
   const cacheKey = JSON.stringify({
     kind: parsed.kind,
+    raw: parsed.raw.trim().toLowerCase(),
     personName: parsed.personName,
     docTitle: parsed.docTitle,
     compareTitleB: parsed.compareTitleB,
@@ -1487,11 +1485,13 @@ export async function handleMetadataQuery(
     if (process.env.NODE_ENV !== "production") {
       console.log("[sqlMetadataCache] hit for key:", cacheKey);
     }
-    return cached === "__NULL__" ? null : cached;
+    return cached;
   }
 
   const result = await handleMetadataQueryInner(parsed);
-  sqlMetadataCache.set(cacheKey, result === null ? "__NULL__" : result);
+  if (result !== null && !isSqlMissAnswer(result)) {
+    sqlMetadataCache.set(cacheKey, result);
+  }
   return result;
 }
 

@@ -11,58 +11,60 @@ type PersonActivityQuery = {
   rowLimit: number;
 };
 
-export async function findPersonActivityRows({
-  personTerm,
-  fuzzyPersonTerm,
-  topicTerm,
-  requireYear,
-  yearStart,
-  yearEnd,
-  rowLimit,
-}: PersonActivityQuery) {
-  const personPropertyInContentSql = `
-      (
-        (
-          lower(coalesce(content, '')) LIKE '%captain:%'
-          OR lower(coalesce(content, '')) LIKE '%assignee:%'
-          OR lower(coalesce(content, '')) LIKE '%assign:%'
-        )
-        AND lower(coalesce(content, '')) LIKE lower($1) ESCAPE '\\'
-      )
-    `;
+function personLikeSql(column: string, paramIndex: number, fuzzyParamIndex?: number) {
+  const normalizedColumn = `lower(coalesce(${column}, ''))`;
+  const directMatch = `${normalizedColumn} LIKE lower($${paramIndex}) ESCAPE '\\'`;
 
-  const personMatchSql = `
-      (
-        lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
-        OR lower(coalesce(created_by, '')) LIKE lower($1) ESCAPE '\\'
-        OR lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-        OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
-        OR ${personPropertyInContentSql}
-      )
-    `;
+  if (fuzzyParamIndex === undefined) {
+    return directMatch;
+  }
 
-  const topicFilterSql = `
-      (
-        $3::text IS NULL
-        OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
-        OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
-      )
-    `;
+  return `(${directMatch} OR ($${fuzzyParamIndex}::text IS NOT NULL AND ${normalizedColumn} LIKE ('%' || lower($${fuzzyParamIndex}::text) || '%') ESCAPE '\\'))`;
+}
 
-  const yearFilterSql = `
+function personPropertyInContentSql(paramIndex: number, fuzzyParamIndex?: number) {
+  return `(
       (
-        $4::text IS NULL
-        OR (
-          notion_edited_at IS NOT NULL
-          AND notion_edited_at >= $4::timestamptz
-          AND notion_edited_at < $5::timestamptz
-        )
+        lower(coalesce(content, '')) LIKE '%captain:%'
+        OR lower(coalesce(content, '')) LIKE '%assignee:%'
+        OR lower(coalesce(content, '')) LIKE '%assign:%'
       )
-    `;
+      AND ${personLikeSql("content", paramIndex, fuzzyParamIndex)}
+    )`;
+}
 
-  const statusRankSql = `
+function personMatchSql(paramIndex: number, fuzzyParamIndex: number) {
+  return `(
+      ${personLikeSql("owner", paramIndex, fuzzyParamIndex)}
+      OR ${personLikeSql("created_by", paramIndex, fuzzyParamIndex)}
+      OR ${personLikeSql("last_edited_by", paramIndex, fuzzyParamIndex)}
+      OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
+      OR regexp_replace(lower(coalesce(created_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
+      OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
+      OR ${personPropertyInContentSql(paramIndex, fuzzyParamIndex)}
+    )`;
+}
+
+function topicFilterSql(paramIndex: number) {
+  return `(
+      $${paramIndex}::text IS NULL
+      OR lower(coalesce(title, '')) LIKE lower($${paramIndex}) ESCAPE '\\'
+      OR lower(coalesce(content, '')) LIKE lower($${paramIndex}) ESCAPE '\\'
+    )`;
+}
+
+function yearFilterSql(startParamIndex: number, endParamIndex: number) {
+  return `(
+      $${startParamIndex}::text IS NULL
+      OR (
+        notion_edited_at IS NOT NULL
+        AND notion_edited_at >= $${startParamIndex}::timestamptz
+        AND notion_edited_at < $${endParamIndex}::timestamptz
+      )
+    )`;
+}
+
+const statusRankSql = `
       CASE lower(trim(coalesce(status, '')))
         WHEN 'in progress' THEN 1
         WHEN 'testing' THEN 2
@@ -74,6 +76,20 @@ export async function findPersonActivityRows({
         ELSE 50
       END
     `;
+
+export async function findPersonActivityRows({
+  personTerm,
+  fuzzyPersonTerm,
+  topicTerm,
+  requireYear,
+  yearStart,
+  yearEnd,
+  rowLimit,
+}: PersonActivityQuery) {
+  const personPropertyInContentSqlFragment = personPropertyInContentSql(1, 2);
+  const personMatchSqlFragment = personMatchSql(1, 2);
+  const topicFilterSqlFragment = topicFilterSql(3);
+  const yearFilterSqlFragment = yearFilterSql(4, 5);
 
   return query<ActivityRow>(
     `
@@ -92,7 +108,7 @@ export async function findPersonActivityRows({
         WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
           OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
           THEN 'owner'
-        WHEN ${personPropertyInContentSql}
+        WHEN ${personPropertyInContentSqlFragment}
           THEN 'captain/assignee'
         WHEN lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
           OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
@@ -103,7 +119,7 @@ export async function findPersonActivityRows({
         WHEN lower(coalesce(owner, '')) LIKE lower($1) ESCAPE '\\'
           OR regexp_replace(lower(coalesce(owner, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
           THEN 1
-        WHEN ${personPropertyInContentSql}
+        WHEN ${personPropertyInContentSqlFragment}
           THEN 2
         WHEN lower(coalesce(last_edited_by, '')) LIKE lower($1) ESCAPE '\\'
           OR regexp_replace(lower(coalesce(last_edited_by, '')), '[aeiou]', '', 'g') LIKE $2::text ESCAPE '\\'
@@ -112,10 +128,10 @@ export async function findPersonActivityRows({
       END AS role_rank,
       ${statusRankSql} AS status_rank
     FROM notion_pages
-    WHERE ${personMatchSql} AND ${topicFilterSql}
+    WHERE ${personMatchSqlFragment} AND ${topicFilterSqlFragment}
       AND (
         $6::boolean = false
-        OR ${yearFilterSql}
+        OR ${yearFilterSqlFragment}
       )
     ORDER BY role_rank ASC, status_rank ASC, notion_edited_at DESC NULLS LAST, title ASC
     LIMIT ${rowLimit}

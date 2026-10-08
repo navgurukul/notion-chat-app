@@ -1,13 +1,7 @@
 import { embedText } from "@/lib/ai/embeddings";
 import { query, vectorQuery } from "@/lib/db";
 import { simplifySearchQuery } from "@/lib/shared/search-query";
-import {
-  dedupeByTextOverlap,
-  isMmrEnabled,
-  parsePgVector,
-  selectWithMMR,
-  type MMRCandidate,
-} from "@/lib/rag";
+import { splitWords, keepLettersNumbersAndSpaces, toLower } from "@/lib/shared/text-utils";
 
 type ChunkHybridRow = {
   chunk_id: string;
@@ -46,12 +40,6 @@ function readFloatEnv(name: string, fallback: number) {
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
 }
 
-/**
- * Relative floor: drop rows whose final_score is far below the best row's
- * score. Without this, topK always fills with the K best AVAILABLE rows —
- * even when only 1-2 are actually relevant and the rest are noise from the
- * UNION of sem/kw candidate pools. Always keep at least 1 row.
- */
 function applyRelevanceFloor(rows: ChunkHybridRow[]) {
   if (rows.length <= 1) return rows;
   const topScore = rows[0].final_score;
@@ -192,6 +180,15 @@ export async function fetchHybridChunkRows(
     ? `%${boostTitle.replace(/[%_\\]/g, "")}%`
     : "";
   const ftsInput = simplifySearchQuery(boostTitle || raw).trim() || raw.trim();
+  // FIX (Accuracy): `c.fts @@ plainto_tsquery(...)` requires an exact
+  // lexeme match — a genuine typo ("polcy" for "policy") never matches no
+  // matter which text-search config is used, since typo'd tokens don't
+  // stem/normalize to the correct lexeme. `$N <% c.content` (pg_trgm
+  // word_similarity, index-backed by notion_chunks_content_trgm_idx) is
+  // OR'd in below as a fallback so typo'd queries still surface candidates.
+  // Uses the default pg_trgm.word_similarity_threshold (0.6) — tune via
+  // `SET pg_trgm.word_similarity_threshold = ...` if this proves too
+  // loose/tight against real query traffic.
   const cand = getHybridCandidateLimit();
   const wSem = getSemWeight();
   const wKw = getKwWeight();
@@ -205,9 +202,6 @@ export async function fetchHybridChunkRows(
     ? "c.embedding::text AS embedding_literal"
     : "NULL AS embedding_literal";
 
-  // DIAGNOSTIC (temporary, gated behind CHAT_DEBUG): time the Postgres side
-  // separately from the embedding API call (logged in embeddings.ts) so we
-  // can see which one actually accounts for retrieval_ms.
   const dbStart = Date.now();
   const logDbTiming = (rows: ChunkHybridRow[]) => {
     if (process.env.CHAT_DEBUG === "true") {
@@ -241,10 +235,10 @@ export async function fetchHybridChunkRows(
           kw AS (
             SELECT
               c.id,
-              LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $2)))::float8 AS kw_score
+              LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('simple', $2)))::float8 AS kw_score
             FROM notion_chunks c
             JOIN notion_pages p ON p.id = c.page_id
-            WHERE c.fts @@ plainto_tsquery('english', $2)
+            WHERE (c.fts @@ plainto_tsquery('simple', $2) OR $2 <% c.content)
               AND p.notion_edited_at >= $8::timestamptz
               AND p.notion_edited_at < $9::timestamptz
             ORDER BY kw_score DESC NULLS LAST
@@ -305,9 +299,9 @@ END
           kw AS (
             SELECT
               c.id,
-              LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $2)))::float8 AS kw_score
+              LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('simple', $2)))::float8 AS kw_score
             FROM notion_chunks c
-            WHERE c.fts @@ plainto_tsquery('english', $2)
+            WHERE (c.fts @@ plainto_tsquery('simple', $2) OR $2 <% c.content)
             ORDER BY kw_score DESC NULLS LAST
             LIMIT $3
           ),
@@ -367,11 +361,11 @@ END
             p.created_by,
             p.status,
             0::float8 AS sem_score,
-            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS kw_score,
-            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS final_score
+            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('simple', $1)))::float8 AS kw_score,
+            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('simple', $1)))::float8 AS final_score
           FROM notion_chunks c
           JOIN notion_pages p ON p.id = c.page_id
-          WHERE c.fts @@ plainto_tsquery('english', $1)
+          WHERE (c.fts @@ plainto_tsquery('simple', $1) OR $1 <% c.content)
             AND p.notion_edited_at >= $2::timestamptz
             AND p.notion_edited_at < $3::timestamptz
           ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
@@ -393,11 +387,11 @@ END
             p.created_by,
             p.status,
             0::float8 AS sem_score,
-            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS kw_score,
-            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('english', $1)))::float8 AS final_score
+            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('simple', $1)))::float8 AS kw_score,
+            LEAST(1.0, ts_rank_cd(c.fts, plainto_tsquery('simple', $1)))::float8 AS final_score
           FROM notion_chunks c
           JOIN notion_pages p ON p.id = c.page_id
-          WHERE c.fts @@ plainto_tsquery('english', $1)
+          WHERE (c.fts @@ plainto_tsquery('simple', $1) OR $1 <% c.content)
           ORDER BY final_score DESC NULLS LAST, c.page_id, c.chunk_index
           LIMIT $2
         `,
@@ -410,7 +404,6 @@ export type HybridChunkRetrieval = {
   context: string | null;
   queries: string[];
 };
-
 
 /** Runs `fn` over `items`, at most `limit` in flight at once. */
 async function runWithConcurrencyLimit<T, R>(
@@ -501,4 +494,146 @@ export async function hybridChunkContext(
   options?: { year?: number },
 ): Promise<string | null> {
   return hybridChunkContextFromQueries([searchQuery], options);
+}
+
+// ─── MMR / dedupe helpers ───
+export type MMRCandidate = {
+  id: string;
+  relevance: number;
+  embedding?: number[] | null;
+  text?: string | null;
+  page_id?: string;
+};
+
+function readLambda() {
+  const parsed = Number(process.env.MMR_LAMBDA);
+  if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) return parsed;
+  return 0.85;
+}
+
+function readMaxPerPage() {
+  const parsed = Number(process.env.RETRIEVAL_MAX_CHUNKS_PER_PAGE);
+  if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+  return 2;
+}
+
+export function isMmrEnabled() {
+  return process.env.MMR_ENABLED !== "false";
+}
+
+export function parsePgVector(value: unknown): number[] | null {
+  if (Array.isArray(value)) {
+    return value.every((n) => typeof n === "number" && Number.isFinite(n))
+      ? (value as number[])
+      : null;
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("[")) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    return parsed.every((n) => typeof n === "number" && Number.isFinite(n))
+      ? (parsed as number[])
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function cosineSimilarity(a: number[], b: number[]) {
+  if (a.length !== b.length || !a.length) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  if (!normA || !normB) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function tokenSet(text: string) {
+  return new Set(
+    splitWords(keepLettersNumbersAndSpaces(toLower(text))).filter((word) => word.length >= 3),
+  );
+}
+
+function jaccardSimilarity(a: string, b: string) {
+  const setA = tokenSet(a);
+  const setB = tokenSet(b);
+  if (!setA.size || !setB.size) return 0;
+  let intersection = 0;
+  for (const token of setA) {
+    if (setB.has(token)) intersection += 1;
+  }
+  const union = setA.size + setB.size - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+function pairSimilarity(a: MMRCandidate, b: MMRCandidate) {
+  if (a.embedding?.length && b.embedding?.length) return cosineSimilarity(a.embedding, b.embedding);
+  const textA = a.text?.trim() ?? "";
+  const textB = b.text?.trim() ?? "";
+  if (!textA || !textB) return 0;
+  return jaccardSimilarity(textA, textB);
+}
+
+export function selectWithMMR<T extends MMRCandidate>(candidates: T[], topK: number): T[] {
+  if (!candidates.length || topK <= 0) return [];
+  const lambda = readLambda();
+  const maxPerPage = readMaxPerPage();
+  const maxRelevance = Math.max(...candidates.map((c) => c.relevance), 1e-6);
+  const pool = [...candidates].sort((a, b) => b.relevance - a.relevance);
+  const selected: T[] = [];
+  const selectedIds = new Set<string>();
+  const pageCounts = new Map<string, number>();
+  while (selected.length < topK) {
+    let best: T | null = null;
+    let bestScore = -Infinity;
+    for (const candidate of pool) {
+      if (selectedIds.has(candidate.id)) continue;
+      const pageKey = candidate.page_id ?? candidate.id;
+      if ((pageCounts.get(pageKey) ?? 0) >= maxPerPage) continue;
+      const relevanceNorm = candidate.relevance / maxRelevance;
+      let maxSim = 0;
+      for (const picked of selected) {
+        maxSim = Math.max(maxSim, pairSimilarity(candidate, picked));
+      }
+      const mmrScore = lambda * relevanceNorm - (1 - lambda) * maxSim;
+      if (mmrScore > bestScore) {
+        bestScore = mmrScore;
+        best = candidate;
+      }
+    }
+    if (!best) break;
+    selected.push(best);
+    selectedIds.add(best.id);
+    const pageKey = best.page_id ?? best.id;
+    pageCounts.set(pageKey, (pageCounts.get(pageKey) ?? 0) + 1);
+  }
+  return selected;
+}
+
+export function dedupeByTextOverlap<T extends MMRCandidate>(
+  candidates: T[],
+  threshold = 0.85,
+): T[] {
+  const kept: T[] = [];
+  for (const candidate of candidates) {
+    const text = candidate.text?.trim() ?? "";
+    if (!text) {
+      kept.push(candidate);
+      continue;
+    }
+    const isDuplicate = kept.some((existing) => {
+      const other = existing.text?.trim() ?? "";
+      if (!other) return false;
+      return jaccardSimilarity(text, other) >= threshold;
+    });
+    if (!isDuplicate) kept.push(candidate);
+  }
+  return kept;
 }
