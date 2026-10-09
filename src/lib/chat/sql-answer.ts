@@ -3,6 +3,7 @@ import { PipelineContext } from "./telemetry";
 import { handleMetadataQuery } from "@/lib/sql/answers";
 import {
   isMetadataOnlyKind,
+  isSqlMissAnswer,
   isTeamActivityMetadataGap,
   metadataNotFoundAnswer,
   shouldFallbackToRag,
@@ -12,7 +13,6 @@ import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { jsonAnswer } from "./smalltalk";
 import { buildClarificationAnswer } from "@/lib/chat/clarification";
 import { lazyResolveSqlEntities } from "@/lib/query/entity-resolver";
-import { classifySqlAnswer } from "@/lib/sql/result";
 
 export function isSynthesisRequest(message: string): boolean {
   if (/\b(role|job|responsibilit|position|designation|title|summariz|summary|overview|analy[sz]|explain|opinion|think)\b/i.test(message)) {
@@ -69,7 +69,6 @@ export async function trySqlAnswer(
 
   const metadataOnly = isMetadataOnlyKind(finalParsed.kind);
   const directAnswer = await handleMetadataQuery(finalParsed);
-  const sqlResult = classifySqlAnswer(directAnswer);
 
   if (signal?.aborted) return null;
 
@@ -79,17 +78,17 @@ export async function trySqlAnswer(
       metadataOnly,
       directAnswerLength: directAnswer?.length ?? null,
       directAnswerPreview: directAnswer?.slice(0, 80) ?? null,
-      sqlStatus: sqlResult.status,
+      isMiss: directAnswer ? isSqlMissAnswer(directAnswer) : "no answer",
     });
   }
 
-  if (sqlResult.status === "hit") {
+  if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer)) {
     const isSynthesis = isSynthesisRequest(ctx.message);
     if (isSynthesis) {
-      logChatRoute("sql_synthesis_stream", finalParsed, { answer_chars: sqlResult.answer.length });
+      logChatRoute("sql_synthesis_stream", finalParsed, { answer_chars: directAnswer.length });
       return streamOpenAIAnswer(
         ctx.message,
-        sqlResult.answer,
+        directAnswer,
         ctx.history,
         ctx.sessionId,
         finalParsed.kind,
@@ -104,7 +103,7 @@ export async function trySqlAnswer(
               queryExpansion: 0,
               retrieval: 0,
               expandedQueryCount: 1,
-              contextChars: sqlResult.answer.length,
+              contextChars: directAnswer.length,
               topScore: 1.0,
               avgScore: 1.0,
               confidenceOk: true,
@@ -117,9 +116,9 @@ export async function trySqlAnswer(
   }
 
   if (metadataOnly) {
-    if (sqlResult.status === "hit") {
-      logChatRoute("sql_hit", finalParsed, { answer_chars: sqlResult.answer.length });
-      return jsonAnswer(ctx.sessionId, sqlResult.answer, emotion, signal);
+    if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer)) {
+      logChatRoute("sql_hit", finalParsed, { answer_chars: directAnswer.length });
+      return jsonAnswer(ctx.sessionId, directAnswer, emotion, signal);
     }
     if (
       finalParsed.kind === "team_activity" &&
@@ -136,9 +135,9 @@ export async function trySqlAnswer(
     return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(finalParsed), emotion, signal);
   }
 
-  if (sqlResult.status === "hit" && !shouldFallbackToRag(finalParsed, sqlResult.answer)) {
-    logChatRoute("sql_hit", finalParsed, { answer_chars: sqlResult.answer.length });
-    return jsonAnswer(ctx.sessionId, sqlResult.answer, emotion, signal);
+  if (directAnswer && !shouldFallbackToRag(finalParsed, directAnswer)) {
+    logChatRoute("sql_hit", finalParsed, { answer_chars: directAnswer.length });
+    return jsonAnswer(ctx.sessionId, directAnswer, emotion, signal);
   }
 
   if (directAnswer) {
