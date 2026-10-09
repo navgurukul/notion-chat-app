@@ -120,3 +120,50 @@ Who approves travel expenses?
 What are the expectations for fellows?
 
 Where is the SOP for partner reporting?
+
+
+
+
+
+
+
+
+
+1. Fixed cases (re-verify end to end)
+
+"How many projects are there in total?"
+"Which pages does amruta own?"
+"Which pages were updated last week?"
+"List pages updated in the last 7 days"
+
+2. History sequence (same chat)
+
+"What is the goal of notion chatbot?"
+"What is its status?" (expect the 🤖 Notion Chatbot project, status In progress)
+"Who owns it?" (expect Tamanna a and Laxmi Yadav)
+"Now tell me about zuvy"
+"What is its status?" (expect Zuvy, not Notion Chatbot)
+
+3. No-history check (fresh chat)
+
+"What is its status?" (expect clarification, not a guess)
+"Tell me about it"
+
+4. Still-broken cases (expect failures)
+
+"Explain the onboarding process" (compare against the real new-hire onboarding page)
+"What is laxmi working on?" (should include the Notion-to-PostgreSQL sync page, status Done)
+"Hi, kaise ho?" (check whether the reply is Hinglish or English)
+
+5. Phrasing variants (does the regex only match one wording?)
+
+"Total number of projects?"
+"What pages does laxmi own?"
+"Show me pages edited this month"
+"Which pages did amruta update recently?"
+
+6. Edge cases
+
+"How many projects are in progress?" (a filtered count, not the total)
+"Which pages does nobody own?"
+"What's the weather today?"
