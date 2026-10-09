@@ -2,103 +2,117 @@ import { parseQueryByRules, withRegexScores, NOISY_ENTITY } from "@/lib/query/ru
 import { classifyQueryIntent, detectIntent, logQueryRouting } from "./intent";
 import type { ParsedQuery } from "./types";
 import type { ChatHistoryItem } from "@/lib/ai/openai";
-import { tryFastPathRegexRoute, isAmbiguousQuery, detectSmalltalkType } from "@/lib/chat/smalltalk";
+import {
+  tryFastPathRegexRoute,
+  isAmbiguousQuery,
+} from "@/lib/chat/smalltalk";
 import {
   isNotionLinkRequest,
   shouldReformulate,
   reformulateSearchQuery,
 } from "@/lib/chat/query-tools";
-import {
-  isFollowUpNeedingContext,
-  getGenderOfPerson,
-  hasGenuineFirstPersonReference,
-  hasExplicitSelfReference,
-} from "./entity-resolver";
+import { isFollowUpNeedingContext, getGenderOfPerson, hasGenuineFirstPersonReference } from "./entity-resolver";
 
-// ─── Config ──────────────────────────────────────────────────────────────
+const INTENT_KIND_HINTS: Record<string, Set<ParsedQuery["kind"]>> = {
+  PERSON_ACTIVITY: new Set([
+    "activity_summary",
+    "worked_on_list",
+    "assigned_list",
+  ]),
+  PERSON_OWNERSHIP: new Set(["owner_list", "owner_of", "project_manager_of"]),
+  PROJECT_TEAM: new Set(["team_roster", "team_activity"]),
+  PROJECT_SUMMARY: new Set(["project_summary", "page_about"]),
+  PROJECT_STATUS: new Set(["status_of", "project_eta"]),
+  ANALYTICS: new Set(["analytics", "project_most_devs", "project_member_breakdown", "people_list", "project_list"]),
+  COMPARISON: new Set(["compare_pages"]),
+  UNKNOWN: new Set(),
+};
 
+const INTENT_CONFIDENCE_FLOORS: Record<string, number> = {
+  PERSON_ACTIVITY: 0.86,
+  PERSON_OWNERSHIP: 0.82,
+  PROJECT_TEAM: 0.8,
+  PROJECT_SUMMARY: 0.8,
+  PROJECT_STATUS: 0.84,
+  ANALYTICS: 0.84,
+  COMPARISON: 0.88,
+  UNKNOWN: 0,
+};
+
+const LLM_ENABLED = process.env.AI_INTENT_CLASSIFIER !== "false";
 export const HIGH_CONFIDENCE = 0.9;
 export const PARSER_CONFIDENCE_THRESHOLD = 0.75;
 
-const LLM_ENABLED = process.env.AI_INTENT_CLASSIFIER !== "false";
-const LLM_TIMEOUT_MS = process.env.IS_EVALUATION === "true" ? 6000 : 2500;
-
-// Regex intent hint -> which parsed kinds it supports, and the minimum
-// confidence a supported kind is lifted to.
-const INTENT_HINTS: Record<string, { kinds: ParsedQuery["kind"][]; floor: number }> = {
-  PERSON_ACTIVITY: { kinds: ["activity_summary", "worked_on_list", "assigned_list"], floor: 0.86 },
-  PERSON_OWNERSHIP: { kinds: ["owner_list", "owner_of", "project_manager_of"], floor: 0.82 },
-  PROJECT_TEAM: { kinds: ["team_roster", "team_activity"], floor: 0.8 },
-  PROJECT_SUMMARY: { kinds: ["project_summary", "page_about"], floor: 0.8 },
-  PROJECT_STATUS: { kinds: ["status_of", "project_eta"], floor: 0.84 },
-  ANALYTICS: {
-    kinds: ["analytics", "project_most_devs", "project_member_breakdown", "people_list", "project_list"],
-    floor: 0.84,
-  },
-  COMPARISON: { kinds: ["compare_pages"], floor: 0.88 },
-};
-
-const SMALLTALK_REGEX =
-  /\b(not\s+)?feel(?:ing)?\s*well\b|\bhow\s+are\s+you\b|^(hi|hello|hey|thanks?|ok|okay)[\s!.,]*$|^(good\s+morning|good\s+afternoon|good\s+evening|goodbye|bye|greetings|hey\s+there|how's\s+it\s+going|what's\s+up)[\s!.,]*$|^(who\s+are\s+you|what\s+is\s+your\s+name|who\s+created\s+you|are\s+you\s+a\s+bot)[\s!.,?]*$/i;
-
-const ANY_PRONOUN = /\b(he|him|his|she|her|hers|they|them|their|me|my|myself|i)\b/i;
-const THIRD_PERSON_PRONOUN = /\b(he|him|his|she|her|hers|they|them|their)\b/i;
-const PRONOUN_ONLY = /^(he|him|his|she|her|hers|they|them|their|me|my|myself|i)$/i;
-const MALE_PRONOUN = /\b(he|him|his)\b/i;
-const FEMALE_PRONOUN = /\b(she|her|hers)\b/i;
-const DATE_WORD = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b|\b20\d{2}\b/i;
-
-type LastEntities = {
-  lastPerson?: string;
-  lastProject?: string;
-  lastMale?: string;
-  lastFemale?: string;
-};
-
-// ─── Rules helpers ───────────────────────────────────────────────────────
-
-function hasBrokenEntities(p: ParsedQuery) {
-  return (
-    (!!p.personName && NOISY_ENTITY.test(p.personName)) ||
-    (!!p.docTitle && (NOISY_ENTITY.test(p.docTitle) || p.docTitle.length > 80))
-  );
+/**
+ * FIX: previously used its own shorter, diverging noisy-entity regex
+ * (`/^(is|was|are|were|only|one|what|who|which)$/i`) that disagreed with
+ * rule-confidence.ts's NOISY_ENTITY. An entity like "manager" or "project"
+ * would fail rule-confidence.ts's entityQuality() check (correctly) but pass
+ * this function's old shorter check (incorrectly) — so whether a bad entity
+ * got flagged for LLM re-verification depended on which of the two
+ * divergent copies ran, not on any real distinction. Both now use the same
+ * source of truth.
+ */
+function hasBrokenEntities(parsed: ParsedQuery) {
+  if (parsed.personName && NOISY_ENTITY.test(parsed.personName)) return true;
+  if (parsed.docTitle && NOISY_ENTITY.test(parsed.docTitle)) return true;
+  if (parsed.docTitle && parsed.docTitle.length > 80) return true;
+  return false;
 }
 
-/** Regex parse, with confidence lifted when the intent hint agrees. */
-function parseRules(question: string): ParsedQuery {
-  const rules = withRegexScores(parseQueryByRules(question));
-  const hint = INTENT_HINTS[detectIntent(question)];
-  if (!hint || !hint.kinds.includes(rules.kind) || rules.confidence >= hint.floor) return rules;
-  return { ...rules, confidence: hint.floor };
-}
-
-/** True when the regex result is too weak to trust without the LLM. */
-function needsLlm(rules: ParsedQuery): boolean {
+function shouldUseLlm(rules: ParsedQuery): boolean {
   if (!LLM_ENABLED) return false;
-  return (
-    rules.kind === "semantic" ||
-    !!rules.requiresLlmVerification ||
-    hasBrokenEntities(rules) ||
-    (rules.parserConfidence !== undefined && rules.parserConfidence < PARSER_CONFIDENCE_THRESHOLD) ||
-    rules.confidence < PARSER_CONFIDENCE_THRESHOLD
-  );
+  if (rules.kind === "semantic") return true;
+  if (rules.requiresLlmVerification) return true;
+  if (hasBrokenEntities(rules)) return true;
+  if (
+    rules.parserConfidence !== undefined &&
+    rules.parserConfidence < PARSER_CONFIDENCE_THRESHOLD
+  )
+    return true;
+  if (rules.confidence < PARSER_CONFIDENCE_THRESHOLD) return true;
+  return false;
+}
+
+function applyIntentHint(question: string, rules: ParsedQuery): ParsedQuery {
+  const intent = detectIntent(question);
+  const hintedKinds = INTENT_KIND_HINTS[intent];
+  if (!hintedKinds?.has(rules.kind)) return rules;
+
+  const floor = INTENT_CONFIDENCE_FLOORS[intent] ?? 0;
+  if (rules.confidence >= floor) return rules;
+
+  return {
+    ...rules,
+    confidence: floor,
+  };
 }
 
 /**
- * Combine regex and LLM results. Rules win only when they are highly
- * confident, entities are clean, and the LLM agrees (or is unsure).
- * Otherwise the LLM's kind wins when it is confident enough.
+ * FIX: previously, when `rules.confidence >= HIGH_CONFIDENCE` (0.9), this
+ * returned `{ ...rules, source: "merged", confidence: max(rules.confidence,
+ * llm.confidence * 0.5) }` — it kept `rules.kind` UNCONDITIONALLY and only
+ * ever blended the LLM's confidence NUMBER in. The LLM's classified `kind`
+ * was computed but never used in that branch, so a confidently-wrong regex
+ * rule could never be corrected even when the LLM disagreed with high
+ * confidence of its own. Now rules only win outright when the LLM agrees,
+ * or is clearly less confident than the rules parser.
+ *
+ * NOTE: this changes routing behavior — test against your eval set / query
+ * log before shipping. The threshold below (`llm.confidence < rules.confidence
+ * - 0.1`) is a starting point, not a guarantee.
  */
 function mergeRulesAndLlm(rules: ParsedQuery, llm: ParsedQuery): ParsedQuery {
-  const smalltalk = llm.kind === "smalltalk" && llm.confidence >= 0.5;
+  const smalltalkOverride = llm.kind === "smalltalk" && llm.confidence >= 0.5;
 
-  const rulesWin =
-    !smalltalk &&
+  // Regex wins outright only if regex confidence is high AND (LLM agrees OR LLM is unconfident < 0.5)
+  const rulesWinsOutright =
+    !smalltalkOverride &&
     rules.confidence >= HIGH_CONFIDENCE &&
     !hasBrokenEntities(rules) &&
     (rules.kind === llm.kind || llm.confidence < 0.5);
 
-  if (rulesWin) {
+  if (rulesWinsOutright) {
     return {
       ...rules,
       source: "merged",
@@ -106,15 +120,16 @@ function mergeRulesAndLlm(rules: ParsedQuery, llm: ParsedQuery): ParsedQuery {
     };
   }
 
-  const kind = smalltalk
+  const mergedKind = smalltalkOverride
     ? "smalltalk"
     : llm.confidence >= rules.confidence || llm.confidence >= 0.65
       ? llm.kind
       : rules.kind;
+  const confidence = Math.max(llm.confidence, rules.confidence);
 
   return {
-    kind,
-    confidence: Math.max(llm.confidence, rules.confidence),
+    kind: mergedKind,
+    confidence,
     source: "merged",
     personName: rules.personName,
     docTitle: rules.docTitle,
@@ -125,176 +140,216 @@ function mergeRulesAndLlm(rules: ParsedQuery, llm: ParsedQuery): ParsedQuery {
   };
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: T,
+): Promise<T> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      console.warn(`[resolveQuery] Intent classifier timeout after ${ms}ms. Falling back.`);
+      console.warn(
+        `[resolveQuery] Intent classifier timeout after ${timeoutMs}ms. Falling back.`,
+      );
       resolve(fallback);
-    }, ms);
+    }, timeoutMs);
     promise
-      .then((res) => resolve(res))
-      .catch(() => resolve(fallback))
-      .finally(() => clearTimeout(timer));
+      .then((res) => {
+        clearTimeout(timer);
+        resolve(res);
+      })
+      .catch(() => {
+        clearTimeout(timer);
+        resolve(fallback);
+      });
   });
 }
 
-// ─── Step 1: instant routes (no LLM, no DB) ──────────────────────────────
-
-function instantRoute(question: string, history: ChatHistoryItem[]): ParsedQuery | null {
-  const base = { confidence: 1.0, source: "regex", raw: question } as const;
-
-  if (
-    SMALLTALK_REGEX.test(question) ||
-    tryFastPathRegexRoute(question) ||
-    isAmbiguousQuery(question, history)
-  ) {
-    return { ...base, kind: "smalltalk" };
-  }
-  if (isNotionLinkRequest(question)) return { ...base, kind: "semantic" };
-  return null;
-}
-
-function isPersonProfileQuestion(question: string) {
-  return /\b(?:tell\s+me\s+about|what\s+is\s+my\s+(?:role|job|position|designation)|my\s+(?:role|job|position|designation))\b/i.test(question);
-}
-
-// ─── Step 3: pick the person for pronouns / follow-ups ───────────────────
-
-async function resolveFollowUpPerson(
-  question: string,
-  sessionName: string | undefined,
-  last: LastEntities | undefined,
-): Promise<string | undefined> {
-  if (hasExplicitSelfReference(question) && sessionName) return sessionName;
-
-  const pickByGender = async (preferred: string | undefined, blocked: "male" | "female") => {
-    if (preferred) return preferred;
-    if (last?.lastPerson && (await getGenderOfPerson(last.lastPerson)) !== blocked) {
-      return last.lastPerson;
-    }
-    return undefined;
-  };
-
-  if (MALE_PRONOUN.test(question)) return pickByGender(last?.lastMale, "female");
-  if (FEMALE_PRONOUN.test(question)) return pickByGender(last?.lastFemale, "male");
-  return last?.lastPerson;
-}
-
-// ─── Main entry ──────────────────────────────────────────────────────────
-
 /**
- * Flow: instant routes -> (reformulate + regex rules, LLM only if rules are
- * weak) -> fill person/doc from reformulation and conversation context.
+ * Hybrid router: runs fast deterministic checks first (greeting/thanks/link),
+ * then regex rules on raw query, and calls LLM classifier with a 1500ms timeout
+ * only when confidence is low. Does not perform DB entity resolution upfront.
  */
 export async function resolveQuery(
   question: string,
   history: ChatHistoryItem[] = [],
   sessionName?: string,
-  lastEntities?: LastEntities,
+  lastEntities?: { lastPerson?: string; lastProject?: string; lastMale?: string; lastFemale?: string },
 ): Promise<ParsedQuery> {
-  // 1. Instant routes
-  const instant = instantRoute(question, history);
-  if (instant) return instant;
+  // 1. Fast-path regex checks (greetings/thanks/bye/link)
+  const fastPath = tryFastPathRegexRoute(question);
 
-  if (sessionName && hasGenuineFirstPersonReference(question) && isPersonProfileQuestion(question)) {
+  const SMALLTALK_HEURISTIC =
+    /\b(not\s+)?feel(?:ing)?\s*well\b|\bhow\s+are\s+you\b|^(hi|hello|hey|thanks?|ok|okay)[\s!.,]*$|^(good\s+morning|good\s+afternoon|good\s+evening|goodbye|bye|greetings|hey\s+there|how's\s+it\s+going|what's\s+up)[\s!.,]*$|^(who\s+are\s+you|what\s+is\s+your\s+name|who\s+created\s+you|are\s+you\s+a\s+bot)[\s!.,?]*$/i;
+
+  if (SMALLTALK_HEURISTIC.test(question)) {
     return {
-      kind: "person_profile",
-      personName: sessionName,
+      kind: "smalltalk",
       confidence: 1.0,
       source: "regex",
       raw: question,
     };
   }
 
-  // 2. Start reformulation and (if the raw question looks weak) the LLM
-  //    classifier together, so follow-ups pay max(a, b) instead of a + b.
-  //    The early classifier sees the raw question, not the reformulated one.
-  const reformulating = shouldReformulate(question, history);
-  const reformulationPromise = reformulating ? reformulateSearchQuery(question, history) : null;
-
-  const rawRules = parseRules(question);
-  const earlyLlmPromise = needsLlm(rawRules) ? classifyQueryIntent(question) : null;
-
-  let processedQuestion = question;
-  let reformulatedText: string | undefined;
-  let rulesInput = question;
-
-  if (reformulationPromise) {
-    const reformulated = await reformulationPromise;
-    processedQuestion = reformulated.searchQuery;
-    reformulatedText = reformulated.searchQuery;
-    // Only trust an LLM rewrite as regex input when it did not swap out a pronoun.
-    if (reformulated.method === "llm" && !ANY_PRONOUN.test(question)) {
-      rulesInput = reformulated.searchQuery;
-    }
+  if (fastPath) {
+    return {
+      kind: "smalltalk",
+      confidence: 1.0,
+      source: "regex",
+      raw: question,
+    };
   }
-
-  const rules = rulesInput === question ? rawRules : parseRules(rulesInput);
-
-  // 3. Use the LLM only when the rules are not confident
-  let parsed = rules;
-  let usedLlm = false;
-  if (needsLlm(rules)) {
-    usedLlm = true;
-    const llm = await withTimeout(
-      earlyLlmPromise ?? classifyQueryIntent(processedQuestion),
-      LLM_TIMEOUT_MS,
-      null,
-    );
-    if (llm) parsed = mergeRulesAndLlm(rules, llm);
+  if (isAmbiguousQuery(question, history)) {
+    return {
+      kind: "smalltalk",
+      confidence: 1.0,
+      source: "regex",
+      raw: question,
+    };
   }
-
-  // The LLM may call short corrections or confirmations smalltalk. Only the
-  // strict local vocabulary is allowed to take the smalltalk lane; everything
-  // else must continue through retrieval with its conversation context.
-  if (parsed.kind === "smalltalk" && !detectSmalltalkType(question)) {
-    parsed = {
-      ...parsed,
-      kind: rules.kind === "smalltalk" ? "semantic" : rules.kind,
-      confidence: Math.min(parsed.confidence, 0.6),
+  if (isNotionLinkRequest(question)) {
+    return {
+      kind: "semantic",
+      confidence: 1.0,
+      source: "regex",
+      raw: question,
     };
   }
 
-  // 4. Fill missing doc/person from the reformulated text
+  // 1.5 Early Query Reformulation for follow-up turns
+  //
+  // FIX (Latency): previously `await reformulateSearchQuery(...)` (an LLM
+  // call) ran to completion BEFORE even checking whether the intent
+  // classifier (a second, separate LLM call) would be needed — and for most
+  // follow-up-shaped questions ("today?", "what about X?"), both fired,
+  // strictly sequentially, costing their sum (often 1.5-3s combined). This
+  // was flagged as a planned-but-unshipped fix in this project's own notes.
+  //
+  // Now: a cheap synchronous regex pass on the ORIGINAL question decides
+  // whether the classifier will likely be needed, and if so, it's fired
+  // CONCURRENTLY with reformulation rather than waiting for it — collapsing
+  // the cost to roughly max(reformulation, classification) instead of their
+  // sum. TRADE-OFF: the speculative classifier call sees the raw follow-up
+  // text ("today?") rather than the reformulated standalone question
+  // ("what tasks are assigned to me today"), so it has less context in
+  // exactly the cases this path targets. Rules-parsed entities (person/doc)
+  // still come from the reformulated text either way — only the LLM kind
+  // classification uses less context in the parallelized path. NEEDS
+  // VALIDATION against the eval set (npm run eval:retrieval /
+  // eval:faithfulness) before relying on this in production — same caution
+  // this file already applies to routing changes in mergeRulesAndLlm above.
+  let processedQuestion = question;
+  let reformulatedQueryText: string | undefined;
+  let rulesInputQuestion = question;
+
+  const needsReformulation = shouldReformulate(question, history);
+  const reformulationPromise = needsReformulation
+    ? reformulateSearchQuery(question, history)
+    : null;
+
+  const preliminaryRules = applyIntentHint(
+    question,
+    withRegexScores(parseQueryByRules(question)),
+  );
+  const speculativeLlmPromise = shouldUseLlm(preliminaryRules)
+    ? classifyQueryIntent(question)
+    : null;
+
+  if (needsReformulation) {
+    const reformulated = await reformulationPromise!;
+    processedQuestion = reformulated.searchQuery;
+    reformulatedQueryText = reformulated.searchQuery;
+    const hasPersonPronoun = /\b(he|him|his|she|her|hers|they|them|their|me|my|myself|i)\b/i.test(question);
+    if (reformulated.method === "llm" && !hasPersonPronoun) {
+      rulesInputQuestion = reformulated.searchQuery;
+    }
+  }
+
+  // 2. Regex rules parsing on the rules-safe question
+  const rules =
+    rulesInputQuestion === question
+      ? preliminaryRules // same input already parsed above — avoid recomputing
+      : applyIntentHint(
+          rulesInputQuestion,
+          withRegexScores(parseQueryByRules(rulesInputQuestion)),
+        );
+
+  let parsed: ParsedQuery;
+  let usedLlm = false;
+
+  // 3. Skip LLM if rules are confident
+  if (!shouldUseLlm(rules)) {
+    parsed = rules;
+  } else {
+    usedLlm = true;
+    // Reuse the speculative call fired above whenever we decided to fire it.
+    // When reformulation didn't run (or returned the same text), this is
+    // input-identical to firing fresh — pure speedup, no trade-off. When
+    // reformulation DID change the text, this deliberately still reuses the
+    // raw-question classification rather than waiting for a fresh call on
+    // the reformulated text — that's the actual latency win for follow-ups,
+    // at the documented context-tradeoff cost above. If we never fired the
+    // speculative call at all (regex-on-original looked confident enough),
+    // fall back to firing fresh now on processedQuestion — identical to
+    // pre-parallelization behavior, no regression.
+    const llmPromise = speculativeLlmPromise ?? classifyQueryIntent(processedQuestion);
+    const timeoutLimit = process.env.IS_EVALUATION === "true" ? 6000 : 2500;
+    const llm = await withTimeout(llmPromise, timeoutLimit, null);
+    if (!llm) {
+      parsed = rules;
+    } else {
+      parsed = mergeRulesAndLlm(rules, llm);
+    }
+  }
+
   let docTitle = parsed.docTitle;
   let personName = parsed.personName;
+  if (reformulatedQueryText) {
+    const refRules = parseQueryByRules(reformulatedQueryText);
+    if (!docTitle && refRules.docTitle) {
+      docTitle = refRules.docTitle;
+    }
+    const originalHasPronoun = /\b(he|him|his|she|her|hers|they|them|their)\b/i.test(question) || hasGenuineFirstPersonReference(question);
+    if (!personName && refRules.personName && !originalHasPronoun) {
+      personName = refRules.personName;
+    }
+  }
 
-  if (DATE_WORD.test(question) && personName && /^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|20\d{2})$/i.test(personName.trim())) {
+  if (personName && /^(he|him|his|she|her|hers|they|them|their|me|my|myself|i)$/i.test(personName)) {
     personName = undefined;
   }
 
-  if (reformulatedText) {
-    const ref = parseQueryByRules(reformulatedText);
-    if (!docTitle && ref.docTitle) docTitle = ref.docTitle;
-
-    const originalHasPronoun =
-      THIRD_PERSON_PRONOUN.test(question) || hasGenuineFirstPersonReference(question);
-    if (!personName && ref.personName && !originalHasPronoun) personName = ref.personName;
-  }
-
-  if (personName && PRONOUN_ONLY.test(personName)) personName = undefined;
-
-  // 5. Fill person from the conversation ("he", "my", "what about that?")
   if (!personName && isFollowUpNeedingContext(question, history)) {
-    personName = await resolveFollowUpPerson(question, sessionName, lastEntities);
+    const hasFirstPerson = hasGenuineFirstPersonReference(question);
+    const hasMalePronoun = /\b(he|him|his)\b/i.test(question);
+    const hasFemalePronoun = /\b(she|her|hers)\b/i.test(question);
+    if (hasFirstPerson && sessionName) {
+      personName = sessionName;
+    } else if (hasMalePronoun) {
+      personName = lastEntities?.lastMale;
+      if (!personName && lastEntities?.lastPerson && (await getGenderOfPerson(lastEntities.lastPerson)) !== "female") {
+        personName = lastEntities.lastPerson;
+      }
+    } else if (hasFemalePronoun) {
+      personName = lastEntities?.lastFemale;
+      if (!personName && lastEntities?.lastPerson && (await getGenderOfPerson(lastEntities.lastPerson)) !== "male") {
+        personName = lastEntities.lastPerson;
+      }
+    } else {
+      personName = lastEntities?.lastPerson;
+    }
   }
 
-  if (!personName && sessionName && hasExplicitSelfReference(question) &&
-      ["assigned_list", "worked_on_list", "activity_summary", "owner_list"].includes(parsed.kind)) {
-    personName = sessionName;
-  }
-
-  const result: ParsedQuery = {
+  const finalParsed: ParsedQuery = {
     ...parsed,
     ...(docTitle ? { docTitle } : {}),
     personName: personName || parsed.personName,
     raw: question,
-    reformulatedQuery: reformulatedText,
-    lowConfidence: parsed.confidence < 0.6,
+    reformulatedQuery: reformulatedQueryText,
+    lowConfidence: parsed.confidence < 0.60,
   };
 
-  logQueryRouting(question, rules, result, usedLlm);
-  return result;
+  logQueryRouting(question, rules, finalParsed, usedLlm);
+  return finalParsed;
 }
 
 export function resolveQueryRulesOnly(question: string): ParsedQuery {

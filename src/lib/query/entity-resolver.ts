@@ -577,10 +577,6 @@ export function hasGenuineFirstPersonReference(text: string): boolean {
   return /\b(my|me|myself|i)\b/i.test(maskFillerMe(text));
 }
 
-export function hasExplicitSelfReference(text: string): boolean {
-  return /\b(my|mera|meri|mere|mujhe)\b/i.test(maskFillerMe(text));
-}
-
 export function resolvePronouns(
   message: string,
   sessionName?: string,
@@ -592,7 +588,7 @@ export function resolvePronouns(
 
   const maskedText = maskFillerMe(text);
 
-  const firstPersonRegex = /\b(my|mera|meri|mere|mujhe)\b/i;
+  const firstPersonRegex = /\b(my|me|myself|i)\b/i;
   if (sessionName && firstPersonRegex.test(maskedText)) {
     resolvedPerson = sessionName;
     resolvedQuality = ResolutionQuality.EXACT;
@@ -693,15 +689,6 @@ export function isFollowUpNeedingContext(message: string, history: ChatHistoryIt
 
   if (!history || history.length === 0) return false;
 
-  // Date/status fragments such as "only for Sep 2026" refine the previous
-  // task query and must retain its person/project scope.
-  if (
-    /^(?:only\s+)?(?:for|in|during)\s+(?:the\s+)?(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|20\d{2})/i.test(lower) ||
-    /^(?:only\s+)?(?:open|active|completed|done|in\s+progress|not\s+started)\b/i.test(lower)
-  ) {
-    return true;
-  }
-
   const words = lower.split(/\s+/).filter(Boolean);
   if (words.length >= 2 && words.length <= 10) {
     const followUpPrefixes = [/^(what\s+about|how\s+about|and|but|or|also|then|so)\s+/i];
@@ -799,18 +786,8 @@ export async function lazyResolveSqlEntities(
   lastEntities?: { lastPerson?: string; lastProject?: string; lastMale?: string; lastFemale?: string }
 ): Promise<ParsedQuery> {
   const finalParsed = { ...parsed };
-  const rawMessage = parsed.reformulatedQuery?.trim() || parsed.raw || "";
+  const rawMessage = parsed.raw || "";
   const needsFollowUpContext = isFollowUpNeedingContext(rawMessage, history);
-
-  if (process.env.NODE_ENV !== "production" || process.env.CHAT_DEBUG === "true") {
-    console.log("[entity_resolve] input", {
-      original: parsed.raw,
-      reformulated: parsed.reformulatedQuery,
-      input: rawMessage,
-      kind: parsed.kind,
-      lastPerson: lastEntities?.lastPerson,
-    });
-  }
 
   const needsPerson = [
     "assigned_list",
@@ -863,26 +840,7 @@ export async function lazyResolveSqlEntities(
           }
         };
       } else {
-        // FIX (Accuracy): total resolution miss (no exact/first-name/
-        // partial/fuzzy match, no candidates at all) previously fell back
-        // to `rawPerson` silently — the raw, still-broken name would flow
-        // straight into the SQL LIKE query, guaranteed to match nothing,
-        // and the user got a blank/generic "no data found" answer with no
-        // signal that their spelling (or the person) was the problem.
-        // Surfacing this through resolvedEntities lets buildClarificationAnswer
-        // give actionable feedback instead of silently dead-ending.
-        finalParsed.personName = "";
-        finalParsed.resolvedEntities = {
-          ...finalParsed.resolvedEntities,
-          person: {
-            value: null,
-            quality: resolved.quality,
-            confidence: 0,
-            ambiguous: false,
-            candidates: [],
-            rawInput: rawPerson,
-          }
-        };
+        finalParsed.personName = rawPerson;
       }
     }
   }
