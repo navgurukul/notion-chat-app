@@ -183,7 +183,7 @@ export default function ChatPage() {
             <div className="p-2 rounded-lg bg-blue-600">
               <MessageSquare className="w-6 h-6" />
             </div>
-            <h1 className="text-xl font-bold tracking-tight">Notion AI</h1>
+            <h1 className="text-xl font-bold tracking-tight">Notion Bot</h1>
           </div>
 
           <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
