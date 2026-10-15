@@ -97,6 +97,14 @@ function cleanPersonName(value: string | null) {
     )
   ).trim();
 
+  // Queries like "give task for me from 5 april 2026 to 14 october 2026"
+  // should not be interpreted as a person name. Strip the trailing date-range
+  // connector even when it is the last token or is followed by a month/day range.
+  cleaned = cleaned
+    .replace(/\s+(?:from|to|between)\s+(?:\d{1,2}(?:st|nd|rd|th)?\s+)?(?:january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec)(?:\s+\d{4})?.*$/i, "")
+    .replace(/\s+(?:from|to|between)\s*$/i, "")
+    .trim();
+
   cleaned = cleaned
     .replace(/\s+(?:has|have|had|is|are|was|were)\s+(?:currently\s+)?(?:been|beed|beeng|bin\s+)?(?:working|worked|done|doing|assigned|on).*/i, "")
     .replace(/\s+(?:has|have|had|is|are|was|were|been|beed|beeng|bin|currently|working|worked|done|doing|assigned|on)\b.*/i, "")

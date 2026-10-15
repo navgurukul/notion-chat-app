@@ -39,7 +39,8 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "enhanced-resolve": "^5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -50,6 +51,7 @@
     "eslint-config-next": "16.1.1",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "enhanced-resolve": "^5"
   }
 }
