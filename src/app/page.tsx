@@ -324,11 +324,12 @@ export default function ChatPage() {
     setMessages((prev) => {
       const merged: Message[] = [];
       const usedDbIds = new Set<string>();
+      let dbCursor = 0;
 
       for (const localMsg of prev) {
         if (localMsg.id) {
-          // Find by ID in the DB messages
-          const dbMsg = mapped.find((m) => m.id === localMsg.id);
+          const dbIndex = mapped.findIndex((m) => m.id === localMsg.id);
+          const dbMsg = dbIndex >= 0 ? mapped[dbIndex] : null;
           if (dbMsg) {
             const useContent = localMsg.content.length > dbMsg.content.length ? localMsg.content : dbMsg.content;
             const useEmotion = localMsg.emotion || dbMsg.emotion;
@@ -337,32 +338,46 @@ export default function ChatPage() {
               content: useContent,
               emotion: useEmotion,
             });
-            if (dbMsg.id) usedDbIds.add(dbMsg.id);
+            if (dbMsg.id) {
+              usedDbIds.add(dbMsg.id);
+              dbCursor = Math.max(dbCursor, dbIndex + 1);
+            }
           } else {
-            // Message had ID but not found in DB (e.g. deleted on server?), keep it
             merged.push(localMsg);
           }
+          continue;
+        }
+
+        let matchingDbIndex = -1;
+        for (let i = dbCursor; i < mapped.length; i++) {
+          const candidate = mapped[i];
+          if (candidate.id && usedDbIds.has(candidate.id)) continue;
+          if (candidate.role === localMsg.role) {
+            matchingDbIndex = i;
+            break;
+          }
+        }
+
+        if (matchingDbIndex >= 0) {
+          const dbMsg = mapped[matchingDbIndex];
+          const useContent = localMsg.content.length > dbMsg.content.length ? localMsg.content : dbMsg.content;
+          const useEmotion = localMsg.emotion || dbMsg.emotion;
+          merged.push({
+            ...dbMsg,
+            content: useContent,
+            emotion: useEmotion,
+          });
+          if (dbMsg.id) {
+            usedDbIds.add(dbMsg.id);
+          }
+          dbCursor = matchingDbIndex + 1;
         } else {
-          // In-flight local message: match by role to any unused DB message
-          const dbMsg = mapped.find((m) => m.role === localMsg.role && (!m.id || !usedDbIds.has(m.id)));
-          if (dbMsg) {
-            const useContent = localMsg.content.length > dbMsg.content.length ? localMsg.content : dbMsg.content;
-            const useEmotion = localMsg.emotion || dbMsg.emotion;
-            merged.push({
-              ...dbMsg,
-              content: useContent,
-              emotion: useEmotion,
-            });
-            if (dbMsg.id) usedDbIds.add(dbMsg.id);
-          } else {
-            // Keep local in-flight message as-is
-            merged.push(localMsg);
-          }
+          merged.push(localMsg);
         }
       }
 
-      // Add any remaining messages from the DB
-      for (const dbMsg of mapped) {
+      for (let i = dbCursor; i < mapped.length; i++) {
+        const dbMsg = mapped[i];
         if (dbMsg.id && !usedDbIds.has(dbMsg.id)) {
           merged.push(dbMsg);
           usedDbIds.add(dbMsg.id);
@@ -767,28 +782,36 @@ const createNewChat = async () => {
   };
 
   const handleEditMessage = async (messageId: string, newContent: string) => {
-    if (isLoading || !activeSessionId || !newContent.trim()) return;
+    const trimmed = newContent.trim();
+    if (isLoading || !activeSessionId || !trimmed) return;
     setEditingMessageId(null);
 
+    const normalizedMessageId = String(messageId || "").trim();
+    if (!normalizedMessageId) return;
+
     const targetIdx = messages.findIndex(
-      (m, i) => m.id === messageId || `user-${i}` === messageId
+      (m, i) => (m.id && m.id === normalizedMessageId) || `user-${i}` === normalizedMessageId
     );
     if (targetIdx === -1) return;
 
     const targetMsg = messages[targetIdx];
     if (targetMsg?.id) {
       try {
-        const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${targetMsg.id}`, {
+        const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${encodeURIComponent(targetMsg.id)}`, {
           method: "DELETE",
         });
-        if (!response.ok) throw new Error("Failed to delete message history");
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => "");
+          throw new Error(errorText || "Failed to delete message history");
+        }
       } catch (error) {
         console.error("Failed to edit message:", error);
+        return;
       }
     }
 
     const historyUpToEdited = messages.slice(0, targetIdx);
-    await executeChatFlow(newContent, historyUpToEdited);
+    await executeChatFlow(trimmed, historyUpToEdited);
   };
 
   const handleRegenerate = async () => {

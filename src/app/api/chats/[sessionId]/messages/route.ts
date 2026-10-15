@@ -77,27 +77,14 @@ export async function DELETE(req: NextRequest, context: RouteContext) {
     if ("error" in owned) return owned.error;
 
     const { searchParams } = new URL(req.url);
-    let messageId = searchParams.get("messageId");
-
+    const rawMessageId = searchParams.get("messageId");
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (messageId === "undefined" || !messageId || !uuidRegex.test(messageId)) {
-      const lastMsgRows = await query<{ id: string }>(
-        "SELECT id FROM chat_messages WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1",
-        [owned.sessionId]
-      );
-      if (lastMsgRows.length > 0) {
-        messageId = lastMsgRows[0].id;
-      } else {
-        messageId = null;
-      }
+
+    if (rawMessageId === "undefined" || !rawMessageId || !uuidRegex.test(rawMessageId)) {
+      return NextResponse.json({ error: "Invalid messageId" }, { status: 400 });
     }
 
-    if (messageId) {
-      await deleteMessagesFrom(owned.sessionId, messageId);
-      return NextResponse.json({ ok: true });
-    }
-
-    await clearChatMessages(owned.sessionId);
+    await deleteMessagesFrom(owned.sessionId, rawMessageId);
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("Clear/Delete chat messages API Error:", error);
