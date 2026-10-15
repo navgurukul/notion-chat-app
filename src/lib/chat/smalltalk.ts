@@ -177,13 +177,7 @@ export async function extractLastEntityFromHistory(history: ChatHistoryItem[]): 
   lastProject?: string;
   lastPerson?: string;
 }> {
-  // Prefer entities stated by the user over names repeated in an answer.
-  // Otherwise an incorrect prior answer can become the context for the next
-  // follow-up and silently replace the entity the user actually named.
-  const recentHistory = [
-    ...history.filter((item) => item.role === "user").reverse(),
-    ...history.filter((item) => item.role !== "user").reverse(),
-  ].slice(0, 6);
+  const recentHistory = [...history].reverse().slice(0, 6);
 
   let lastProject: string | undefined;
   let lastPerson: string | undefined;

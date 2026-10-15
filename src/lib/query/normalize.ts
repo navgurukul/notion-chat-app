@@ -113,7 +113,7 @@ export function normalizeDisplayName(name: string): string | null {
   return capitalized;
 }
 
-export function levenshtein(a: string, b: string): number {
+function levenshtein(a: string, b: string): number {
   const dp: number[][] = Array.from({ length: a.length + 1 }, () =>
     new Array(b.length + 1).fill(0),
   );

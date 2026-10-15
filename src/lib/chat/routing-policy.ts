@@ -1,6 +1,5 @@
 import type { ParsedQuery, QueryKind } from "@/lib/query/types";
 import { isWeakProjectEtaAnswer } from "@/lib/sql/answers";
-import { isSqlMissAnswer } from "@/lib/sql/result";
 
 export type QueryLane = "sql-only" | "rag-only" | "sql-then-rag";
 
@@ -30,7 +29,6 @@ export const QUERY_KIND_CONFIG: Record<QueryKind, QueryKindConfig> = {
   onboarding_tasks: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: true, shouldExpandRag: false },
   risks_for: { lane: "sql-only", trustedWhenSqlHits: true, needsPageTitleOnMiss: true, shouldExpandRag: true },
   people_list: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
-  person_profile: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
   project_list: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
   project_most_devs: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
   project_member_breakdown: { lane: "sql-only", trustedWhenSqlHits: false, needsPageTitleOnMiss: false, shouldExpandRag: false },
@@ -121,10 +119,6 @@ export function metadataNotFoundAnswer(parsed: ParsedQuery): string {
       return `No project data found to generate a member breakdown. Try **Sync changes** or ask about a specific project with **"who is working on [project]?"**`;
     case "project_list":
       return "No projects found in the synced Notion workspace data. Use **Sync changes** to sync your Notion workspace.";
-    case "person_profile":
-      return person
-        ? `I couldn't find synced profile data for **${person}**. Roles are not available in the synced Notion data.`
-        : "I couldn't resolve the current user from this session.";
     case "person_project_membership":
       return person && title
         ? `No. I couldn't find **${person}** associated with the **${title}** project in synced Notion data.`
@@ -140,7 +134,25 @@ export function metadataNotFoundAnswer(parsed: ParsedQuery): string {
   }
 }
 
-export { isSqlMissAnswer } from "@/lib/sql/result";
+/** SQL response that is an explicit empty/miss (not a substantive metadata answer). */
+export function isSqlMissAnswer(answer: string) {
+  const trimmed = answer.trim();
+  const lower = trimmed.toLowerCase();
+
+  if (
+    lower.includes("couldn't find") ||
+    lower.includes("not found in synced") ||
+    lower.includes("i couldn't find") ||
+    lower.startsWith("no matching result")
+  ) {
+    return true;
+  }
+
+  // Structured SQL answers (## / ###) may mention Sync changes as a footnote — not a miss.
+  if (/^#{2,3}\s+/m.test(trimmed) && trimmed.length > 180) return false;
+
+  return false;
+}
 
 /** SQL could not rank team activity from Owner / Last edited by — hybrid RAG may help. */
 export function isTeamActivityMetadataGap(answer: string | null | undefined) {
@@ -173,7 +185,8 @@ export function shouldFallbackToRag(parsed: ParsedQuery, sqlAnswer: string | nul
   }
 
   if (parsed.kind === "page_about") {
-    return true;
+    if (/\bpages matching\b/i.test(sqlAnswer)) return true;
+    return false;
   }
 
   if (parsed.kind === "project_summary" || parsed.kind === "topic_list") {

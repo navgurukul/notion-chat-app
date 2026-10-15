@@ -1,5 +1,4 @@
-import { escapeLike, query } from "@/lib/db";
-import { getPeopleDirectory, TEAM_MEMBER_WHITELIST } from "@/lib/db/people-directory";
+import { escapeLike, query, getPeopleDirectory, TEAM_MEMBER_WHITELIST } from "@/lib/db";
 import {
   findCanonicalName,
   normalizePersonNameForMatch,

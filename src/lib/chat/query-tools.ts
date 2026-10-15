@@ -550,9 +550,7 @@ export function shouldReformulate(message: string, history: ChatHistoryItem[]): 
   
   if (hasPronouns || isElliptical) return true;
 
-  // Conversation fragments and corrections need the prior topic even when
-  // they contain no pronoun (for example, "only for September 2026").
-  return true;
+  return isFollowUpNeedingContext(message, history);
 }
 
 /**

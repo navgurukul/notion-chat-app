@@ -12,7 +12,6 @@ import type {
 import { normalizePersonNameForMatch, isWorkspaceScope, personDedupeKey } from "@/lib/query/normalize";
 import { isNoiseTopic } from "@/lib/query/rules";
 import type { ParsedQuery } from "@/lib/query/types";
-import { isSqlMissAnswer } from "@/lib/sql/result";
 import {
   compactSnippet,
   formatCompareAnswer,
@@ -79,6 +78,66 @@ function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd
     june: 5, jun: 5, july: 6, jul: 6, august: 7, aug: 7, september: 8, sep: 8, sept: 8,
     october: 9, oct: 9, november: 10, nov: 10, december: 11, dec: 11
   };
+
+  // 0. "from X to Y" range — e.g. "from 5 april 2026 to 14 october 2026"
+  const rangeSep = /\bfrom\s+(.+?)\s+to\s+(.+?)(?:\s*$|\?)/i;
+  const rangeMatch = rawQuery.match(rangeSep);
+  if (rangeMatch) {
+    const startPart = rangeMatch[1].trim();
+    const endPart   = rangeMatch[2].trim();
+
+    function parseSingleDate(text: string): Date | null {
+      const t = text.toLowerCase();
+      // "5 april 2026" / "5th april 2026" / "5 april"
+      const p1 = new RegExp(`(\\d{1,2})(?:st|nd|rd|th)?\\s+(${months})(?:\\s+(20\\d{2}))?`, "i");
+      const m1 = t.match(p1);
+      if (m1) {
+        const d = parseInt(m1[1], 10);
+        const mo = MONTH_MAP[m1[2].toLowerCase()];
+        const yr = m1[3] ? parseInt(m1[3], 10) : currentYear;
+        return new Date(Date.UTC(yr, mo, d));
+      }
+      // "april 5, 2026" / "april 5 2026" / "april 5"
+      const p2 = new RegExp(`(${months})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:\\s*,?\\s*(20\\d{2}))?`, "i");
+      const m2 = t.match(p2);
+      if (m2) {
+        const mo = MONTH_MAP[m2[1].toLowerCase()];
+        const d  = parseInt(m2[2], 10);
+        const yr = m2[3] ? parseInt(m2[3], 10) : currentYear;
+        return new Date(Date.UTC(yr, mo, d));
+      }
+      // "2026-04-05" / "2026/04/05"
+      const p3 = /(20\d{2})[-/](\d{1,2})[-/](\d{1,2})/;
+      const m3 = t.match(p3);
+      if (m3) {
+        return new Date(Date.UTC(parseInt(m3[1]), parseInt(m3[2]) - 1, parseInt(m3[3])));
+      }
+      // "05-04-2026"
+      const p4 = /(\d{1,2})[-/](\d{1,2})[-/](20\d{2})/;
+      const m4 = t.match(p4);
+      if (m4) {
+        return new Date(Date.UTC(parseInt(m4[3]), parseInt(m4[2]) - 1, parseInt(m4[1])));
+      }
+      // Named month only: "april 2026" / "october 2026"
+      const p5 = new RegExp(`(${months})(?:\\s+(20\\d{2}))?`, "i");
+      const m5 = t.match(p5);
+      if (m5) {
+        const mo = MONTH_MAP[m5[1].toLowerCase()];
+        const yr = m5[2] ? parseInt(m5[2], 10) : currentYear;
+        return new Date(Date.UTC(yr, mo, 1));
+      }
+      return null;
+    }
+
+    const startDate = parseSingleDate(startPart);
+    const endDateRaw = parseSingleDate(endPart);
+    if (startDate && endDateRaw) {
+      // End date is inclusive — advance by 1 day so SQL uses strict <
+      const endDate = new Date(endDateRaw);
+      endDate.setUTCDate(endDate.getUTCDate() + 1);
+      return { dateStart: startDate.toISOString(), dateEnd: endDate.toISOString() };
+    }
+  }
 
   const explicitYearMatch = q.match(/\b(20\d{2})\b/);
   const explicitYear = explicitYearMatch ? parseInt(explicitYearMatch[1], 10) : null;
@@ -1473,7 +1532,6 @@ export async function handleMetadataQuery(
 ): Promise<string | null> {
   const cacheKey = JSON.stringify({
     kind: parsed.kind,
-    raw: parsed.raw.trim().toLowerCase(),
     personName: parsed.personName,
     docTitle: parsed.docTitle,
     compareTitleB: parsed.compareTitleB,
@@ -1485,73 +1543,21 @@ export async function handleMetadataQuery(
     if (process.env.NODE_ENV !== "production") {
       console.log("[sqlMetadataCache] hit for key:", cacheKey);
     }
-    return cached;
+    return cached === "__NULL__" ? null : cached;
   }
 
   const result = await handleMetadataQueryInner(parsed);
-  if (result !== null && !isSqlMissAnswer(result)) {
-    sqlMetadataCache.set(cacheKey, result);
-  }
+  sqlMetadataCache.set(cacheKey, result === null ? "__NULL__" : result);
   return result;
 }
 
-async function handlePeopleList(parsed?: ParsedQuery): Promise<string> {
-  if (parsed && /\b(?:only|just|filter|show)\b[\s,]*(?:developer|developers|devs|engineer|engineers)\b/i.test(parsed.raw)) {
-    return "Roles are not available in the synced Notion data, so I cannot reliably filter members by developer or engineer role.";
-  }
+async function handlePeopleList(): Promise<string> {
   const dir = await getPeopleDirectory();
   if (dir.length === 0) {
     return "No team members found in the synced Notion data.";
   }
   const list = dir.map((p) => `- **${p.name}**`).join("\n");
   return `## Team Members (${dir.length})\n\nHere are all team members found in the synced Notion data:\n${list}\n\n*Note: This list represents all members who own, create, or edit tasks and pages in the synced Notion workspace (including program managers, People & Culture/HR, and other coordinators in addition to developers).*`;
-}
-
-async function handlePersonProfile(personName: string | undefined): Promise<string | null> {
-  if (!personName) return null;
-  const directory = await getPeopleDirectory();
-  const person = directory.find((entry) => entry.name.toLowerCase() === personName.toLowerCase());
-  if (!person) return null;
-
-  const { personTerm, personName: normalizedName } = buildPersonMatchParams(person.name);
-  const pages = await query<NotionPageRow>(
-    `
-    SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
-    FROM notion_pages
-    WHERE ${personColumnMatchSql("owner", 1, 2)}
-       OR ${personColumnMatchSql("created_by", 1, 2)}
-       OR ${personColumnMatchSql("last_edited_by", 1, 2)}
-       OR lower(coalesce(content, '')) LIKE lower($3)
-    ORDER BY
-      CASE
-        WHEN lower(coalesce(status, '')) IN ('in development', 'in progress', 'testing', 'prod ready') THEN 0
-        ELSE 1
-      END,
-      title ASC
-    LIMIT ${SQL_RESULT_LIMIT}
-    `,
-    [personTerm, normalizedName, `%${person.name}%`],
-  );
-
-  const seen = new Set<string>();
-  const evidence = pages
-    .filter((page) => {
-      const key = page.id || page.title || "";
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, 30)
-    .map((page) => {
-      const details = [page.doc_type, page.status].filter(Boolean).join(" · ");
-      return `- ${formatDisplayLink(page.title || "Untitled", page.url)}${details ? ` — ${details}` : ""}`;
-    });
-
-  const evidenceText = evidence.length
-    ? `\n\n### Related study, task, and project pages\n\n${evidence.join("\n")}`
-    : "\n\nNo related study, task, or project pages were found in the synced Notion data.";
-
-  return `## ${person.name}\n\nRoles are not available in the synced Notion data. The synced directory contains this person as a task/page owner or editor.${evidenceText}`;
 }
 
 /**
@@ -1638,29 +1644,53 @@ async function handleProjectMemberBreakdown(): Promise<string> {
 }
 
 async function handleProjectList(): Promise<string> {
-  const rows = await query<NotionPageRow>(`
-    SELECT DISTINCT id, title, url, owner, created_by, last_edited_by, doc_type, status, content
+  const ranked = await collectProjectMemberCounts();
+
+  const additionalRows = await query<{ title: string | null; url: string | null }>(`
+    SELECT DISTINCT title, url
     FROM notion_pages
     WHERE lower(coalesce(doc_type, '')) LIKE '%project%'
-      AND lower(coalesce(status, '')) IN ('in progress', 'in development', 'testing', 'scoping')
-    ORDER BY title ASC
-    LIMIT ${SQL_RESULT_LIMIT}
+       OR lower(coalesce(title, '')) LIKE '% project'
+       OR lower(coalesce(title, '')) LIKE '% hub'
+    ORDER BY title
   `);
 
-  if (!rows.length) {
+  const seen = new Set(ranked.map((p) => p.title.toLowerCase()));
+  const extraList: string[] = [];
+
+  for (const r of additionalRows) {
+    if (!r.title) continue;
+    const norm = r.title.trim().toLowerCase();
+    if (!seen.has(norm)) {
+      seen.add(norm);
+      const formattedTitle = r.url ? `[**${r.title.trim()}**](${r.url})` : `**${r.title.trim()}**`;
+      extraList.push(`- ${formattedTitle}`);
+    }
+  }
+
+  if (!ranked.length && !extraList.length) {
     return "No projects found in the synced Notion data.";
   }
-  return `## Projects in NavGurukul (${rows.length})\n\n${rows.map((row) => `- ${formatDisplayLink(row.title || "Untitled", row.url)} - **${row.status}**`).join("\n")}\n\n*Only synced pages typed as projects with an active status are included.*`;
+
+  const mainList = ranked
+    .map((p) => `- **${p.title}** (${p.dev_count} contributor${p.dev_count === 1 ? "" : "s"})`)
+    .join("\n");
+
+  let result = `## Projects in NavGurukul (${ranked.length + extraList.length})\n\nHere are all the main projects found in the synced Notion data:\n\n${mainList}`;
+
+  if (extraList.length > 0) {
+    result += `\n\n### Additional Project Hubs & Pages:\n${extraList.join("\n")}`;
+  }
+
+  result += `\n\n*Note: This list represents all active project areas and project pages in the synced Notion workspace.*`;
+  return result;
 }
 
 async function handleMetadataQueryInner(
   parsed: ParsedQuery,
 ): Promise<string | null> {
   if (parsed.kind === "people_list") {
-    return handlePeopleList(parsed);
-  }
-  if (parsed.kind === "person_profile") {
-    return handlePersonProfile(parsed.personName);
+    return handlePeopleList();
   }
   if (parsed.kind === "project_list") {
     return handleProjectList();
@@ -1852,7 +1882,6 @@ async function handleMetadataQueryInner(
               AND notion_edited_at < $5::timestamptz
             )
           )
-            AND lower(coalesce(status, '')) IN ('not started', 'in progress')
         ORDER BY
           CASE WHEN ${ownerMatchSql} THEN 0 ELSE 1 END,
           notion_edited_at DESC NULLS LAST,
@@ -1871,10 +1900,19 @@ async function handleMetadataQueryInner(
         const cleanedDateNote = dateNote.trim();
         return cleanedDateNote ? `No tasks found ${cleanedDateNote}.` : "No tasks found in synced Notion.";
       }
-      return (
-        `No tasks found for **${person}**${yearNote}.\n\n` +
-        `_Please verify the assignee name in Notion._`
+      // Attempt to suggest possible assignee names
+      const distinctAssignees = await query<{ owner: string | null }>(
+        `SELECT DISTINCT owner FROM notion_pages WHERE owner IS NOT NULL`,
+        []
       );
+      const possible = distinctAssignees.map(r => r.owner).filter(Boolean) as string[];
+      const lowerPerson = (person ?? "").toLowerCase();
+      const matches = lowerPerson ? possible.filter(name => name.toLowerCase().includes(lowerPerson)) : [];
+      if (matches.length) {
+        const suggestionList = matches.map(m => `**${m}**`).join(', ');
+        return `No tasks found for **${person}**${yearNote}.\n\nDid you mean: ${suggestionList}?`;
+      }
+      return `No tasks found for **${person ?? "Me"}**${yearNote}.\n\n_No assignee found in Notion._`;
     }
 
     if (person && asksForProjectsOnly(parsed.raw)) {
