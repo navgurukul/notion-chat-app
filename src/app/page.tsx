@@ -1401,8 +1401,8 @@ const createNewChat = async () => {
                         </div>
                       </div>
                     ) : (
-                      <div className={`relative max-w-[88%] sm:max-w-[80%] flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
-                        <div className={`w-full p-3.5 sm:p-4 rounded-2xl ${msg.role === "user"
+                      <div className={`relative min-w-0 max-w-[94%] sm:max-w-[86%] lg:max-w-[80%] flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
+                        <div className={`min-w-0 max-w-full p-3.5 sm:p-4 rounded-2xl shadow-sm ${msg.role === "user"
                           ? "bg-white/10 border border-white/10 rounded-tr-none"
                           : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
                           }`}>
@@ -1418,7 +1418,7 @@ const createNewChat = async () => {
                             </div>
                           ) : null}
                           {msg.content.trim() ? (
-                            <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed prose-headings:mt-4 prose-headings:mb-2 prose-h2:text-base prose-h3:text-sm prose-h4:text-sm prose-ul:my-2 prose-li:my-0.5 prose-table:text-sm prose-th:border prose-th:border-white/15 prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-white/15 prose-td:px-2 prose-td:py-1 prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
+                            <div className="chat-answer min-w-0 max-w-full text-sm leading-7 text-slate-200 prose prose-invert prose-sm max-w-none prose-p:my-2.5 prose-p:leading-7 prose-headings:font-semibold prose-headings:tracking-tight prose-headings:text-white prose-headings:mt-5 prose-headings:mb-2 prose-h1:text-lg prose-h2:text-base prose-h3:text-sm prose-h4:text-sm prose-ul:my-3 prose-ol:my-3 prose-li:my-1.5 prose-li:marker:text-slate-500 prose-strong:text-white prose-a:text-slate-200 prose-a:underline prose-a:decoration-white/40 prose-a:underline-offset-2 prose-blockquote:border-slate-500 prose-blockquote:bg-white/[0.03] prose-blockquote:rounded-r-lg prose-blockquote:py-1 prose-blockquote:text-slate-300 prose-table:text-sm prose-th:border prose-th:border-white/15 prose-th:bg-white/5 prose-th:px-3 prose-th:py-2 prose-th:text-left prose-td:border prose-td:border-white/10 prose-td:px-3 prose-td:py-2 prose-pre:max-w-full prose-pre:overflow-x-auto prose-pre:rounded-xl prose-pre:bg-slate-950/70 prose-pre:border prose-pre:border-white/10 prose-code:text-slate-200 prose-code:before:content-none prose-code:after:content-none">
                               <ReactMarkdown
                                 remarkPlugins={[remarkGfm]}
                                 components={{
@@ -1426,6 +1426,11 @@ const createNewChat = async () => {
                                     <a href={href} target="_blank" rel="noopener noreferrer">
                                       {children}
                                     </a>
+                                  ),
+                                  table: ({ children }) => (
+                                    <div className="my-4 max-w-full overflow-x-auto rounded-xl border border-white/10">
+                                      <table className="m-0 w-full">{children}</table>
+                                    </div>
                                   ),
                                 }}
                               >

@@ -18,3 +18,45 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.chat-answer {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-answer pre,
+.chat-answer code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat-answer table {
+  max-width: 100%;
+  table-layout: fixed;
+}
+
+.chat-answer th,
+.chat-answer td {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Keep long URLs, IDs, and generated config values inside the chat bubble. */
+.chat-answer,
+.chat-answer :where(p, li, a, strong, em, td, th) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.chat-answer :where(pre) {
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.chat-answer :where(:not(pre) > code) {
+  overflow-wrap: anywhere;
+  white-space: break-spaces;
+}
