@@ -2392,21 +2392,18 @@ async function handleMetadataQueryInner(
     if (!rows.length) return null;
     if (rows.length === 1) {
       const row = rows[0];
-      const { name, label } = resolvePageOwner(row);
-      const note =
-        label === "Created by" && !row.owner?.trim()
-          ? " _(No Owner property on this page in Notion.)_"
-          : "";
-      return `**${label} of "${row.title || docTitle}":** ${name || "Unknown"}${note}${
+      // The page creator/editor is not necessarily its owner. If Notion has
+      // no Owner property, let RAG inspect the page content instead of
+      // presenting unrelated metadata as ownership.
+      if (!row.owner?.trim()) return null;
+      return `**Owner/assignee of "${row.title || docTitle}":** ${row.owner.trim()}${
         row.url ? `\n\n${formatDisplayLink("Open in Notion", row.url)}` : ""
       }`;
     }
+    if (rows.every((row) => !row.owner?.trim())) return null;
     return `### ${rows.length} matching docs for "${docTitle}"\n\n${formatRows(
       rows,
-      (row) => {
-        const { name, label } = resolvePageOwner(row);
-        return `**${formatDisplayLink(row.title || "Untitled", row.url)}** — ${label}: **${name || "Unknown"}**`;
-      },
+      (row) => `**${formatDisplayLink(row.title || "Untitled", row.url)}** — Owner/assignee: **${row.owner || "Not specified"}**`,
     )}`;
   }
 
