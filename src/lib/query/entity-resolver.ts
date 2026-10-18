@@ -626,6 +626,18 @@ export async function extractRawEntities(message: string): Promise<{ personName?
     }
   }
 
+  // A first name is often the only name a user knows ("for Tamanna").
+  // Resolve it against the people directory only when it identifies one
+  // member, so it does not fall through to a fuzzy owner-string search.
+  if (!personName) {
+    const words: string[] = lowerMessage.match(/[a-z][a-z'.-]*/g) ?? [];
+    const firstNameMatches = dir.filter((person) => {
+      const firstName = person.normalized.split(/\s+/)[0];
+      return words.includes(firstName);
+    });
+    if (firstNameMatches.length === 1) personName = firstNameMatches[0].name;
+  }
+
   // Hindi/Hinglish filler words that sit between a name and "task(s)" —
   // without this, "souvik ke task" wrongly captures "ke" as the name.
   const HINGLISH_FILLERS = new Set(["ke", "ka", "ki", "ko", "ne", "se", "ka", "wale", "waale"]);

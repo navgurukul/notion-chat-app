@@ -3,7 +3,7 @@
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef, memo } from "react";
-import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw, ThumbsUp, ThumbsDown, Copy, Check } from "lucide-react";
+import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw, ThumbsUp, ThumbsDown, Copy, Check, Mic, MicOff } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { hasKnowledgeBaseAccess } from "@/lib/shared/access";
@@ -12,6 +12,25 @@ import {
   stripInternalReasoning,
   stripStreamTags,
 } from "@/lib/chat/stream-tags";
+
+type SpeechRecognitionResultLike = ArrayLike<{ transcript: string }> & { isFinal: boolean };
+type SpeechRecognitionLike = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start: () => void;
+  stop: () => void;
+  onresult: ((event: { resultIndex: number; results: ArrayLike<SpeechRecognitionResultLike> }) => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+  onend: (() => void) | null;
+};
+
+declare global {
+  interface Window {
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+  }
+}
 
 interface Message {
   id?: string;
@@ -128,6 +147,72 @@ const ChatInputForm = memo(function ChatInputForm({
   onStopClick: () => void;
 }) {
   const [text, setText] = useState("");
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [speechError, setSpeechError] = useState("");
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+
+  const stopVoiceInput = () => {
+    recognitionRef.current?.stop();
+    setIsListening(false);
+  };
+
+  useEffect(() => {
+    setSpeechSupported(Boolean(window.SpeechRecognition || window.webkitSpeechRecognition));
+  }, []);
+
+  useEffect(() => () => recognitionRef.current?.stop(), []);
+
+  const toggleVoiceInput = () => {
+    if (isListening) {
+      stopVoiceInput();
+      return;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+    const recognition = new SpeechRecognition();
+    let receivedTranscript = false;
+    let recognitionFailed = false;
+    recognition.lang = "en-IN";
+    recognition.interimResults = false;
+    recognition.continuous = true;
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .slice(event.resultIndex)
+        .map((result) => result[0].transcript)
+        .join("");
+      if (transcript) {
+        receivedTranscript = true;
+        setText((current) => `${current}${current && !current.endsWith(" ") ? " " : ""}${transcript}`);
+      }
+    };
+    recognition.onerror = (event) => {
+      recognitionFailed = true;
+      const message = event.error === "not-allowed" || event.error === "service-not-allowed"
+        ? "Microphone or speech recognition access was denied. Check your browser permissions."
+        : event.error === "audio-capture"
+          ? "No microphone was found. Check your microphone connection and permissions."
+          : "Voice input failed in this browser. Check microphone access or try another browser.";
+      setSpeechError(message);
+      setIsListening(false);
+    };
+    recognition.onend = () => {
+      setIsListening(false);
+      if (!receivedTranscript && !recognitionFailed) {
+        setSpeechError("No transcript was received. Check microphone permission, then try again or use another browser.");
+      }
+    };
+    recognitionRef.current = recognition;
+    setSpeechError("");
+    setIsListening(true);
+    try {
+      recognition.start();
+    } catch {
+      setIsListening(false);
+      setSpeechError("Voice input could not start. Please try again.");
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -138,20 +223,40 @@ const ChatInputForm = memo(function ChatInputForm({
   };
 
   return (
+    <>
     <form onSubmit={handleSubmit} className="max-w-4xl mx-auto relative group">
-      <input
-        type="text"
+      <div className={`relative rounded-2xl border bg-white/5 transition-all focus-within:bg-white/[0.07] ${isListening ? "border-red-400/40 shadow-[0_0_0_3px_rgba(248,113,113,0.08)]" : "border-white/10 focus-within:border-blue-500/50"}`}>
+      <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" || e.shiftKey) return;
+          e.preventDefault();
+          if (isListening) stopVoiceInput();
+          else if (text.trim() && !isLoading) e.currentTarget.form?.requestSubmit();
+        }}
         disabled={!activeSessionId || isLoadingChats}
-        placeholder={activeSessionId ? "Ask anything..." : "Creating chat..."}
-        className="w-full p-3.5 sm:p-4 pr-12 sm:pr-14 rounded-2xl bg-white/5 border border-white/10 focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.07] transition-all placeholder:text-white/20 text-white text-sm sm:text-base"
+        placeholder={isListening ? "Listening… speak now" : activeSessionId ? "Ask anything..." : "Creating chat..."}
+        rows={1}
+        className="w-full min-h-[54px] max-h-40 resize-y bg-transparent py-4 pl-4 pr-24 text-sm text-white placeholder:text-white/30 focus:outline-none sm:text-base"
       />
+      {!isLoading && (
+        <button
+          type="button"
+          onClick={toggleVoiceInput}
+          disabled={!speechSupported || !activeSessionId || isLoadingChats}
+          className={`absolute right-[52px] top-1/2 -translate-y-1/2 p-2.5 rounded-xl transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isListening ? "bg-red-500/15 text-red-300 hover:bg-red-500/25" : "text-white/55 hover:bg-white/10 hover:text-white"}`}
+          title={!speechSupported ? "Voice input isn’t supported in this browser" : isListening ? "Stop recording (Enter)" : "Record a voice message"}
+          aria-label={!speechSupported ? "Voice input isn’t supported in this browser" : isListening ? "Stop recording (Enter)" : "Record a voice message"}
+        >
+          {isListening ? <Square className="w-4 h-4 fill-current" /> : <Mic className="w-5 h-5" />}
+        </button>
+      )}
       {isLoading ? (
         <button
           type="button"
           onClick={onStopClick}
-          className={`absolute right-2 top-2 sm:right-2.5 sm:top-2.5 p-2 rounded-xl text-white transition-all duration-200 flex items-center justify-center min-h-[36px] ${
+          className={`absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-xl text-white transition-all duration-200 flex items-center justify-center min-h-[36px] ${
             stopConfirmState === "confirm"
               ? "bg-red-700 hover:bg-red-800 px-3 animate-pulse"
               : "bg-red-500 hover:bg-red-600"
@@ -168,13 +273,19 @@ const ChatInputForm = memo(function ChatInputForm({
         <button
           type="submit"
           disabled={!text.trim() || !activeSessionId}
-          className="absolute right-2 top-2 sm:right-2.5 sm:top-2.5 p-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 transition-all font-semibold"
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 transition-all font-semibold"
           title="Send message"
         >
           <Send className="w-5 h-5" />
         </button>
       )}
+      </div>
     </form>
+    <div className="max-w-4xl mx-auto min-h-5 px-2 pt-1 text-xs text-white/55 flex items-center justify-between" aria-live="polite">
+      <span>{speechError}</span>
+      {isListening && <span className="inline-flex items-center gap-1.5 text-red-300/80"><span className="h-1.5 w-1.5 rounded-full bg-red-400 animate-pulse" />Recording · Enter to stop</span>}
+    </div>
+    </>
   );
 });
 
@@ -1401,8 +1512,8 @@ const createNewChat = async () => {
                         </div>
                       </div>
                     ) : (
-                      <div className={`relative max-w-[88%] sm:max-w-[80%] flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
-                        <div className={`w-full p-3.5 sm:p-4 rounded-2xl ${msg.role === "user"
+                      <div className={`relative min-w-0 max-w-[94%] sm:max-w-[86%] lg:max-w-[80%] flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
+                        <div className={`min-w-0 max-w-full p-3.5 sm:p-4 rounded-2xl shadow-sm ${msg.role === "user"
                           ? "bg-white/10 border border-white/10 rounded-tr-none"
                           : "bg-blue-600/10 border border-blue-500/10 rounded-tl-none"
                           }`}>
@@ -1418,7 +1529,7 @@ const createNewChat = async () => {
                             </div>
                           ) : null}
                           {msg.content.trim() ? (
-                            <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed prose-headings:mt-4 prose-headings:mb-2 prose-h2:text-base prose-h3:text-sm prose-h4:text-sm prose-ul:my-2 prose-li:my-0.5 prose-table:text-sm prose-th:border prose-th:border-white/15 prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-white/15 prose-td:px-2 prose-td:py-1 prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10 prose-code:text-blue-400">
+                            <div className="chat-answer min-w-0 max-w-full text-sm leading-7 text-slate-200 prose prose-invert prose-sm max-w-none prose-p:my-2.5 prose-p:leading-7 prose-headings:font-semibold prose-headings:tracking-tight prose-headings:text-white prose-headings:mt-5 prose-headings:mb-2 prose-h1:text-lg prose-h2:text-base prose-h3:text-sm prose-h4:text-sm prose-ul:my-3 prose-ol:my-3 prose-li:my-1.5 prose-li:marker:text-slate-500 prose-strong:text-white prose-a:text-slate-200 prose-a:underline prose-a:decoration-white/40 prose-a:underline-offset-2 prose-blockquote:border-slate-500 prose-blockquote:bg-white/[0.03] prose-blockquote:rounded-r-lg prose-blockquote:py-1 prose-blockquote:text-slate-300 prose-table:text-sm prose-th:border prose-th:border-white/15 prose-th:bg-white/5 prose-th:px-3 prose-th:py-2 prose-th:text-left prose-td:border prose-td:border-white/10 prose-td:px-3 prose-td:py-2 prose-pre:max-w-full prose-pre:overflow-x-auto prose-pre:rounded-xl prose-pre:bg-slate-950/70 prose-pre:border prose-pre:border-white/10 prose-code:text-slate-200 prose-code:before:content-none prose-code:after:content-none">
                               <ReactMarkdown
                                 remarkPlugins={[remarkGfm]}
                                 components={{
@@ -1426,6 +1537,11 @@ const createNewChat = async () => {
                                     <a href={href} target="_blank" rel="noopener noreferrer">
                                       {children}
                                     </a>
+                                  ),
+                                  table: ({ children }) => (
+                                    <div className="my-4 max-w-full overflow-x-auto rounded-xl border border-white/10">
+                                      <table className="m-0 w-full">{children}</table>
+                                    </div>
                                   ),
                                 }}
                               >

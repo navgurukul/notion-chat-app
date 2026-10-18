@@ -1901,13 +1901,18 @@ async function handleMetadataQueryInner(
         return cleanedDateNote ? `No tasks found ${cleanedDateNote}.` : "No tasks found in synced Notion.";
       }
       // Attempt to suggest possible assignee names
-      const distinctAssignees = await query<{ owner: string | null }>(
-        `SELECT DISTINCT owner FROM notion_pages WHERE owner IS NOT NULL`,
-        []
+      const directory = await getPeopleDirectory();
+      const normalizedPerson = normalizePersonNameForMatch(person ?? "");
+      const exactDirectoryMatch = directory.some(
+        (member) => normalizePersonNameForMatch(member.name) === normalizedPerson,
       );
-      const possible = distinctAssignees.map(r => r.owner).filter(Boolean) as string[];
-      const lowerPerson = (person ?? "").toLowerCase();
-      const matches = lowerPerson ? possible.filter(name => name.toLowerCase().includes(lowerPerson)) : [];
+      const matches = exactDirectoryMatch
+        ? []
+        : directory
+            .filter((member) =>
+              normalizePersonNameForMatch(member.name).startsWith(normalizedPerson),
+            )
+            .map((member) => member.name);
       if (matches.length) {
         const suggestionList = matches.map(m => `**${m}**`).join(', ');
         return `No tasks found for **${person}**${yearNote}.\n\nDid you mean: ${suggestionList}?`;
