@@ -7,6 +7,7 @@ import type { ParsedQuery } from "@/lib/query/types";
 
 export enum ResolutionQuality {
   EXACT = "EXACT",
+  PREFIX = "PREFIX",
   FIRST_NAME = "FIRST_NAME",
   PARTIAL = "PARTIAL",
   NONE = "NONE"
@@ -112,7 +113,7 @@ function computeMatchScore(topic: string, title: string): { score: number; quali
     if (tNorm.length < 3 || isVerbOrActionWord(tNorm)) {
       return { score: 0.0, quality: ResolutionQuality.NONE };
     }
-    return { score: 0.94, quality: ResolutionQuality.PARTIAL };
+    return { score: 0.94, quality: ResolutionQuality.PREFIX };
   }
 
   const escaped = tNorm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -624,6 +625,18 @@ export async function extractRawEntities(message: string): Promise<{ personName?
       personName = person.name;
       break;
     }
+  }
+
+  // A first name is often the only name a user knows ("for Tamanna").
+  // Resolve it against the people directory only when it identifies one
+  // member, so it does not fall through to a fuzzy owner-string search.
+  if (!personName) {
+    const words: string[] = lowerMessage.match(/[a-z][a-z'.-]*/g) ?? [];
+    const firstNameMatches = dir.filter((person) => {
+      const firstName = person.normalized.split(/\s+/)[0];
+      return words.includes(firstName);
+    });
+    if (firstNameMatches.length === 1) personName = firstNameMatches[0].name;
   }
 
   // Hindi/Hinglish filler words that sit between a name and "task(s)" —

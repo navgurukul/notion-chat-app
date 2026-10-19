@@ -264,7 +264,11 @@ export async function getChatResponse(
   return content;
 }
 
-export async function getJsonCompletion(systemPrompt: string, prompt: string) {
+export async function getJsonCompletion(
+  systemPrompt: string,
+  prompt: string,
+  options: { maxTokens?: number; timeoutMs?: number } = {},
+) {
   const apiKey = requireEnv("OPENAI_API_KEY");
   const model = getOpenAIChatModel();
 
@@ -283,10 +287,10 @@ export async function getJsonCompletion(systemPrompt: string, prompt: string) {
             { role: "user", content: prompt },
           ]),
           temperature: 0,
-          max_tokens: Number(process.env.OPENAI_JSON_MAX_TOKENS || 220),
+          max_tokens: options.maxTokens ?? Number(process.env.OPENAI_JSON_MAX_TOKENS || 220),
           response_format: { type: "json_object" },
         }),
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(options.timeoutMs ?? 8000),
       });
 
       if (!response.ok) throw await createHttpError(response);

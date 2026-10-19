@@ -318,6 +318,12 @@ export async function resolveQuery(
     personName = undefined;
   }
 
+  // Resolve first-person pronouns ("me", "my", "I") to the session user's name
+  // regardless of whether this is a follow-up or a fresh query.
+  if (!personName && hasGenuineFirstPersonReference(question) && sessionName) {
+    personName = sessionName;
+  }
+
   if (!personName && isFollowUpNeedingContext(question, history)) {
     const hasFirstPerson = hasGenuineFirstPersonReference(question);
     const hasMalePronoun = /\b(he|him|his)\b/i.test(question);

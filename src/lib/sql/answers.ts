@@ -79,6 +79,66 @@ function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd
     october: 9, oct: 9, november: 10, nov: 10, december: 11, dec: 11
   };
 
+  // 0. "from X to Y" range — e.g. "from 5 april 2026 to 14 october 2026"
+  const rangeSep = /\bfrom\s+(.+?)\s+to\s+(.+?)(?:\s*$|\?)/i;
+  const rangeMatch = rawQuery.match(rangeSep);
+  if (rangeMatch) {
+    const startPart = rangeMatch[1].trim();
+    const endPart   = rangeMatch[2].trim();
+
+    function parseSingleDate(text: string): Date | null {
+      const t = text.toLowerCase();
+      // "5 april 2026" / "5th april 2026" / "5 april"
+      const p1 = new RegExp(`(\\d{1,2})(?:st|nd|rd|th)?\\s+(${months})(?:\\s+(20\\d{2}))?`, "i");
+      const m1 = t.match(p1);
+      if (m1) {
+        const d = parseInt(m1[1], 10);
+        const mo = MONTH_MAP[m1[2].toLowerCase()];
+        const yr = m1[3] ? parseInt(m1[3], 10) : currentYear;
+        return new Date(Date.UTC(yr, mo, d));
+      }
+      // "april 5, 2026" / "april 5 2026" / "april 5"
+      const p2 = new RegExp(`(${months})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:\\s*,?\\s*(20\\d{2}))?`, "i");
+      const m2 = t.match(p2);
+      if (m2) {
+        const mo = MONTH_MAP[m2[1].toLowerCase()];
+        const d  = parseInt(m2[2], 10);
+        const yr = m2[3] ? parseInt(m2[3], 10) : currentYear;
+        return new Date(Date.UTC(yr, mo, d));
+      }
+      // "2026-04-05" / "2026/04/05"
+      const p3 = /(20\d{2})[-/](\d{1,2})[-/](\d{1,2})/;
+      const m3 = t.match(p3);
+      if (m3) {
+        return new Date(Date.UTC(parseInt(m3[1]), parseInt(m3[2]) - 1, parseInt(m3[3])));
+      }
+      // "05-04-2026"
+      const p4 = /(\d{1,2})[-/](\d{1,2})[-/](20\d{2})/;
+      const m4 = t.match(p4);
+      if (m4) {
+        return new Date(Date.UTC(parseInt(m4[3]), parseInt(m4[2]) - 1, parseInt(m4[1])));
+      }
+      // Named month only: "april 2026" / "october 2026"
+      const p5 = new RegExp(`(${months})(?:\\s+(20\\d{2}))?`, "i");
+      const m5 = t.match(p5);
+      if (m5) {
+        const mo = MONTH_MAP[m5[1].toLowerCase()];
+        const yr = m5[2] ? parseInt(m5[2], 10) : currentYear;
+        return new Date(Date.UTC(yr, mo, 1));
+      }
+      return null;
+    }
+
+    const startDate = parseSingleDate(startPart);
+    const endDateRaw = parseSingleDate(endPart);
+    if (startDate && endDateRaw) {
+      // End date is inclusive — advance by 1 day so SQL uses strict <
+      const endDate = new Date(endDateRaw);
+      endDate.setUTCDate(endDate.getUTCDate() + 1);
+      return { dateStart: startDate.toISOString(), dateEnd: endDate.toISOString() };
+    }
+  }
+
   const explicitYearMatch = q.match(/\b(20\d{2})\b/);
   const explicitYear = explicitYearMatch ? parseInt(explicitYearMatch[1], 10) : null;
 
@@ -1840,10 +1900,24 @@ async function handleMetadataQueryInner(
         const cleanedDateNote = dateNote.trim();
         return cleanedDateNote ? `No tasks found ${cleanedDateNote}.` : "No tasks found in synced Notion.";
       }
-      return (
-        `No tasks found for **${person}**${yearNote}.\n\n` +
-        `_Please verify the assignee name in Notion._`
+      // Attempt to suggest possible assignee names
+      const directory = await getPeopleDirectory();
+      const normalizedPerson = normalizePersonNameForMatch(person ?? "");
+      const exactDirectoryMatch = directory.some(
+        (member) => normalizePersonNameForMatch(member.name) === normalizedPerson,
       );
+      const matches = exactDirectoryMatch
+        ? []
+        : directory
+            .filter((member) =>
+              normalizePersonNameForMatch(member.name).startsWith(normalizedPerson),
+            )
+            .map((member) => member.name);
+      if (matches.length) {
+        const suggestionList = matches.map(m => `**${m}**`).join(', ');
+        return `No tasks found for **${person}**${yearNote}.\n\nDid you mean: ${suggestionList}?`;
+      }
+      return `No tasks found for **${person ?? "Me"}**${yearNote}.\n\n_No assignee found in Notion._`;
     }
 
     if (person && asksForProjectsOnly(parsed.raw)) {
@@ -2318,21 +2392,18 @@ async function handleMetadataQueryInner(
     if (!rows.length) return null;
     if (rows.length === 1) {
       const row = rows[0];
-      const { name, label } = resolvePageOwner(row);
-      const note =
-        label === "Created by" && !row.owner?.trim()
-          ? " _(No Owner property on this page in Notion.)_"
-          : "";
-      return `**${label} of "${row.title || docTitle}":** ${name || "Unknown"}${note}${
+      // The page creator/editor is not necessarily its owner. If Notion has
+      // no Owner property, let RAG inspect the page content instead of
+      // presenting unrelated metadata as ownership.
+      if (!row.owner?.trim()) return null;
+      return `**Owner/assignee of "${row.title || docTitle}":** ${row.owner.trim()}${
         row.url ? `\n\n${formatDisplayLink("Open in Notion", row.url)}` : ""
       }`;
     }
+    if (rows.every((row) => !row.owner?.trim())) return null;
     return `### ${rows.length} matching docs for "${docTitle}"\n\n${formatRows(
       rows,
-      (row) => {
-        const { name, label } = resolvePageOwner(row);
-        return `**${formatDisplayLink(row.title || "Untitled", row.url)}** — ${label}: **${name || "Unknown"}**`;
-      },
+      (row) => `**${formatDisplayLink(row.title || "Untitled", row.url)}** — Owner/assignee: **${row.owner || "Not specified"}**`,
     )}`;
   }
 

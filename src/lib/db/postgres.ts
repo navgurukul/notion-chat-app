@@ -17,6 +17,12 @@ if (databaseUrl.includes("sslmode=require")) {
   databaseUrl = databaseUrl.replace("sslmode=verify-ca", "sslmode=verify-full");
 }
 
+// Strip channel_binding=require — node-postgres does not support this Neon-specific
+// parameter and passes it to the server causing connection failures/warnings.
+databaseUrl = databaseUrl
+  .replace(/[&?]channel_binding=require/g, "")
+  .replace(/&channel_binding=[^&]*/g, "");
+
 const globalForPostgres = globalThis as unknown as {
   pool: Pool | undefined;
   schemaReady: boolean | undefined;

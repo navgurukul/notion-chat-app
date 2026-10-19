@@ -23,7 +23,11 @@ if (typeof window === "undefined") {
     // to bypass slow/broken local system DNS lookups in sandboxed networks.
     if (
       hostname &&
-      (hostname.includes("neon.tech") || hostname.includes("openai.com"))
+      (
+        hostname.includes("neon.tech") ||
+        hostname.includes("openai.com") ||
+        hostname.includes("rds.amazonaws.com")   // AWS RDS PostgreSQL
+      )
     ) {
       dns.resolve4(hostname, (err, addrs) => {
         if (!err && addrs && addrs.length > 0) {

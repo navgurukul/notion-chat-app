@@ -1,10 +1,9 @@
 import type { Session } from "next-auth";
 import type { ParsedQuery } from "@/lib/query/types";
 import { PipelineContext, logChatRoute, logRetrievalDiagnostics } from "./telemetry";
-import { isMetadataOnlyKind, metadataNotFoundAnswer, shouldExpandRagQuery } from "@/lib/chat/routing-policy";
+import { shouldExpandRagQuery } from "@/lib/chat/routing-policy";
 import { reformulateAndExpand, expandSearchQueries, type UnifiedSearchQuery } from "@/lib/chat/query-tools";
 import { buildNotionContextWithConfidence } from "@/lib/rag/build-context";
-import { RETRIEVAL_REFUSAL_MESSAGE } from "@/lib/rag";
 import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { jsonAnswer } from "./smalltalk";
 import { buildClarificationAnswer } from "@/lib/chat/clarification";
@@ -71,7 +70,7 @@ function buildRagSearchPlan(parsed: ParsedQuery, ctx: PipelineContext): RagSearc
 
   if (explicitPage && titleBoost) {
     searchQuery = titleBoost;
-    searchQueries = [titleBoost];
+    searchQueries = [titleBoost, ctx.message];
   } else if (ctx.reformulatedQuery && !shouldExpand) {
     searchQuery = ctx.reformulatedQuery;
     searchQueries = [ctx.reformulatedQuery];
@@ -158,11 +157,6 @@ export async function tryRagAnswer(
         const p = finalParsed.resolvedEntities.page;
         ctx.telemetry.logEntity("page", p.value, p.quality, undefined, undefined, undefined, p.url);
       }
-    }
-
-    if (isMetadataOnlyKind(finalParsed.kind) && finalParsed.kind !== "team_activity") {
-      logChatRoute("sql_miss_metadata", finalParsed, { blocked_rag: true });
-      return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(finalParsed), userEmotion, signal);
     }
 
     const clarAnswer = buildClarificationAnswer(
@@ -328,14 +322,23 @@ export async function tryRagAnswer(
     if (!notionContext.trim()) {
       return jsonAnswer(
         ctx.sessionId,
-        "I couldn't find matching pages in the synced Notion database. Try **Sync changes** in the sidebar, or rephrase with a project/person/page name from Notion.",
+        ctx.sqlCandidate
+          ? `Exact answer confirm nahi kar paya. Notion me sabse close match ye mila:\n\n${ctx.sqlCandidate}`
+          : "Notion me nahi mila. Page ka exact naam try karo, ya page owner se pucho.",
         userEmotion,
         signal,
       );
     }
 
     if (!confidence.ok) {
-      return jsonAnswer(ctx.sessionId, RETRIEVAL_REFUSAL_MESSAGE, userEmotion, signal);
+      return jsonAnswer(
+        ctx.sessionId,
+        ctx.sqlCandidate
+          ? `Exact answer confirm nahi kar paya. Notion me sabse close match ye mila:\n\n${ctx.sqlCandidate}`
+          : "Notion me nahi mila. Page ka exact naam try karo, ya page owner se pucho.",
+        userEmotion,
+        signal,
+      );
     }
 
     if (ctx.telemetry) {
