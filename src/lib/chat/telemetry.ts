@@ -64,6 +64,7 @@ export type PipelineContext = {
   trace?: PipelineTrace;
   telemetry?: any;
   isWrongAnswerRetry?: boolean;
+  sqlCandidate?: string;
 };
 
 export type PipelineTimings = {

@@ -38,6 +38,7 @@ export interface FaithfulnessQueryResult {
   supportedClaims: number;
   faithfulnessScore: number;
   claims: FaithfulnessClaim[];
+  error?: string;
 }
 
 const FAITHFULNESS_JUDGE_SYSTEM_PROMPT = `
@@ -103,7 +104,10 @@ ${generatedAnswer}
 ---
 `;
 
-      const jsonStr = await getJsonCompletion(FAITHFULNESS_JUDGE_SYSTEM_PROMPT, judgePrompt);
+      const jsonStr = await getJsonCompletion(FAITHFULNESS_JUDGE_SYSTEM_PROMPT, judgePrompt, {
+        maxTokens: 1500,
+        timeoutMs: 30000,
+      });
       const parsed = JSON.parse(jsonStr) as { claims?: FaithfulnessClaim[] };
       const claims = parsed.claims || [];
 
@@ -130,6 +134,7 @@ ${generatedAnswer}
         supportedClaims: 0,
         faithfulnessScore: 0,
         claims: [],
+        error: err instanceof Error ? err.message : String(err),
       });
     }
   }
@@ -151,11 +156,16 @@ async function main() {
     }))
   );
 
-  const avgScore =
-    results.reduce((sum, r) => sum + r.faithfulnessScore, 0) / (results.length || 1);
+  const scoredResults = results.filter((r) => !r.error && r.totalClaims > 0);
+  const errors = results.filter((r) => r.error).length;
+  const noClaimResults = results.filter((r) => !r.error && r.totalClaims === 0).length;
+  const avgScore = scoredResults.reduce((sum, r) => sum + r.faithfulnessScore, 0) / (scoredResults.length || 1);
 
   console.log("\n==============================================");
-  console.log(`📊 AVERAGE GENERATION FAITHFULNESS: ${(avgScore * 100).toFixed(1)}%`);
+  console.log(`📊 AVERAGE GENERATION FAITHFULNESS: ${scoredResults.length ? `${(avgScore * 100).toFixed(1)}%` : "N/A"}`);
+  console.log(`   Scored queries: ${scoredResults.length}`);
+  console.log(`   No-claim queries excluded: ${noClaimResults}`);
+  console.log(`   Errors: ${errors}`);
   console.log("==============================================\n");
 }
 

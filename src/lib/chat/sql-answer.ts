@@ -2,10 +2,7 @@ import { ParsedQuery } from "@/lib/query/types";
 import { PipelineContext } from "./telemetry";
 import { handleMetadataQuery } from "@/lib/sql/answers";
 import {
-  isMetadataOnlyKind,
   isSqlMissAnswer,
-  isTeamActivityMetadataGap,
-  metadataNotFoundAnswer,
   shouldFallbackToRag,
 } from "@/lib/chat/routing-policy";
 import { logChatRoute } from "./telemetry";
@@ -67,7 +64,6 @@ export async function trySqlAnswer(
     return jsonAnswer(ctx.sessionId, clarAnswer, emotion, signal);
   }
 
-  const metadataOnly = isMetadataOnlyKind(finalParsed.kind);
   const directAnswer = await handleMetadataQuery(finalParsed);
 
   if (signal?.aborted) return null;
@@ -75,14 +71,17 @@ export async function trySqlAnswer(
   if (process.env.NODE_ENV !== "production" || process.env.CHAT_DEBUG === "true") {
     console.log("[trySqlAnswer] debug", {
       kind: finalParsed.kind,
-      metadataOnly,
       directAnswerLength: directAnswer?.length ?? null,
       directAnswerPreview: directAnswer?.slice(0, 80) ?? null,
       isMiss: directAnswer ? isSqlMissAnswer(directAnswer) : "no answer",
     });
   }
 
-  if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer)) {
+  const fallback = shouldFallbackToRag(finalParsed, directAnswer ?? null);
+  ctx.sqlCandidate = directAnswer?.trim() && !isSqlMissAnswer(directAnswer) && !/^no\b/i.test(directAnswer.trim())
+    ? directAnswer
+    : undefined;
+  if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer) && !fallback) {
     const isSynthesis = isSynthesisRequest(ctx.message);
     if (isSynthesis) {
       logChatRoute("sql_synthesis_stream", finalParsed, { answer_chars: directAnswer.length });
@@ -113,29 +112,6 @@ export async function trySqlAnswer(
         emotion,
       );
     }
-  }
-
-  if (metadataOnly) {
-    if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer)) {
-      logChatRoute("sql_hit", finalParsed, { answer_chars: directAnswer.length });
-      return jsonAnswer(ctx.sessionId, directAnswer, emotion, signal);
-    }
-    if (
-      finalParsed.kind === "team_activity" &&
-      isTeamActivityMetadataGap(directAnswer)
-    ) {
-      logChatRoute("sql_weak_rag", finalParsed, {
-        team_activity_metadata_gap: true,
-      });
-      return null;
-    }
-    logChatRoute("sql_miss_metadata", finalParsed, {
-      had_sql: Boolean(directAnswer),
-    });
-    return jsonAnswer(ctx.sessionId, metadataNotFoundAnswer(finalParsed), emotion, signal);
-  }
-
-  if (directAnswer && !shouldFallbackToRag(finalParsed, directAnswer)) {
     logChatRoute("sql_hit", finalParsed, { answer_chars: directAnswer.length });
     return jsonAnswer(ctx.sessionId, directAnswer, emotion, signal);
   }

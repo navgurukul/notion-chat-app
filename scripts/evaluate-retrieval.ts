@@ -36,23 +36,6 @@ export interface RetrievalQueryResult {
 
 const K = 5; // Evaluate top 5 retrieved items
 
-/**
- * Checks if a retrieved hit matches the golden expectations.
- * Matches on exact chunk_id OR page title inclusion.
- */
-function isHitRelevant(hit: { chunk_id: string; title: string | null }, golden: GoldenItem): boolean {
-  if (golden.expected_chunk_ids?.includes(hit.chunk_id)) {
-    return true;
-  }
-  if (hit.title && golden.expected_page_titles?.length) {
-    const titleLower = hit.title.toLowerCase();
-    return golden.expected_page_titles.some((expected) =>
-      titleLower.includes(expected.toLowerCase()) || expected.toLowerCase().includes(titleLower)
-    );
-  }
-  return false;
-}
-
 export function recallAtK(hits: boolean[], totalExpected: number): number {
   if (totalExpected === 0) return 1;
   const matchCount = hits.filter(Boolean).length;
@@ -126,7 +109,30 @@ export async function evaluateRetrieval(datasetPath?: string) {
       1
     );
 
-    const relevanceVector = hits.map((hit) => isHitRelevant(hit, item));
+    // A page may produce many chunks. Count each expected target at most once,
+    // at its first (highest-ranked) occurrence in the retrieval results.
+    const seenTargets = new Set<string>();
+    const relevanceVector = hits.map((hit) => {
+      if (item.expected_chunk_ids?.includes(hit.chunk_id)) {
+        const target = `chunk:${hit.chunk_id}`;
+        if (seenTargets.has(target)) return false;
+        seenTargets.add(target);
+        return true;
+      }
+      if (hit.title && item.expected_page_titles?.length) {
+        const titleLower = hit.title.toLowerCase();
+        const match = item.expected_page_titles.findIndex((expected) =>
+          titleLower.includes(expected.toLowerCase()) || expected.toLowerCase().includes(titleLower)
+        );
+        if (match >= 0) {
+          const target = `page:${match}`;
+          if (seenTargets.has(target)) return false;
+          seenTargets.add(target);
+          return true;
+        }
+      }
+      return false;
+    });
 
     results.push({
       id: item.id,
