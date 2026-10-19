@@ -1246,7 +1246,7 @@ const createNewChat = async () => {
             <div className="p-2 rounded-lg bg-blue-600">
               <MessageSquare className="w-6 h-6" />
             </div>
-            <h1 className="text-xl font-bold tracking-tight flex-1">Notion AI</h1>
+            <h1 className="text-xl font-bold tracking-tight flex-1"> NG Notion chatbot</h1>
             <button
               type="button"
               onClick={() => setSidebarOpen(false)}
@@ -1330,16 +1330,21 @@ const createNewChat = async () => {
                   Last sync by admin
                 </div>
                 <div className="font-medium text-white/90" title={formatSyncDisplay(lastSyncedAt)}>
-                  {formatSyncDisplay(lastSyncedAt)}
-                </div>
-              </div>
-            )}
-            <p
+                   <p
               className="mt-2 px-1 text-[10px] text-white/45 leading-snug"
               title={formatSyncDisplay(lastSyncedAt)}
             >
               {isSyncing ? "Sync in progress…" : formatSyncDisplay(lastSyncedAt)}
             </p>
+                </div>
+              </div>
+            )}
+            {/* <p
+              className="mt-2 px-1 text-[10px] text-white/45 leading-snug"
+              title={formatSyncDisplay(lastSyncedAt)}
+            >
+              {isSyncing ? "Sync in progress…" : formatSyncDisplay(lastSyncedAt)}
+            </p> */}
           </div>
         </div>
 
@@ -1689,7 +1694,7 @@ const createNewChat = async () => {
             onStopClick={handleStopClick}
           />
           <p className="text-center text-[10px] text-white/20 mt-4 uppercase tracking-[0.2em]">
-            Powered by Notion & OpenAI
+            notion chatbot can make mistakes check important info
           </p>
         </div>
       </main>
