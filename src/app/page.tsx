@@ -1330,21 +1330,17 @@ const createNewChat = async () => {
                   Last sync by admin
                 </div>
                 <div className="font-medium text-white/90" title={formatSyncDisplay(lastSyncedAt)}>
-                   <p
+{formatSyncDisplay(lastSyncedAt)}
+
+                </div>
+              </div>
+            )}
+            <p
               className="mt-2 px-1 text-[10px] text-white/45 leading-snug"
               title={formatSyncDisplay(lastSyncedAt)}
             >
               {isSyncing ? "Sync in progress…" : formatSyncDisplay(lastSyncedAt)}
             </p>
-                </div>
-              </div>
-            )}
-            {/* <p
-              className="mt-2 px-1 text-[10px] text-white/45 leading-snug"
-              title={formatSyncDisplay(lastSyncedAt)}
-            >
-              {isSyncing ? "Sync in progress…" : formatSyncDisplay(lastSyncedAt)}
-            </p> */}
           </div>
         </div>
 
