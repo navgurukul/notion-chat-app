@@ -19,6 +19,100 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+.chat-theme-root.light-theme {
+  color: #172033;
+  background: #f8fafc;
+}
+
+.light-theme [class*="bg-[#0a0a0a]"],
+.light-theme [class*="bg-[#121212]"],
+.light-theme [class*="bg-[#1a1a1a]"] {
+  background-color: #f8fafc;
+}
+
+.light-theme [class*="bg-[#0a0a0a]/"] {
+  background-color: rgb(248 250 252 / 92%);
+}
+
+.light-theme [class~="bg-white/5"],
+.light-theme [class~="bg-white/10"],
+.light-theme [class~="bg-white/[0.08]"],
+.light-theme [class~="bg-white/[0.07]"],
+.light-theme [class~="bg-white/[0.03]"] {
+  background-color: rgb(15 23 42 / 5%);
+}
+
+.light-theme [class*="border-white/"] {
+  border-color: rgb(15 23 42 / 12%);
+}
+
+.light-theme [class*="text-white"] {
+  color: #334155;
+}
+
+.light-theme [class~="placeholder:text-white/30"]::placeholder {
+  color: #64748b;
+  opacity: 1;
+}
+
+.light-theme [class~="text-blue-100/80"],
+.light-theme [class~="text-blue-200"] {
+  color: #1e3a8a;
+}
+
+.light-theme [class~="text-blue-300"],
+.light-theme [class~="text-blue-300/80"],
+.light-theme [class~="text-blue-400"] {
+  color: #1d4ed8;
+}
+
+.light-theme [class~="bg-blue-600/20"] {
+  background-color: #dbeafe;
+}
+
+.light-theme [class~="border-blue-500/30"] {
+  border-color: #93c5fd;
+}
+
+.light-theme button.bg-blue-600,
+.light-theme button.bg-blue-500,
+.light-theme button.bg-red-500,
+.light-theme button.bg-red-600,
+.light-theme button.bg-red-700,
+.light-theme button.bg-amber-600,
+.light-theme button.bg-amber-500 {
+  color: #fff;
+}
+
+.light-theme .chat-answer {
+  color: #334155;
+}
+
+.light-theme .chat-answer strong {
+  color: #1e293b;
+}
+
+.light-theme .chat-answer.prose-invert {
+  --tw-prose-body: #334155;
+  --tw-prose-headings: #0f172a;
+  --tw-prose-bold: #0f172a;
+  --tw-prose-links: #1e293b;
+  --tw-prose-code: #334155;
+  --tw-prose-pre-bg: #e2e8f0;
+  --tw-prose-pre-code: #334155;
+  --tw-prose-th-borders: #cbd5e1;
+  --tw-prose-td-borders: #cbd5e1;
+}
+
+.light-theme .theme-toggle {
+  color: #475569;
+}
+
+.light-theme .theme-toggle:hover {
+  color: #0f172a;
+  background-color: rgb(15 23 42 / 8%);
+}
+
 .chat-answer {
   overflow-wrap: anywhere;
   word-break: break-word;

@@ -3,7 +3,7 @@
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef, memo } from "react";
-import { Send, LogOut, MessageSquare, ChevronsUpDown, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw, ThumbsUp, ThumbsDown, Copy, Check, Mic, MicOff } from "lucide-react";
+import { Send, LogOut, MessageSquare, ChevronsUpDown, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw, ThumbsUp, ThumbsDown, Copy, Check, Mic, MicOff, Sun, Moon } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { hasKnowledgeBaseAccess } from "@/lib/shared/access";
@@ -354,6 +354,20 @@ export default function ChatPage() {
   const chatAbortControllerRef = useRef<AbortController | null>(null);
   const chatRequestIdRef = useRef(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+
+  useEffect(() => {
+    const savedTheme = window.localStorage.getItem("notion-chat-theme");
+    if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
+  }, []);
+
+  const toggleTheme = () => {
+    setTheme((current) => {
+      const next = current === "dark" ? "light" : "dark";
+      window.localStorage.setItem("notion-chat-theme", next);
+      return next;
+    });
+  };
   const [stopConfirmState, setStopConfirmState] = useState<"idle" | "confirm">("idle");
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
@@ -1142,7 +1156,7 @@ const createNewChat = async () => {
   const visibleChats = showTodayChatsOnly ? todayChats : chatSessions;
 
   return (
-    <div className="flex h-screen bg-[#0a0a0a] text-white overflow-hidden relative">
+    <div className={`chat-theme-root flex h-screen overflow-hidden relative ${theme === "light" ? "light-theme" : "bg-[#0a0a0a] text-white"}`}>
       {/* Mobile backdrop overlay for sidebar */}
       {sidebarOpen && (
         <div
@@ -1278,12 +1292,12 @@ const createNewChat = async () => {
       {/* Sidebar */}
       <aside className={`${sidebarOpen ? "w-80 max-w-[85vw]" : "w-0"} fixed md:relative inset-y-0 left-0 z-40 md:z-auto shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out bg-[#121212] md:bg-white/5 border-r border-white/10 backdrop-blur-xl flex flex-col`}>
         <div className="p-6 border-b border-white/10">
-          {/* Header row: logo + title + toggle button on the far right */}
+          {/* Sidebar brand header */}
           <div className="flex items-center gap-3 mb-6">
             <div className="p-2 rounded-lg bg-blue-600">
               <MessageSquare className="w-6 h-6" />
             </div>
-            <h1 className="text-xl font-bold tracking-tight flex-1"> NG Notion chatbot</h1>
+            <h1 className="min-w-0 flex-1 truncate text-xl font-bold tracking-tight">NG Notion chatbot</h1>
             <button
               type="button"
               onClick={() => setSidebarOpen(false)}
@@ -1475,6 +1489,15 @@ const createNewChat = async () => {
               <span>New Chat</span>
             </button>
           )}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className={`p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors shrink-0 theme-toggle ${sidebarOpen ? "ml-auto" : ""}`}
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+          >
+            {theme === "dark" ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+          </button>
         </header>
 
         {/* Messages */}
