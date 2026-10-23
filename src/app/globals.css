@@ -70,6 +70,10 @@ body {
   background-color: #dbeafe;
 }
 
+.light-theme [class~="bg-blue-600/10"] {
+  background-color: #f1f5f9;
+}
+
 .light-theme [class~="border-blue-500/30"] {
   border-color: #93c5fd;
 }
@@ -89,7 +93,30 @@ body {
 }
 
 .light-theme .chat-answer strong {
-  color: #1e293b;
+  color: #1e293b !important;
+}
+
+.light-theme .chat-answer.prose-invert :is(h1, h2, h3, h4, h5, h6) {
+  color: #0f172a !important;
+}
+
+.light-theme .chat-answer a {
+  color: #1e3a8a !important;
+  text-decoration-color: #1e3a8a;
+}
+
+.light-theme .chat-answer blockquote {
+  color: #475569;
+  background-color: #f1f5f9;
+}
+
+.light-theme .chat-answer code {
+  color: #334155;
+}
+
+.light-theme .chat-answer pre {
+  color: #334155;
+  background-color: #e2e8f0;
 }
 
 .light-theme .chat-answer.prose-invert {
