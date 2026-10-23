@@ -19,6 +19,7 @@ import { getGenderOfPerson } from "@/lib/query/entity-resolver";
 import { analyzeUserEmotion } from "@/lib/chat/emotion";
 import type { ParsedQuery } from "@/lib/query/types";
 import { lookupPageLinkByTitle } from "@/lib/sql/answers";
+import { buildNotionContextWithConfidence, extractContextPageLinks } from "@/lib/rag/build-context";
 import { extractLastEntityFromHistory, jsonAnswer, detectSmalltalkType, tryFastPathRegexRoute } from "./smalltalk";
 import { trySqlAnswer } from "./sql-answer";
 import { tryRagAnswer } from "./rag-answer";
@@ -98,6 +99,30 @@ async function tryNotionLinkAnswer(ctx: PipelineContext, emotion?: string, signa
   if (linkTitle) {
     const linkAnswer = await lookupPageLinkByTitle(linkTitle);
     if (linkAnswer) return jsonAnswer(ctx.sessionId, linkAnswer, emotion, signal);
+
+    // Fall back to semantic retrieval for descriptive or misspelled link
+    // requests that don't contain the page's exact title.
+    const search = await buildNotionContextWithConfidence(
+      [linkTitle, ctx.message],
+      { originalQuestion: ctx.message },
+    );
+    const links = extractContextPageLinks(search.context).slice(0, 3);
+    if (links.length === 1) {
+      return jsonAnswer(
+        ctx.sessionId,
+        `Closest matching Notion page: **${links[0].title}**\n\n[Open in Notion](${links[0].url})`,
+        emotion,
+        signal,
+      );
+    }
+    if (links.length > 1) {
+      return jsonAnswer(
+        ctx.sessionId,
+        `I couldn't identify one exact page, but these are the closest matches:\n\n${links.map((link) => `- [${link.title}](${link.url})`).join("\n")}`,
+        emotion,
+        signal,
+      );
+    }
     return jsonAnswer(
       ctx.sessionId,
       `I couldn't find a synced Notion page titled **${linkTitle}**. Use **Sync changes**, or ask with the exact page title from Notion.`,
