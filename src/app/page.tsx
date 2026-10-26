@@ -3,7 +3,7 @@
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef, memo } from "react";
-import { Send, LogOut, MessageSquare, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw, ThumbsUp, ThumbsDown, Copy, Check, Mic, MicOff } from "lucide-react";
+import { Send, LogOut, MessageSquare, ChevronsUpDown, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw, ThumbsUp, ThumbsDown, Copy, Check, Mic, MicOff, Sun, Moon } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { hasKnowledgeBaseAccess } from "@/lib/shared/access";
@@ -151,6 +151,18 @@ const ChatInputForm = memo(function ChatInputForm({
   const [isListening, setIsListening] = useState(false);
   const [speechError, setSpeechError] = useState("");
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const voiceBaseTextRef = useRef("");
+  const voiceFinalTextRef = useRef("");
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    const maxHeight = 160;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [text]);
 
   const stopVoiceInput = () => {
     recognitionRef.current?.stop();
@@ -174,17 +186,28 @@ const ChatInputForm = memo(function ChatInputForm({
     const recognition = new SpeechRecognition();
     let receivedTranscript = false;
     let recognitionFailed = false;
+    voiceBaseTextRef.current = text;
+    voiceFinalTextRef.current = "";
     recognition.lang = "en-IN";
-    recognition.interimResults = false;
+    recognition.interimResults = true;
     recognition.continuous = true;
     recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .slice(event.resultIndex)
-        .map((result) => result[0].transcript)
-        .join("");
-      if (transcript) {
+      let interimText = "";
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const transcript = result[0]?.transcript ?? "";
+        if (result.isFinal) {
+          voiceFinalTextRef.current += transcript;
+        } else {
+          interimText += transcript;
+        }
+      }
+      const transcript = `${voiceFinalTextRef.current}${interimText}`;
+      if (transcript.trim()) {
         receivedTranscript = true;
-        setText((current) => `${current}${current && !current.endsWith(" ") ? " " : ""}${transcript}`);
+        setSpeechError("");
+        const baseText = voiceBaseTextRef.current;
+        setText(`${baseText}${baseText && !baseText.endsWith(" ") ? " " : ""}${transcript}`);
       }
     };
     recognition.onerror = (event) => {
@@ -227,8 +250,12 @@ const ChatInputForm = memo(function ChatInputForm({
     <form onSubmit={handleSubmit} className="max-w-4xl mx-auto relative group">
       <div className={`relative rounded-2xl border bg-white/5 transition-all focus-within:bg-white/[0.07] ${isListening ? "border-red-400/40 shadow-[0_0_0_3px_rgba(248,113,113,0.08)]" : "border-white/10 focus-within:border-blue-500/50"}`}>
       <textarea
+        ref={textareaRef}
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => {
+          setText(e.target.value);
+          setSpeechError("");
+        }}
         onKeyDown={(e) => {
           if (e.key !== "Enter" || e.shiftKey) return;
           e.preventDefault();
@@ -238,7 +265,7 @@ const ChatInputForm = memo(function ChatInputForm({
         disabled={!activeSessionId || isLoadingChats}
         placeholder={isListening ? "Listening… speak now" : activeSessionId ? "Ask anything..." : "Creating chat..."}
         rows={1}
-        className="w-full min-h-[54px] max-h-40 resize-y bg-transparent py-4 pl-4 pr-24 text-sm text-white placeholder:text-white/30 focus:outline-none sm:text-base"
+        className="w-full min-h-[54px] max-h-40 resize-none overflow-hidden bg-transparent py-4 pl-4 pr-24 text-sm text-white placeholder:text-white/30 focus:outline-none sm:text-base"
       />
       {!isLoading && (
         <button
@@ -305,6 +332,7 @@ export default function ChatPage() {
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [showTodayChatsOnly, setShowTodayChatsOnly] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isLoadingChats, setIsLoadingChats] = useState(false);
   const [chatsReady, setChatsReady] = useState(false);
@@ -326,6 +354,20 @@ export default function ChatPage() {
   const chatAbortControllerRef = useRef<AbortController | null>(null);
   const chatRequestIdRef = useRef(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+
+  useEffect(() => {
+    const savedTheme = window.localStorage.getItem("notion-chat-theme");
+    if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
+  }, []);
+
+  const toggleTheme = () => {
+    setTheme((current) => {
+      const next = current === "dark" ? "light" : "dark";
+      window.localStorage.setItem("notion-chat-theme", next);
+      return next;
+    });
+  };
   const [stopConfirmState, setStopConfirmState] = useState<"idle" | "confirm">("idle");
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
@@ -1104,8 +1146,17 @@ const createNewChat = async () => {
 
   if (!session) return null;
 
+  const today = new Date();
+  const todayChats = chatSessions.filter((chat) => {
+    const createdAt = new Date(chat.created_at.replace(" ", "T"));
+    return createdAt.getFullYear() === today.getFullYear()
+      && createdAt.getMonth() === today.getMonth()
+      && createdAt.getDate() === today.getDate();
+  });
+  const visibleChats = showTodayChatsOnly ? todayChats : chatSessions;
+
   return (
-    <div className="flex h-screen bg-[#0a0a0a] text-white overflow-hidden relative">
+    <div className={`chat-theme-root flex h-screen overflow-hidden relative ${theme === "light" ? "light-theme" : "bg-[#0a0a0a] text-white"}`}>
       {/* Mobile backdrop overlay for sidebar */}
       {sidebarOpen && (
         <div
@@ -1241,12 +1292,12 @@ const createNewChat = async () => {
       {/* Sidebar */}
       <aside className={`${sidebarOpen ? "w-80 max-w-[85vw]" : "w-0"} fixed md:relative inset-y-0 left-0 z-40 md:z-auto shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out bg-[#121212] md:bg-white/5 border-r border-white/10 backdrop-blur-xl flex flex-col`}>
         <div className="p-6 border-b border-white/10">
-          {/* Header row: logo + title + toggle button on the far right */}
+          {/* Sidebar brand header */}
           <div className="flex items-center gap-3 mb-6">
             <div className="p-2 rounded-lg bg-blue-600">
               <MessageSquare className="w-6 h-6" />
             </div>
-            <h1 className="text-xl font-bold tracking-tight flex-1"> NG Notion chatbot</h1>
+            <h1 className="min-w-0 flex-1 truncate text-xl font-bold tracking-tight">NG Notion chatbot</h1>
             <button
               type="button"
               onClick={() => setSidebarOpen(false)}
@@ -1269,16 +1320,17 @@ const createNewChat = async () => {
             )}
             <div className="flex-1 overflow-hidden">
               <p className="text-sm font-medium truncate">{session.user?.name}</p>
+              <p
+                className="mt-1 text-[10px] text-white/45 leading-snug truncate"
+                title={formatSyncDisplay(lastSyncedAt)}
+              >
+                {isSyncing ? "Sync in progress…" : formatSyncDisplay(lastSyncedAt)}
+              </p>
             </div>
           </div>
 
-          <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3 space-y-3">
-            <div className="flex items-center gap-2 rounded-lg bg-blue-600/10 border border-blue-500/20 px-3 py-2 text-blue-400 text-xs">
-              <div className="w-2 h-2 shrink-0 rounded-full bg-blue-500 animate-pulse" />
-              <span className="font-medium">Connected to Notion Database</span>
-            </div>
-            {canManageKnowledgeBase ? (
-              <>
+          {canManageKnowledgeBase && (
+            <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3 space-y-3">
                 <button
                   type="button"
                   onClick={handleIncrementalSync}
@@ -1323,25 +1375,8 @@ const createNewChat = async () => {
                 >
                   Full rebuild (all pages)…
                 </button>
-              </>
-            ) : (
-              <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-[11px] leading-relaxed text-white/70">
-                <div className="text-white/45 uppercase tracking-wide text-[10px] mb-1">
-                  Last sync by admin
-                </div>
-                <div className="font-medium text-white/90" title={formatSyncDisplay(lastSyncedAt)}>
-{formatSyncDisplay(lastSyncedAt)}
-
-                </div>
-              </div>
-            )}
-            <p
-              className="mt-2 px-1 text-[10px] text-white/45 leading-snug"
-              title={formatSyncDisplay(lastSyncedAt)}
-            >
-              {isSyncing ? "Sync in progress…" : formatSyncDisplay(lastSyncedAt)}
-            </p>
-          </div>
+            </div>
+          )}
         </div>
 
         <div className="flex-1 p-4 overflow-y-auto">
@@ -1356,22 +1391,21 @@ const createNewChat = async () => {
 
           {/* Recent Chats header — single MessageSquare icon for all chats */}
           <div className="flex items-center justify-between mb-3 px-2">
-            <div className="flex items-center gap-2 text-white/30">
-              <MessageSquare className="w-3.5 h-3.5" />
-              <span className="text-xs font-semibold uppercase tracking-wider">Recent Chats</span>
-            </div>
             <button
-              onClick={clearActiveChat}
-              disabled={!activeSessionId || isLoading}
-              className="text-white/35 hover:text-red-400 transition-colors disabled:opacity-40"
-              title="Clear current chat"
+              type="button"
+              onClick={() => setShowTodayChatsOnly((current) => !current)}
+              className={`flex items-center gap-2 transition-colors ${showTodayChatsOnly ? "text-blue-300" : "text-white/30 hover:text-white/70"}`}
+              title={showTodayChatsOnly ? "Show all chats" : "Show today's chats"}
+              aria-label={showTodayChatsOnly ? "Show all chats" : "Show today's chats"}
+              aria-pressed={showTodayChatsOnly}
             >
-              <Trash2 className="w-4 h-4" />
+              <ChevronsUpDown className="w-3.5 h-3.5" />
+              <span className="text-xs font-semibold uppercase tracking-wider">Recent Chats</span>
             </button>
           </div>
 
           <div className="space-y-2 mb-6">
-            {chatSessions.map((chat) => (
+            {visibleChats.map((chat) => (
               <div
                 key={chat.id}
                 className={`group flex items-center gap-1 rounded-lg border transition-colors ${
@@ -1407,8 +1441,8 @@ const createNewChat = async () => {
                 </button>
               </div>
             ))}
-            {!chatSessions.length && (
-              <p className="text-xs text-white/35 px-2">No chats yet.</p>
+            {!visibleChats.length && (
+              <p className="text-xs text-white/35 px-2">{showTodayChatsOnly ? "No chats today." : "No chats yet."}</p>
             )}
           </div>
         </div>
@@ -1442,6 +1476,28 @@ const createNewChat = async () => {
             </button>
           )}
           <h2 className="text-lg font-medium">Chat Assistant</h2>
+          {!sidebarOpen && (
+            <button
+              type="button"
+              onClick={createNewChat}
+              disabled={isLoadingChats || isLoading}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"
+              title="New Chat"
+              aria-label="New Chat"
+            >
+              <Plus className="h-4 w-4" />
+              <span>New Chat</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className={`p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors shrink-0 theme-toggle ${sidebarOpen ? "ml-auto" : ""}`}
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+          >
+            {theme === "dark" ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+          </button>
         </header>
 
         {/* Messages */}
@@ -1689,8 +1745,8 @@ const createNewChat = async () => {
             stopConfirmState={stopConfirmState}
             onStopClick={handleStopClick}
           />
-          <p className="text-center text-[10px] text-white/20 mt-4 uppercase tracking-[0.2em]">
-            notion chatbot can make mistakes check important info
+          <p className="mx-auto mt-3 w-full max-w-4xl px-2 text-center text-xs leading-relaxed text-white/55">
+            Notion Chatbot can make mistakes. Check important info.
           </p>
         </div>
       </main>

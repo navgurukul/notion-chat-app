@@ -258,6 +258,7 @@ export async function tryRagAnswer(
       titleBoost: titleBoost || undefined,
       year: finalParsed.year,
       loosenThreshold: !!ctx.isWrongAnswerRetry,
+      originalQuestion: ctx.message,
     });
 
     if (process.env.NODE_ENV !== "production" || process.env.DEBUG_RETRIEVAL === "true") {
@@ -324,7 +325,7 @@ export async function tryRagAnswer(
         ctx.sessionId,
         ctx.sqlCandidate
           ? `Exact answer confirm nahi kar paya. Notion me sabse close match ye mila:\n\n${ctx.sqlCandidate}`
-          : "Notion me nahi mila. Page ka exact naam try karo, ya page owner se pucho.",
+          : `Notion me nahi mila. Page ka exact naam try karo, ya page owner se pucho.`,
         userEmotion,
         signal,
       );
@@ -335,7 +336,7 @@ export async function tryRagAnswer(
         ctx.sessionId,
         ctx.sqlCandidate
           ? `Exact answer confirm nahi kar paya. Notion me sabse close match ye mila:\n\n${ctx.sqlCandidate}`
-          : "Notion me nahi mila. Page ka exact naam try karo, ya page owner se pucho.",
+          : `Notion me nahi mila. Page ka exact naam try karo, ya page owner se pucho.`,
         userEmotion,
         signal,
       );

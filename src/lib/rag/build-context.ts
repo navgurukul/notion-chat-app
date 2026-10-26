@@ -105,6 +105,7 @@ function deriveCoreTerm(term: string): string | null {
 export async function prefetchPagesFromQuestion(
   question: string,
   year?: number,
+  intentQuestion = question,
 ): Promise<PrefetchResult> {
   const cleaned = simplifySearchQuery(question);
   const terms = extractQuestionTerms(question);
@@ -316,6 +317,23 @@ function assembleChatContext(prefetch: string, semantic: string) {
   ].join("\n\n");
 }
 
+export type ContextPageLink = { title: string; url: string; type: string };
+
+/** Extract page citations from the structured prefetch and chunk context. */
+export function extractContextPageLinks(context: string): ContextPageLink[] {
+  const byUrl = new Map<string, ContextPageLink>();
+  for (const section of context.split(/\n\n---\n\n/)) {
+    const titleLine = section.match(/(?:^|\n)Title:\s*([^\n]+)/i)?.[1]
+      ?? section.match(/(?:^|\n)\[([^\]\n]+)\]/)?.[1]?.split(" > ")[0];
+    const url = section.match(/(?:^|\n)URL:\s*(https?:\/\/[^\s]+)/i)?.[1]?.replace(/[),.;]+$/, "");
+    if (!titleLine || !url) continue;
+    const title = titleLine.trim();
+    const type = section.match(/(?:^|\n)Type:\s*([^\n]+)/i)?.[1]?.trim() ?? "";
+    if (!byUrl.has(url)) byUrl.set(url, { title, url, type });
+  }
+  return [...byUrl.values()];
+}
+
 function extractPrefetchSections(context: string) {
   const prefetchBlock = context
     .split("\n\n---\n\n## Additional excerpts (search index)")[0]
@@ -391,7 +409,7 @@ export async function buildNotionContextForChat(
 
 export async function buildNotionContextWithConfidence(
   searchQuery: string | string[],
-  options?: { titleBoost?: string; year?: number; loosenThreshold?: boolean },
+  options?: { titleBoost?: string; year?: number; loosenThreshold?: boolean; originalQuestion?: string },
 ): Promise<ChatContextBuild> {
   const queries = Array.isArray(searchQuery) ? searchQuery : [searchQuery];
   const primary = queries.find((q) => q.trim())?.trim() ?? "";
@@ -399,7 +417,7 @@ export async function buildNotionContextWithConfidence(
   const year = options?.year;
 
   const [prefetchResult, hybrid] = await Promise.all([
-    prefetchPagesFromQuestion(titleBoost || primary, year),
+    prefetchPagesFromQuestion(titleBoost || primary, year, options?.originalQuestion || primary),
     runHybridChunkRetrieval(queries, titleBoost, { year }),
   ]);
   const { text: prefetch, count: prefetchCount } = prefetchResult;

@@ -127,7 +127,8 @@ function buildSystemPrompt(
     6. Page titles may include emoji; treat them as the same page name without emoji.
     7. Define any workplace acronyms or jargon when they are first introduced in the conversation (e.g., FTI stands for Future-Tech Intern/Internship, and FTE stands for Full Time Employee/Employment).
     8. End the response with a conversational and actionable next step or follow-up question (e.g., "Would you like me to share the link to the full Notion page, or do you have questions about a specific step?" or "Let me know if you would like to look into any specific part of this policy in more detail.") to encourage interactive follow-up.
-    9. Keep responses concise, clear, and direct. Avoid unnecessary length or repeating the same information in slightly different words.
+    9. For "tell me about", "describe", or overview questions, provide a brief explanation from the retrieved page content (a few useful sentences), then include its source link. Do not respond with only a page link or title.
+    10. Keep responses concise, clear, and direct. Avoid unnecessary length or repeating the same information in slightly different words.
     `;
 
   return `
@@ -158,6 +159,9 @@ function createTextChunk(text: string): ChatStreamChunk {
 
 const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 const RETRYABLE_STATUS_CODES = new Set([500, 502, 503, 504]);
+const OPENAI_CHAT_STREAM_TIMEOUT_MS = Number(
+  process.env.OPENAI_CHAT_STREAM_TIMEOUT_MS || 60_000,
+);
 
 function isRetryableError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
@@ -352,7 +356,9 @@ export async function getChatStream(
             max_tokens: Number(process.env.OPENAI_CHAT_MAX_TOKENS || 600),
             stream: true,
           }),
-            signal: AbortSignal.timeout(8000),
+            // This signal remains active while the response body is read. A
+            // short timeout here cuts off otherwise healthy, longer answers.
+            signal: AbortSignal.timeout(OPENAI_CHAT_STREAM_TIMEOUT_MS),
         });
         if (!res.ok) throw await createHttpError(res);
         return res;
