@@ -65,9 +65,25 @@ Rules:
 
 `.trimStart();
 
+const ROLE_CLAIM_DIRECTIVE = `
+## Person role and leadership claims
+For a question or statement asking whether a named person holds a role at NavGurukul:
+- Treat a bare claim such as "Abhishek Gupta is a CEO of NavGurukul" as a request to verify it.
+- Use only retrieved Notion context. Do not rely on general knowledge or earlier assistant answers.
+- Say **Yes** only when the context explicitly supports the person's role.
+- Say **No** only when the context explicitly contradicts the claim.
+- Otherwise say **Unknown** and explain that the synced Notion context does not confirm the role.
+`.trimStart();
+
 function isBooleanQuestion(message: string): boolean {
   const normalized = message.trim().toLowerCase();
-  return /^(is|does|are|was|were|has|have|had|can|should|will|do|did)\b/i.test(normalized);
+  return /^(is|does|are|was|were|has|have|had|can|should|will|do|did)\b/i.test(normalized) ||
+    /^[a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2}\s+(?:is|was|has\s+been)\s+(?:a|an|the)?\s*(?:ceo|chief\s+executive|director|founder|manager|president|chair(?:person|man|woman)?)\b/i.test(normalized);
+}
+
+function isPersonRoleClaim(message: string): boolean {
+  return /\b(?:ceo|chief\s+executive|director|founder|manager|president|chair(?:person|man|woman)?)\b/i.test(message) &&
+    /\b(?:is|was|works?\s+as|serves?\s+as|holds?|role|position|title)\b/i.test(message);
 }
 
 function buildEnrichedContext(
@@ -87,6 +103,9 @@ function buildEnrichedContext(
 
   if (isBooleanQuestion(message)) {
     directive = `${BOOLEAN_DIRECTIVE}${directive}`;
+  }
+  if (isPersonRoleClaim(message)) {
+    directive = `${ROLE_CLAIM_DIRECTIVE}${directive}`;
   }
   
   return `${directive}${notionContext}`;

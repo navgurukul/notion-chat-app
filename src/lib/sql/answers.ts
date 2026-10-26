@@ -573,20 +573,18 @@ function personOnProjectTeam(
   if (!content?.trim()) return false;
   const norm = person.toLowerCase().trim();
   const text = content.toLowerCase();
-  // Exact substring only. The previous vowel-stripped fallback here had the
-  // same false-positive risk as the SQL version below ("Ravi"/"Rovi" collide) —
-  // dropped rather than ported, since this is a plain JS string check with no
-  // access to trigram similarity; a person mentioned via a genuine misspelling
-  // will still surface through the owner/created_by/last_edited_by SQL match.
-  if (!text.includes(norm)) return false;
-
   const firstName =
     norm.split(/\s+/)[0]?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") ?? norm;
   if (!firstName) return false;
+  // Roster pages may use a first name while the directory stores a surname or
+  // initial. Require a whole-word match plus a roster/role marker below.
+  if (!text.includes(norm) && !new RegExp(`\\b${firstName}\\b`, "i").test(text)) return false;
 
   if (new RegExp(`\\bdevs?\\b[\\s\\S]{0,500}${firstName}`, "i").test(content))
     return true;
   if (new RegExp(`\\bteam\\b[\\s\\S]{0,400}${firstName}`, "i").test(content))
+    return true;
+  if (new RegExp(`\\b(?:owner|assignee|captain|lead|project manager)\\s*:\\s*[^\\n]*${firstName}`, "i").test(content))
     return true;
   if (
     new RegExp(
@@ -627,80 +625,51 @@ function inferProjectThemeForPage(row: {
   return inferProjectTheme([row]);
 }
 
-function ownedProjectHubForTheme(theme: string, rows: NotionPageRow[]) {
-  const norm = theme.toLowerCase();
-  const exact = rows.find(
-    (row) => (row.title ?? "").trim().toLowerCase() === norm,
-  );
-  if (exact) return { title: exact.title, url: exact.url ?? null };
-  const partial = rows.find(
-    (row) =>
-      (row.title ?? "").toLowerCase().includes(norm) &&
-      !(row.title ?? "").toLowerCase().includes("induction"),
-  );
-  return partial ? { title: partial.title, url: partial.url ?? null } : null;
-}
-
-function attachOrphanTasksToOwnedProject(
-  byTheme: Map<
-    string,
-    {
-      tasks: NotionPageRow[];
-      rosterHub?: { title: string | null; url: string | null };
-    }
-  >,
-  rows: NotionPageRow[],
-) {
-  const primary = [...byTheme.entries()].find(([theme]) =>
-    ownedProjectHubForTheme(theme, rows),
-  );
-  if (!primary) return;
-  const [, entry] = primary;
-  const seen = new Set(entry.tasks.map((r) => r.id));
-  for (const row of rows) {
-    if (inferProjectThemeForPage(row) || seen.has(row.id)) continue;
-    entry.tasks.push(row);
-    seen.add(row.id);
-  }
-}
-
 async function findProjectRosterThemes(person: string) {
+  const out: Array<{ theme: string; hubTitle: string; hubUrl: string | null }> = [];
+  const seen = new Set<string>();
+
   const { personTerm, personName } = buildPersonMatchParams(person);
   const rows = await query<{
     title: string | null;
     url: string | null;
     content: string | null;
+    doc_type: string | null;
   }>(
     `
-    SELECT title, url, content
+    SELECT title, url, content, doc_type
     FROM notion_pages
     WHERE
-      (
-        fts @@ plainto_tsquery('simple', $2)
-        OR ${personColumnMatchSql("content", 1, 2)}
-      )
-      AND (
-        lower(coalesce(title, '')) LIKE '%datapivot%'
-        OR lower(coalesce(title, '')) LIKE '%nagaada%'
-        OR lower(coalesce(title, '')) LIKE '%roadmap%'
-        OR lower(coalesce(title, '')) LIKE '%release%'
-        OR lower(coalesce(title, '')) LIKE '%meraki%'
-        OR lower(coalesce(title, '')) LIKE '%oscar%'
-        OR lower(coalesce(title, '')) LIKE '%reflection%'
-        OR lower(coalesce(title, '')) LIKE '%reports and dashboard%'
-        OR lower(coalesce(title, '')) LIKE '%sow%'
-      )
-    LIMIT 30
+      ${personColumnMatchSql("content", 1, 2)}
+    ORDER BY
+      CASE WHEN lower(coalesce(doc_type, '')) ~ '(project|initiative|program|hub)' THEN 0 ELSE 1 END,
+      title ASC
+    LIMIT 1000
     `,
     [personTerm, personName],
   );
 
-  const seen = new Set<string>();
-  const out: Array<{ theme: string; hubTitle: string; hubUrl: string | null }> =
-    [];
   for (const row of rows) {
-    if (!personOnProjectTeam(row.content, person)) continue;
-    const theme = inferProjectThemeForPage(row);
+    const title = row.title?.trim();
+    const isProjectDocument = /\b(project|initiative|program|hub)\b/i.test(row.doc_type ?? "");
+    const hasProjectOverview = /\b(project|initiative)\s+(overview|objective|team|description|scope)\b/i.test(row.content ?? "");
+    const targetFirstName = personDedupeKey(person).split(" ")[0];
+    const hasRosterMember = extractPeopleFromContent(row.content).some(({ name, role }) => {
+      const memberKey = personDedupeKey(name);
+      return /team roster|owner|assignee|captain|lead|pm/i.test(role)
+        && (memberKey === personDedupeKey(person) || memberKey.split(" ")[0] === targetFirstName);
+    });
+    const personAssociated = hasRosterMember || personOnProjectTeam(row.content, person);
+    const inferredTheme = inferProjectThemeForPage(row);
+    const isNamedProjectHub = inferredTheme && title?.toLowerCase() === inferredTheme.toLowerCase();
+    const isPersonPage = title && normalizePersonNameForMatch(title) === normalizePersonNameForMatch(person);
+    const isTaskLikeTitle = /\b(task|bug|fix|implement|update|add|remove|should|width|pagination|rendering|testing)\b/i.test(title ?? "")
+      && !/\b(chatbot|project|platform|initiative|program)\b/i.test(title ?? "");
+    const hasProjectTeamEvidence = hasRosterMember && !isTaskLikeTitle;
+    if (!personAssociated || isPersonPage || isTaskLikeTitle || (!isProjectDocument && !hasProjectOverview && !hasProjectTeamEvidence && !isNamedProjectHub)) continue;
+    // If the page is explicitly typed or written as a project hub, preserve
+    // its own name so projects outside the built-in theme list are included.
+    const theme = inferredTheme ?? title ?? null;
     if (!theme || seen.has(theme)) continue;
     seen.add(theme);
     out.push({
@@ -724,7 +693,10 @@ async function formatAssignedProjectsAnswer(
   const byTheme = new Map<string, ThemeEntry>();
 
   for (const row of rows) {
-    const theme = inferProjectThemeForPage(row) ?? row.title?.trim() ?? "General Work";
+    // Assignment matches are often individual task pages or the person's own
+    // profile. Only group them when their content/title identifies a known
+    // project area; a page title alone is not evidence that it is a project.
+    const theme = inferProjectThemeForPage(row);
     if (!theme) continue;
     const entry = byTheme.get(theme) ?? { tasks: [] };
     if (!entry.tasks.some((t) => t.id === row.id)) {
@@ -740,8 +712,6 @@ async function formatAssignedProjectsAnswer(
     }
     byTheme.set(roster.theme, entry);
   }
-
-  attachOrphanTasksToOwnedProject(byTheme, rows);
 
   const themes = [...byTheme.entries()]
     .sort((a, b) => {
@@ -768,36 +738,14 @@ async function formatAssignedProjectsAnswer(
     );
   }
 
-  for (const theme of themes.slice(0, 10)) {
+  for (const theme of themes) {
     const entry = byTheme.get(theme)!;
     lines.push(`- **${theme}**`);
 
-    if (entry.tasks.length > 0) {
-      const uniqueTasks = new Map<string, NotionPageRow>();
-      for (const t of entry.tasks) {
-        const key = t.url || t.id || t.title || "";
-        if (!uniqueTasks.has(key)) {
-          uniqueTasks.set(key, t);
-        }
-      }
-      const taskList = [...uniqueTasks.values()];
-      for (const task of taskList.slice(0, 8)) {
-        const taskTitle = task.title || "Untitled";
-        const taskLink = formatDisplayLink(taskTitle, task.url);
-        lines.push(`  - ${taskLink}`);
-      }
-      if (taskList.length > 8) {
-        lines.push(`  - _+${taskList.length - 8} more task(s)_`);
-      }
-    } else if (entry.rosterHub) {
-      const hubTitle = entry.rosterHub.title || theme;
-      const hubLink = formatDisplayLink(hubTitle, entry.rosterHub.url);
-      lines.push(`  - ${hubLink}`);
+    const hub = entry.rosterHub;
+    if (hub) {
+      lines.push(`  - Project page: ${formatDisplayLink(hub.title || theme, hub.url)}`);
     }
-  }
-
-  if (themes.length > 10) {
-    lines.push("", `_+${themes.length - 10} more project areas._`);
   }
 
   return lines.join("\n");
@@ -1886,7 +1834,7 @@ async function handleMetadataQueryInner(
           CASE WHEN ${ownerMatchSql} THEN 0 ELSE 1 END,
           notion_edited_at DESC NULLS LAST,
           title ASC
-        LIMIT ${SQL_RESULT_LIMIT}
+        LIMIT ${person && asksForProjectsOnly(parsed.raw) ? 200 : SQL_RESULT_LIMIT}
         `,
         [personTerm, personName, topicTerm, yearStart, yearEnd],
       );
@@ -1894,6 +1842,10 @@ async function handleMetadataQueryInner(
 
     const dateNote = formatDateNote(parsed.raw, dateStart, dateEnd, year);
     const yearNote = dateNote;
+
+    if (person && asksForProjectsOnly(parsed.raw)) {
+      return formatAssignedProjectsAnswer(person, rows, yearNote);
+    }
 
     if (!rows.length) {
       if (useGlobalDateQuery) {
@@ -1918,10 +1870,6 @@ async function handleMetadataQueryInner(
         return `No tasks found for **${person}**${yearNote}.\n\nDid you mean: ${suggestionList}?`;
       }
       return `No tasks found for **${person ?? "Me"}**${yearNote}.\n\n_No assignee found in Notion._`;
-    }
-
-    if (person && asksForProjectsOnly(parsed.raw)) {
-      return formatAssignedProjectsAnswer(person, rows, yearNote);
     }
 
     const listLabel = useGlobalDateQuery
@@ -2037,14 +1985,17 @@ async function handleMetadataQueryInner(
         END AS sort_rank
       FROM matched
       ORDER BY sort_rank, notion_edited_at DESC NULLS LAST, title ASC
-      LIMIT ${SQL_RESULT_LIMIT}
+      LIMIT ${asksForProjectsOnly(parsed.raw) ? 200 : SQL_RESULT_LIMIT}
       `,
       [personTerm, personName, topicTerm, yearStart, yearEnd],
     );
-    if (!rows.length) return null;
-
     const dateNote = formatDateNote(parsed.raw, dateStart, dateEnd, year);
     const yearNote = dateNote;
+
+    if (asksForProjectsOnly(parsed.raw)) {
+      return formatAssignedProjectsAnswer(person, rows, yearNote);
+    }
+    if (!rows.length) return null;
 
     const label = taskListQuery
       ? `${person} worked on${yearNote}`

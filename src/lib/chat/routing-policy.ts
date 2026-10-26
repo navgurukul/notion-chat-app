@@ -127,8 +127,10 @@ export function shouldFallbackToRag(parsed: ParsedQuery, sqlAnswer: string | nul
   }
 
   if (parsed.kind === "page_about") {
-    if (/\bpages matching\b/i.test(sqlAnswer)) return true;
-    return false;
+    // A page card is useful for navigation, but questions asking what a page
+    // or topic is about need the page body so RAG can produce an explanation.
+    // Explicit link requests are handled earlier in the chat pipeline.
+    return true;
   }
 
   if (parsed.kind === "project_summary" || parsed.kind === "topic_list") {

@@ -261,6 +261,24 @@ export function parseQueryByRules(question: string): RulesQuery {
     }
   }
 
+  // A named-person request such as "I want only Pooja's data" is a
+  // person-scoped workspace query, not a request for the full people
+  // directory. Route it through the existing person activity lookup.
+  const personDataMatch = question.match(
+    /^(?:i\s+want|show\s+me|show|get|give\s+me|only)\s+(?:only\s+)?([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})(?:'s|’s)?\s+(?:data|details|information|records)(?:\s+(?:only|please))?[.?!]?\s*$/i,
+  );
+  if (personDataMatch?.[1]) {
+    const person = cleanPersonName(personDataMatch[1]);
+    if (person) {
+      return {
+        kind: "worked_on_list",
+        personName: person,
+        raw: question,
+        parserConfidence: 0.95,
+      };
+    }
+  }
+
   const membershipRegex = /^(?:is|does|are)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:working\s+on|work\s+on|part\s+of|contributing\s+to|associated\s+with)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i;
   const membershipRegex2 = /^(?:is|are)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:on|in)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i;
   const membershipRegex3 = /^(?:is|does|are)\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){0,2})\s+(?:the\s+)?(?:owner|manager|pm|lead)\s+(?:of|for|on)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\?|$)/i;

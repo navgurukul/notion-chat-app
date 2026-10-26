@@ -258,6 +258,7 @@ export function buildContextualSearchQuery(message: string, history: ChatHistory
 
 export function isNotionLinkRequest(message: string) {
   const lower = toLower(message);
+  if (/^(?:the\s+)?(?:link|url)(?:\s+please)?[?.!\s]*$/i.test(message.trim())) return true;
   return LINK_PHRASES.some((phrase) => containsPhrase(lower, phrase));
 }
 
@@ -328,13 +329,21 @@ function extractTitleFromLinkPhrase(message: string) {
       rest.indexOf("?") === -1 ? rest.length : rest.indexOf("?"),
       rest.length,
     );
-    const title = rest.slice(0, end).trim();
+    const title = cleanLinkTitle(rest.slice(0, end));
 
     const pronouns = new Set(["it", "this", "that"]);
     if (title.length >= 3 && !pronouns.has(toLower(title))) return title;
   }
 
   return null;
+}
+
+function cleanLinkTitle(value: string) {
+  return value
+    .replace(/["'“”‘’]+/g, "")
+    .replace(/[?!.,;:]+$/g, "")
+    .replace(/\s+(?:page|document|doc)$/i, "")
+    .trim();
 }
 
 function messageUsesPronoun(message: string) {
@@ -352,7 +361,8 @@ export function extractReferencedTitle(message: string, history: ChatHistoryItem
   const fromLinkPhrase = extractTitleFromLinkPhrase(message);
   if (fromLinkPhrase) return fromLinkPhrase;
 
-  if (!messageUsesPronoun(message)) return null;
+  const isBareLinkFollowUp = /^(?:the\s+)?(?:link|url)(?:\s+please)?[?.!\s]*$/i.test(message.trim());
+  if (!messageUsesPronoun(message) && !isBareLinkFollowUp) return null;
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
     if (history[i].role !== "user") continue;
