@@ -1,30 +1,15 @@
 import NextAuth from "next-auth";
-import GoogleProvider from "next-auth/providers/google";
+import { authOptions } from "@/lib/auth/options";
+import type { NextRequest } from "next/server";
 
-// Log environment variables to debug
-console.log("=== NextAuth Environment Check ===");
-console.log("NEXTAUTH_URL:", process.env.NEXTAUTH_URL);
-console.log("NEXTAUTH_SECRET exists:", !!process.env.NEXTAUTH_SECRET);
-console.log("GOOGLE_CLIENT_ID exists:", !!process.env.GOOGLE_CLIENT_ID);
-console.log("GOOGLE_CLIENT_SECRET exists:", !!process.env.GOOGLE_CLIENT_SECRET);
-console.log("================================");
+const handler = NextAuth(authOptions);
 
-const handler = NextAuth({
-  secret: process.env.NEXTAUTH_SECRET,
-  providers: [
-    GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-    }),
-  ],
-  pages: {
-    signIn: "/login",
-  },
-  callbacks: {
-    async session({ session, token }) {
-      return session;
-    },
-  },
-});
+async function authHandler(
+  req: NextRequest,
+  context: { params: Promise<{ nextauth?: string[] }> }
+) {
+  const params = await context.params;
+  return handler(req, { params });
+}
 
-export { handler as GET, handler as POST };
+export { authHandler as GET, authHandler as POST };
