@@ -196,6 +196,7 @@ type PageRecord = {
   created_by: string | null;
   last_edited_by: string | null;
   doc_type: string | null;
+  parent_database_title: string | null;
   status: string | null;
   due_date: string | null;
   content: string;
@@ -405,21 +406,22 @@ async function upsertPageRecord(params: {
   const { record, synced_at, pageEmbedding, embeddingStatus, lastError } = params;
   await query(
     `INSERT INTO notion_pages (
-      id, title, url, owner, created_by, last_edited_by, doc_type, status, due_date,
+      id, title, url, owner, created_by, last_edited_by, doc_type, parent_database_title, status, due_date,
       content, embedding, synced_at, notion_edited_at, embedding_status, last_error
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::vector,$12,$13,$14,$15)
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::vector,$13,$14,$15,$16)
     ON CONFLICT (id) DO UPDATE SET
       title=EXCLUDED.title, url=EXCLUDED.url, owner=EXCLUDED.owner,
       created_by=EXCLUDED.created_by, last_edited_by=EXCLUDED.last_edited_by,
-      doc_type=EXCLUDED.doc_type, status=EXCLUDED.status, due_date=EXCLUDED.due_date,
+      doc_type=EXCLUDED.doc_type, parent_database_title=EXCLUDED.parent_database_title,
+      status=EXCLUDED.status, due_date=EXCLUDED.due_date,
       content=EXCLUDED.content, embedding=EXCLUDED.embedding, synced_at=EXCLUDED.synced_at,
       notion_edited_at=EXCLUDED.notion_edited_at, embedding_status=EXCLUDED.embedding_status,
       last_error=EXCLUDED.last_error`,
     [
       record.id, record.title, record.url, record.owner, record.created_by,
-      record.last_edited_by, record.doc_type, record.status, record.due_date,
-      record.content, toVectorLiteral(pageEmbedding), synced_at,
-      record.notion_edited_at, embeddingStatus, lastError,
+      record.last_edited_by, record.doc_type, record.parent_database_title,
+      record.status, record.due_date, record.content, toVectorLiteral(pageEmbedding),
+      synced_at, record.notion_edited_at, embeddingStatus, lastError,
     ],
   );
 }
@@ -505,6 +507,21 @@ async function buildPageRecord(notion: Client, page: any): Promise<PageRecord> {
   const title = getPageTitle(page);
   const blockLines = await fetchBlocksRecursively(notion, page.id, 0);
   const content = blockLines.join("\n\n");
+  const parentId = page?.parent?.database_id ?? page?.parent?.page_id ?? null;
+  let parent_database_title: string | null = null;
+  if (parentId) {
+    try {
+      const parent = page?.parent?.database_id
+        ? await notion.databases.retrieve({ database_id: parentId })
+        : await notion.pages.retrieve({ page_id: parentId });
+      const parentProperties = (parent as any)?.properties ?? {};
+      parent_database_title = page?.parent?.database_id
+        ? getTextFromRichText((parent as any)?.title) || getPageTitle(parent)
+        : getPageTitle(parent);
+    } catch {
+      parent_database_title = null;
+    }
+  }
 
   return {
     id: page.id,
@@ -514,6 +531,7 @@ async function buildPageRecord(notion: Client, page: any): Promise<PageRecord> {
     created_by:     page?.created_by?.name ?? null,
     last_edited_by: page?.last_edited_by?.name ?? null,
     doc_type:       findPropertyValueByName(properties, ["type", "doc type"]),
+    parent_database_title,
     status:         findPropertyValueByName(properties, ["status"]),
     due_date:       findPropertyValueByName(properties, ["due date", "date"]),
     content,

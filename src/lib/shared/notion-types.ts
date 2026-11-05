@@ -7,6 +7,7 @@ export type NotionPageRow = {
   created_by: string | null;
   last_edited_by: string | null;
   doc_type: string | null;
+  parent_database_title?: string | null;
   status: string | null;
   content?: string | null;
   match_source?: string | null;

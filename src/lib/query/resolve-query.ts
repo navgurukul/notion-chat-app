@@ -136,6 +136,7 @@ function mergeRulesAndLlm(rules: ParsedQuery, llm: ParsedQuery): ParsedQuery {
     compareTitleB: rules.compareTitleB,
     year: rules.year,
     dateRange: rules.dateRange,
+    status: rules.status ?? llm.status,
     raw: rules.raw,
   };
 }
@@ -320,7 +321,9 @@ export async function resolveQuery(
 
   // Resolve first-person pronouns ("me", "my", "I") to the session user's name
   // regardless of whether this is a follow-up or a fresh query.
-  if (!personName && hasGenuineFirstPersonReference(question) && sessionName) {
+  // An explicit first-person request is authoritative. Do not let the LLM or
+  // a fuzzy entity match replace "me" with a previous/current project person.
+  if (hasGenuineFirstPersonReference(question) && sessionName) {
     personName = sessionName;
   }
 

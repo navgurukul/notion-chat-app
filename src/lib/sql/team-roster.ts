@@ -237,7 +237,7 @@ export function topicSearchTokens(scopeTopic: string): string[] {
     .replace(/[^a-z0-9\s-]/g, " ")
     .split(/\s+/)
     .map((t) => t.trim())
-.filter((t) => t.length >= 3 && !["project", "the", "workspace", "ai", "notion"].includes(t));
+.filter((t) => t.length >= 3 && !["project", "the", "workspace", "ai", "notion", "app"].includes(t));
 
   const tokens = new Set(base);
   const lower = scopeTopic.toLowerCase();
@@ -401,18 +401,24 @@ const CROSS_PROJECT_HUB_TITLES = /^(poc\s+documents|outline\s+of\s+final\s+prese
 
 /**
  * Keep pages that belong to a project topic (hub, MVP, PRD, scoped tasks) — drop noise tickets and generic cross-project hubs.
+ *
+ * @param requireAllTokens - When true, content-based token matching requires ALL
+ *   significant tokens to appear (AND), not just any one (OR). This prevents loose
+ *   single-token matches like "notion" from pulling in pages from unrelated projects.
+ *   Title-score and exact-phrase checks are unaffected by this flag.
  */
 export function filterPagesForProjectTopic<T extends { title?: string | null; content?: string | null }>(
   topic: string,
   pages: T[],
-  options?: { minTitleScore?: number },
+  options?: { minTitleScore?: number; requireAllTokens?: boolean },
 ): T[] {
   const minScore = options?.minTitleScore ?? 350;
+  const requireAllTokens = options?.requireAllTokens ?? false;
   const tokens = topic
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, " ")
     .split(/\s+/)
-    .filter((t) => t.length >= 3 && !["project", "the", "app", "ai"].includes(t));
+    .filter((t) => t.length >= 3 && !["project", "the", "workspace", "app", "ai", "notion"].includes(t));
   const primary = tokens[0] ?? topic.toLowerCase().trim();
 
   return pages.filter((row) => {
@@ -442,10 +448,21 @@ export function filterPagesForProjectTopic<T extends { title?: string | null; co
 
     if (content) {
       const contentLower = content.toLowerCase();
-      for (const token of tokens) {
-        const tokenRegex = new RegExp(`\\b${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-        if (tokenRegex.test(contentLower)) {
-          return true;
+      if (requireAllTokens && tokens.length > 1) {
+        // AND logic: every token must appear somewhere in the content
+        const allPresent = tokens.every((token) =>
+          new RegExp(`\\b${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(contentLower)
+        );
+        if (allPresent) return true;
+        // Also accept if the full topic phrase appears as a substring
+        if (contentLower.includes(topic.toLowerCase())) return true;
+      } else {
+        // Original OR logic: any token in content passes
+        for (const token of tokens) {
+          const tokenRegex = new RegExp(`\\b${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+          if (tokenRegex.test(contentLower)) {
+            return true;
+          }
         }
       }
     }
