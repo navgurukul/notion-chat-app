@@ -36,6 +36,7 @@ export type ParsedQuery = {
   kind: QueryKind;
   personName?: string;
   docTitle?: string;
+  status?: "done" | "active";
   compareTitleB?: string;
   year?: number;
   /** 0–1 routing confidence for observability and fallback decisions */

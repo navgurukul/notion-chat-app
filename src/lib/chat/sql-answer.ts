@@ -78,10 +78,18 @@ export async function trySqlAnswer(
   }
 
   const fallback = shouldFallbackToRag(finalParsed, directAnswer ?? null);
+  const isScopedAssignmentQuery =
+    finalParsed.kind === "assigned_list" &&
+    !!finalParsed.personName &&
+    !!(finalParsed.docTitle || finalParsed.status);
   ctx.sqlCandidate = directAnswer?.trim() && !isSqlMissAnswer(directAnswer) && !/^no\b/i.test(directAnswer.trim())
     ? directAnswer
     : undefined;
-  if (directAnswer?.trim() && !isSqlMissAnswer(directAnswer) && !fallback) {
+  if (
+    directAnswer?.trim() &&
+    (!isSqlMissAnswer(directAnswer) || isScopedAssignmentQuery) &&
+    !fallback
+  ) {
     const isSynthesis = isSynthesisRequest(ctx.message);
     if (isSynthesis) {
       logChatRoute("sql_synthesis_stream", finalParsed, { answer_chars: directAnswer.length });

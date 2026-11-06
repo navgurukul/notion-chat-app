@@ -10,19 +10,11 @@
 
 import "../src/lib/dns-hook";
 import "dotenv/config";
-import fs from "node:fs";
 import path from "node:path";
 
 import { buildNotionContextWithConfidence } from "../src/lib/rag/build-context";
 import { getChatResponse, getJsonCompletion } from "../src/lib/ai/openai";
-
-interface GoldenItem {
-  id: string;
-  query: string;
-  expected_chunk_ids?: string[];
-  expected_page_titles?: string[];
-  expected_answer_claims?: string[];
-}
+import { readGoldenDataset } from "./golden-dataset";
 
 export interface FaithfulnessClaim {
   statement: string;
@@ -63,11 +55,7 @@ INSTRUCTIONS:
 
 export async function evaluateFaithfulness(datasetPath?: string) {
   const file = datasetPath || path.join(process.cwd(), "eval", "golden-dataset.json");
-  if (!fs.existsSync(file)) {
-    throw new Error(`Golden dataset file not found at: ${file}`);
-  }
-
-  const dataset: GoldenItem[] = JSON.parse(fs.readFileSync(file, "utf-8"));
+  const dataset = readGoldenDataset(file);
   const results: FaithfulnessQueryResult[] = [];
 
   for (const item of dataset) {

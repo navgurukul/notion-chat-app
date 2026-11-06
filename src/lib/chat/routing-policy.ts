@@ -92,6 +92,15 @@ export function isSqlMissAnswer(answer: string) {
  */
 export function shouldFallbackToRag(parsed: ParsedQuery, sqlAnswer: string | null): boolean {
   if (!sqlAnswer?.trim()) return true;
+  // A scoped assignment/status query must never be replaced with broad
+  // semantic results from the project, which can belong to another person.
+  if (
+    parsed.kind === "assigned_list" &&
+    parsed.personName &&
+    (parsed.docTitle || parsed.status)
+  ) {
+    return false;
+  }
   if (isSqlMissAnswer(sqlAnswer)) return true;
   if (parsed.kind === "team_activity" && isTeamActivityMetadataGap(sqlAnswer)) return true;
 

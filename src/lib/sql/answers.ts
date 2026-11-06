@@ -66,6 +66,47 @@ function normalizeTopic(value: string) {
     .trim();
 }
 
+function normalizedStatusValue(value: string | null | undefined) {
+  return (value ?? "").toLowerCase().replace(/[^a-z]+/g, " ").trim();
+}
+
+function compactStatusValue(value: string | null | undefined) {
+  return normalizedStatusValue(value).replace(/\s+/g, "");
+}
+
+function rowMatchesRequestedStatus(
+  row: Pick<NotionPageRow, "status" | "content">,
+  requested: ParsedQuery["status"],
+) {
+  if (!requested) return true;
+  const directStatus = compactStatusValue(row.status);
+  const contentStatus = compactStatusValue(
+    row.content?.match(/(?:status|state)\s*[:|-]\s*([^\n|]+)/i)?.[1],
+  );
+  const normalized = directStatus || contentStatus;
+  if (requested === "done") {
+    // Exact matches: done, completed, finished, closed, resolved
+    // Also match compound variants like 'releaseddone', 'closeddone' (from 'Released/ Done')
+    return /^(done|completed|complete|finished|closed|resolved)$/.test(normalized)
+      || normalized.endsWith("done")
+      || normalized.endsWith("completed")
+      || normalized.endsWith("finished")
+      || normalized.endsWith("closed")
+      || normalized.endsWith("resolved");
+  }
+  return /^(inprogress|indevelopment|indev|wip|active|pending|ongoing|testing|uat|inreview|qa)$/.test(normalized)
+    || normalized.includes("inprogress")
+    || normalized.includes("indevelopment")
+    || normalized.includes("indev");
+}
+
+function rowMatchesProject(row: Pick<NotionPageRow, "title" | "content" | "parent_database_title">, topic: string) {
+  const parent = row.parent_database_title?.trim().toLowerCase();
+  const requested = topic.trim().toLowerCase();
+  if (parent && (parent === requested || parent.includes(requested) || requested.includes(parent))) return true;
+  return filterPagesForProjectTopic(topic, [row], { requireAllTokens: true }).length > 0;
+}
+
 function resolveDateRange(rawQuery: string): { dateStart: string | null; dateEnd: string | null } {
   const q = rawQuery.toLowerCase();
   const now = new Date();
@@ -1482,6 +1523,7 @@ export async function handleMetadataQuery(
     kind: parsed.kind,
     personName: parsed.personName,
     docTitle: parsed.docTitle,
+    status: parsed.status,
     compareTitleB: parsed.compareTitleB,
     year: parsed.year,
     dateRange: parsed.dateRange,
@@ -1755,6 +1797,28 @@ async function handleMetadataQueryInner(
 
     const hasExplicitFilter = !!(parsed.personName || parsed.docTitle);
     const useGlobalDateQuery = !hasExplicitFilter && !!(yearStart && yearEnd);
+    const normalizedStatusSql = "regexp_replace(lower(trim(coalesce(status, ''))), '[^a-z]+', '', 'g')";
+    // 'done' filter: match standard done values PLUS compound variants like
+    // 'released/ done' → 'releaseddone', 'closed/done' → 'closeddone', etc.
+    // Also match the raw status LIKE '%done%' to catch those compound values
+    // before normalization strips the slash.
+    const statusSql = parsed.status === "done"
+      ? `AND (
+          ${normalizedStatusSql} IN ('done', 'completed', 'complete', 'finished', 'closed', 'resolved', 'releaseddone', 'closeddone', 'completedbydeveloper')
+          OR lower(trim(coalesce(status, ''))) LIKE '%done%'
+          OR lower(trim(coalesce(status, ''))) LIKE '%complet%'
+          OR lower(trim(coalesce(status, ''))) LIKE '%finish%'
+          OR lower(trim(coalesce(status, ''))) LIKE '%closed%'
+          OR lower(trim(coalesce(status, ''))) LIKE '%resolved%'
+        )`
+      : parsed.status === "active"
+        ? `AND (
+            ${normalizedStatusSql} IN ('inprogress', 'indevelopment', 'indev', 'active', 'pending', 'ongoing', 'wip', 'testing', 'uat', 'inreview', 'qa')
+            OR lower(trim(coalesce(status, ''))) LIKE '%in progress%'
+            OR lower(trim(coalesce(status, ''))) LIKE '%in development%'
+            OR lower(trim(coalesce(status, ''))) LIKE '%in dev%'
+          )`
+        : "";
 
     let rows: (NotionPageRow & { notion_edited_at?: string | null })[] = [];
     let isWorkspace = true;
@@ -1771,7 +1835,7 @@ async function handleMetadataQueryInner(
 
       rows = await query<NotionPageRow & { notion_edited_at?: string | null }>(
         `
-        SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content, notion_edited_at::text
+        SELECT id, title, url, owner, created_by, last_edited_by, doc_type, parent_database_title, status, content, notion_edited_at::text
         FROM notion_pages
         WHERE
           (
@@ -1784,6 +1848,7 @@ async function handleMetadataQueryInner(
             OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
             OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
           )
+          ${statusSql}
         ORDER BY
           notion_edited_at DESC NULLS LAST,
           title ASC
@@ -1811,33 +1876,79 @@ async function handleMetadataQueryInner(
         )
       `;
       const ownerMatchSql = personColumnMatchSql("owner", 1, 2);
-      rows = await query<NotionPageRow & { notion_edited_at?: string | null }>(
-        `
-        SELECT id, title, url, owner, created_by, last_edited_by, doc_type, status, content, notion_edited_at::text
-        FROM notion_pages
-        WHERE
-          (${ownerMatchSql} OR ${assigneeInContentSql})
-          AND (
-            $3::text IS NULL
-            OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
-            OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
-          )
-          AND (
-            $4::text IS NULL
-            OR (
-              notion_edited_at IS NOT NULL
-              AND notion_edited_at >= $4::timestamptz
-              AND notion_edited_at < $5::timestamptz
+
+      // ── Stage 1: title / content LIKE matching ────────────────────────────
+      if (rows.length === 0) {
+        rows = await query<NotionPageRow & { notion_edited_at?: string | null }>(
+          `
+          SELECT id, title, url, owner, created_by, last_edited_by, doc_type, parent_database_title, status, content, notion_edited_at::text
+          FROM notion_pages
+          WHERE
+            (${ownerMatchSql} OR ${assigneeInContentSql})
+            ${statusSql}
+            AND (
+              $3::text IS NULL
+              OR lower(coalesce(title, '')) LIKE lower($3) ESCAPE '\\'
+              OR lower(coalesce(content, '')) LIKE lower($3) ESCAPE '\\'
             )
-          )
-        ORDER BY
-          CASE WHEN ${ownerMatchSql} THEN 0 ELSE 1 END,
-          notion_edited_at DESC NULLS LAST,
-          title ASC
-        LIMIT ${person && asksForProjectsOnly(parsed.raw) ? 200 : SQL_RESULT_LIMIT}
-        `,
-        [personTerm, personName, topicTerm, yearStart, yearEnd],
-      );
+            AND (
+              $4::text IS NULL
+              OR (
+                notion_edited_at IS NOT NULL
+                AND notion_edited_at >= $4::timestamptz
+                AND notion_edited_at < $5::timestamptz
+              )
+            )
+          ORDER BY
+            CASE WHEN ${ownerMatchSql} THEN 0 ELSE 1 END,
+            notion_edited_at DESC NULLS LAST,
+            title ASC
+          LIMIT ${person && asksForProjectsOnly(parsed.raw) ? 200 : SQL_RESULT_LIMIT}
+          `,
+          [personTerm, personName, topicTerm, yearStart, yearEnd],
+        );
+      }
+
+      // ── Stage 2: content-aware in-memory project filter ───────────────────
+      // When Stage 2 returned rows, apply filterPagesForProjectTopic to refine
+      // them by topic (with AND-token strictness to avoid cross-project matches).
+      if (!isWorkspace && docTitle && rows.length > 0) {
+        const filtered = rows.filter((row) => rowMatchesProject(row, docTitle));
+        rows = filtered;
+      }
+
+      // ── Stage 3: project-aware fallback over person+status rows ────────────
+      if (!isWorkspace && docTitle && rows.length === 0) {
+        const allPersonRows = await query<NotionPageRow & { notion_edited_at?: string | null }>(
+          `
+          SELECT id, title, url, owner, created_by, last_edited_by, doc_type, parent_database_title, status, content, notion_edited_at::text
+          FROM notion_pages
+          WHERE (${ownerMatchSql} OR ${assigneeInContentSql})
+            ${statusSql}
+            AND (
+              $3::text IS NULL
+              OR (
+                notion_edited_at IS NOT NULL
+                AND notion_edited_at >= $3::timestamptz
+                AND notion_edited_at < $4::timestamptz
+              )
+            )
+          ORDER BY notion_edited_at DESC NULLS LAST, title ASC
+          LIMIT 200
+          `,
+          [personTerm, personName, yearStart, yearEnd],
+        );
+        // Only return rows that can be associated with the requested project.
+        // Returning all person rows here leaks tasks from other projects.
+        const filtered = allPersonRows.filter((row) => rowMatchesProject(row, docTitle));
+        rows = filtered;
+      }
+    }
+
+    // Enforce the requested stage again after project matching. This protects
+    // the response from inconsistent Notion status labels or a stale query path.
+    if (parsed.status) {
+      rows = rows.filter((row) => rowMatchesRequestedStatus(row, parsed.status));
     }
 
     const dateNote = formatDateNote(parsed.raw, dateStart, dateEnd, year);
@@ -1852,24 +1963,30 @@ async function handleMetadataQueryInner(
         const cleanedDateNote = dateNote.trim();
         return cleanedDateNote ? `No tasks found ${cleanedDateNote}.` : "No tasks found in synced Notion.";
       }
-      // Attempt to suggest possible assignee names
+      // Attempt to suggest possible assignee names when the person is not in the directory
       const directory = await getPeopleDirectory();
       const normalizedPerson = normalizePersonNameForMatch(person ?? "");
       const exactDirectoryMatch = directory.some(
         (member) => normalizePersonNameForMatch(member.name) === normalizedPerson,
       );
-      const matches = exactDirectoryMatch
-        ? []
-        : directory
-            .filter((member) =>
-              normalizePersonNameForMatch(member.name).startsWith(normalizedPerson),
-            )
-            .map((member) => member.name);
-      if (matches.length) {
-        const suggestionList = matches.map(m => `**${m}**`).join(', ');
-        return `No tasks found for **${person}**${yearNote}.\n\nDid you mean: ${suggestionList}?`;
+      if (!exactDirectoryMatch) {
+        const matches = directory
+          .filter((member) =>
+            normalizePersonNameForMatch(member.name).startsWith(normalizedPerson),
+          )
+          .map((member) => member.name);
+        if (matches.length) {
+          const suggestionList = matches.map(m => `**${m}**`).join(', ');
+          return `No tasks found for **${person}**${yearNote}.\n\nDid you mean: ${suggestionList}?`;
+        }
+        return `No tasks found for **${person ?? "Me"}**${yearNote}.\n\n_No assignee found in Notion._`;
       }
-      return `No tasks found for **${person ?? "Me"}**${yearNote}.\n\n_No assignee found in Notion._`;
+      // Person IS in the directory — give a context-aware no-results message
+      const projectNote = !isWorkspace && docTitle ? ` in the **${docTitle}** project` : "";
+      const statusNote = parsed.status === "done" ? " with status **Done**"
+        : parsed.status === "active" ? " with status **In Progress**"
+        : "";
+      return `No tasks found for **${person ?? "Me"}**${projectNote}${statusNote}${yearNote}.`;
     }
 
     const listLabel = useGlobalDateQuery

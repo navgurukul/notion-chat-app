@@ -240,7 +240,7 @@ export function extractCompareTitles(question: string): { a: string; b: string }
   return { a, b };
 }
 
-export function parseQueryByRules(question: string): RulesQuery {
+function parseQueryByRulesInternal(question: string): RulesQuery {
   const qn = preprocessQuestion(question);
   const q = normalize(qn);
 
@@ -385,6 +385,36 @@ export function parseQueryByRules(question: string): RulesQuery {
       raw: question,
       parserConfidence: 0.95,
     };
+  }
+
+  // Match "list task for [person] from [project] which are [status]"
+  // Captures any status word including "in progress" / "active" / "done".
+  // Group 1 = person, Group 2 = project name (stripDocWords removes trailing "project"),
+  // Group 3 = status word/phrase.
+  const statusScopedTaskMatch = question.match(
+    /^(?:show|list|get|display|what\s+are|which)\s+(?:all\s+)?(?:the\s+)?(?:tasks?|issues?|tickets?|bugs?|work\s+items?)\s+(?:assigned\s+)?(?:to|for)\s+(.+?)\s+from\s+(?:the\s+)?(?:project\s+)?(.+?)\s+(?:which\s+are|that\s+are|that\s+were|which\s+were)\s+(done|completed|complete|finished|closed|resolved|in[\s-]?progress|in[\s-]?development|active|open|pending|ongoing|not[\s-]?started|testing|backlog|on[\s-]?hold)\s*\??$/i,
+  );
+  if (statusScopedTaskMatch?.[1] && statusScopedTaskMatch?.[2]) {
+    const person = cleanPersonName(statusScopedTaskMatch[1]);
+    // stripDocWords strips "project" from "notion chatbot project" → "notion chatbot"
+    const project = stripDocWords(statusScopedTaskMatch[2]);
+    const capturedStatus = (statusScopedTaskMatch[3] ?? "").toLowerCase().replace(/[\s-]+/g, " ").trim();
+    const matchedStatus: RulesQuery["status"] =
+      /^(?:done|completed|complete|finished|closed|resolved)$/.test(capturedStatus)
+        ? "done"
+        : /^(?:in ?progress|in ?development|active|open|pending|ongoing|not ?started|testing|backlog|on ?hold)$/.test(capturedStatus)
+        ? "active"
+        : undefined;
+    if (person && project) {
+      return {
+        kind: "assigned_list",
+        personName: person,
+        docTitle: project,
+        ...(matchedStatus ? { status: matchedStatus } : {}),
+        raw: question,
+        parserConfidence: 0.95,
+      };
+    }
   }
 
   const tasksAssignedToPersonInProjectMatch = question.match(
@@ -838,6 +868,18 @@ export function extractProjectSummaryTopic(question: string) {
     }
   }
   return null;
+}
+
+function parseRequestedStatus(question: string): RulesQuery["status"] {
+  if (/\b(?:done|completed|complete|finished|closed|resolved)\b/i.test(question)) return "done";
+  if (/\b(?:active|open|pending|in[\s-]?progress|ongoing)\b/i.test(question)) return "active";
+  return undefined;
+}
+
+export function parseQueryByRules(question: string): RulesQuery {
+  const parsed = parseQueryByRulesInternal(question);
+  const status = parseRequestedStatus(question);
+  return status ? { ...parsed, status } : parsed;
 }
 
 /** @deprecated Prefer {@link resolveQuery} from `@/lib/query/resolve-query`. */

@@ -281,14 +281,7 @@ async function fullTextSearch(searchQuery: string, year?: number) {
             status,
             content,
             (
-              ts_rank(
-                to_tsvector('english', coalesce(content, '')),
-                plainto_tsquery('english', $1)
-              ) +
-              2 * ts_rank(
-                to_tsvector('english', coalesce(title, '')),
-                plainto_tsquery('english', $1)
-              )
+              ts_rank(fts, plainto_tsquery('simple', $1))
             ) AS rank
           FROM notion_pages
                   WHERE
@@ -315,19 +308,10 @@ async function fullTextSearch(searchQuery: string, year?: number) {
             status,
             content,
             (
-              ts_rank(
-                to_tsvector('english', coalesce(content, '')),
-                plainto_tsquery('english', $1)
-              ) +
-              2 * ts_rank(
-                to_tsvector('english', coalesce(title, '')),
-                plainto_tsquery('english', $1)
-              )
+              ts_rank(fts, plainto_tsquery('simple', $1))
             ) AS rank
           FROM notion_pages
-          WHERE
-            to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, ''))
-            @@ plainto_tsquery('english', $1)
+          WHERE fts @@ plainto_tsquery('simple', $1)
         )
         SELECT id, title, url, owner, created_by, status, content, rank
         FROM ranked
@@ -351,24 +335,36 @@ async function fullTextSearch(searchQuery: string, year?: number) {
     `
     SELECT id, title, url, owner, created_by, status, content, 0 AS rank
     FROM notion_pages
-    WHERE ${terms
+    WHERE (${terms
       .map(
         (_, index) =>
-          `(lower(coalesce(title, '')) LIKE lower($${index + 1}) ESCAPE '\\'
-            OR lower(coalesce(content, '')) LIKE lower($${index + 1}) ESCAPE '\\')`,
+          `(title ILIKE $${index + 1} ESCAPE '\\'
+            OR content ILIKE $${index + 1} ESCAPE '\\')`,
       )
-      .join(" OR ")}
+      .join(" OR ")})
+      AND (
+        $${terms.length + 1}::timestamptz IS NULL
+        OR (
+          notion_edited_at >= $${terms.length + 1}::timestamptz
+          AND notion_edited_at < $${terms.length + 2}::timestamptz
+        )
+      )
     ORDER BY
       ${terms
         .map(
           (_, index) =>
-            `CASE WHEN lower(coalesce(title, '')) LIKE lower($${index + 1}) ESCAPE '\\' THEN 0 ELSE 1 END`,
+          `CASE WHEN title ILIKE $${index + 1} ESCAPE '\\' THEN 0 ELSE 1 END`,
         )
         .join(", ")},
       title ASC
-    LIMIT $${terms.length + 1}
+    LIMIT $${terms.length + 3}
     `,
-    [...terms.map((term) => `%${term.replace(/[%_]/g, "\\$&")}%`), cand],
+    [
+      ...terms.map((term) => `%${escapeLike(term)}%`),
+      bounds?.start ?? null,
+      bounds?.end ?? null,
+      cand,
+    ],
   );
 
   return refinePageRows(fallback, topK);

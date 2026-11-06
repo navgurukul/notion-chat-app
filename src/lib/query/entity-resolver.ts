@@ -812,6 +812,9 @@ export async function lazyResolveSqlEntities(
   ].includes(parsed.kind);
   if (needsPerson) {
     let rawPerson = parsed.personName;
+    if (hasGenuineFirstPersonReference(rawMessage) && sessionName) {
+      rawPerson = sessionName;
+    }
     if (!rawPerson) {
       const extracted = await extractRawEntities(rawMessage);
       rawPerson = extracted.personName;
@@ -888,7 +891,10 @@ export async function lazyResolveSqlEntities(
     }
     if (rawDoc) {
       const resolved = await resolveDocumentSafe(rawDoc);
-      if (resolved.value) {
+      if (resolved.value && (!parsed.docTitle || resolved.quality === ResolutionQuality.EXACT)) {
+        // Keep an explicit project phrase from the user's query. A prefix or
+        // partial page match such as "notion chatbot" -> "Notion Chatbot
+        // Testing" is not authoritative and changes the requested scope.
         finalParsed.docTitle = resolved.value;
         finalParsed.resolvedEntities = {
           ...finalParsed.resolvedEntities,
@@ -990,7 +996,7 @@ export async function lazyResolveRagEntities(
     }
     if (rawDoc) {
       const resolved = await resolveDocumentSafe(rawDoc);
-      if (resolved.value) {
+      if (resolved.value && (!parsed.docTitle || resolved.quality === ResolutionQuality.EXACT)) {
         finalParsed.docTitle = resolved.value;
         finalParsed.resolvedEntities = {
           ...finalParsed.resolvedEntities,
