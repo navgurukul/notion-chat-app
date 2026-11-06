@@ -46,6 +46,14 @@
     "expectedAnswer": "Ujala Ujala is the assigned owner for refactoring the student batch reassignment API to use a custom hook",
     "relevantPages": [
       "Refactor student batch reassignment API to use a custom hook"
+    ],
+    "mustContain": [
+      "Ujala"
+    ],
+    "mustNotContain": [
+      "Poonam",
+      "Nikita",
+      "Chhaya"
     ]
   },
   {
@@ -53,6 +61,14 @@
     "expectedAnswer": "Contains V1 sound research document link and zip file instructions for sound effects",
     "relevantPages": [
       "Sound system: Ella"
+    ],
+    "mustContain": [
+      "sound"
+    ],
+    "mustNotContain": [
+      "Garden",
+      "Postgres",
+      "Supabase"
     ]
   },
   {
@@ -144,6 +160,15 @@
     "expectedAnswer": "It contains the complete technical specifications, database schemas, API details, and core progression logic for the level-aware Garden Progress System",
     "relevantPages": [
       "Implementation Plan - Gamified Garden Progress System"
+    ],
+    "mustContain": [
+      "Garden",
+      "progress"
+    ],
+    "mustNotContain": [
+      "sound system",
+      "Postgres",
+      "Supabase"
     ]
   },
   {
@@ -158,6 +183,14 @@
     "expectedAnswer": "A Super Admin raising a comp-off request for themselves is blocked; they can only raise it for other employees",
     "relevantPages": [
       "SAnA can raise comp-off requests and perform admin actions related to timesheets,leaves for other SAnA but not themselves"
+    ],
+    "mustContain": [
+      "Super Admin",
+      "other employees"
+    ],
+    "mustNotContain": [
+      "manager",
+      "reportee"
     ]
   },
   {
@@ -165,6 +198,13 @@
     "expectedAnswer": "The dots were removed because two progress indicators showing the same information created visual noise without adding value; the bar alone was sufficient",
     "relevantPages": [
       "Quiz Page"
+    ],
+    "mustContain": [
+      "visual noise"
+    ],
+    "mustNotContain": [
+      "Still Exploring",
+      "stream selection"
     ]
   },
   {
@@ -186,6 +226,14 @@
     "expectedAnswer": "Recommendation is to stay on EC2 self-hosted Postgres because sub-1ms local loopback is critical for real-time voice turns, while Supabase would add 150ms+ per exchange",
     "relevantPages": [
       "Sprint 1: May 27 – June 6 (Database, Contracts & API Client)"
+    ],
+    "mustContain": [
+      "EC2",
+      "Postgres"
+    ],
+    "mustNotContain": [
+      "Garden Progress",
+      "sound system"
     ]
   },
   {
@@ -249,6 +297,15 @@
     "expectedAnswer": "The label under a Quiz chapter incorrectly shows Coding Problem instead of Quiz, owned by Nikita Verma",
     "relevantPages": [
       "ADMIN - Incorrect Label “Coding Problem” Displayed Under Quiz Chapter"
+    ],
+    "mustContain": [
+      "Nikita",
+      "Quiz"
+    ],
+    "mustNotContain": [
+      "Poonam",
+      "Ujala",
+      "Chhaya"
     ]
   },
   {
@@ -333,6 +390,15 @@
     "expectedAnswer": "The active role resets to Admin after a page refresh instead of staying on the last selected role, owned by Poonam Bagh",
     "relevantPages": [
       "RBAC - Active Role Resets to Admin After Page Refresh (Frontend)"
+    ],
+    "mustContain": [
+      "Poonam",
+      "refresh"
+    ],
+    "mustNotContain": [
+      "Nikita",
+      "Ujala",
+      "Chhaya"
     ]
   },
   {
@@ -347,6 +413,14 @@
     "expectedAnswer": "The Comp-Off section should be visible if the user is listed as a manager with at least one reportee in the PnC sheet, and hidden if they have no reportees",
     "relevantPages": [
       "Comp-Off Section Not Visible for User Listed as Manager in PnC Sheet"
+    ],
+    "mustContain": [
+      "manager",
+      "reportee"
+    ],
+    "mustNotContain": [
+      "Super Admin",
+      "self-request"
     ]
   },
   {
@@ -424,6 +498,42 @@
     "expectedAnswer": "The Zoom Waiting Room was disabled for meeting hosts so authorized participants can join directly.",
     "relevantPages": [
       "Even after configuring the Zoom meeting settings such as enabling participants to join, disabling the join/leave notification sound, and turning off annotations, these settings are not being retained for new Zoom sessions. Every time a new class session is started, we have to manually reconfigure the same settings. Could these settings be made persistent so that once they are configured, they are automatically applied to all future Zoom sessions?"
+    ]
+  },
+  {
+    "question": "Compare the Admin Side Sessions Module and the Admin Side Calendar Module",
+    "expectedAnswer": "The Sessions Module is under Mentor > Sessions at /admin/mentorsDashboard/sessions; the Calendar Module is a separate admin module for calendar UI implementation and API integration.",
+    "relevantPages": [
+      "Admin Side– Sessions Module (UI Implementation & API Integration)",
+      "Admin Side - Calendar Module (UI Implementation & API Integration)"
+    ],
+    "mustContain": [
+      "Sessions Module",
+      "Calendar Module"
+    ]
+  },
+  {
+    "question": "And what is the bug exactly?",
+    "expectedAnswer": "The active role resets to Admin after a page refresh instead of staying on the last selected role.",
+    "relevantPages": [
+      "RBAC - Active Role Resets to Admin After Page Refresh (Frontend)"
+    ],
+    "mustContain": [
+      "refresh"
+    ],
+    "mustNotContain": [
+      "Nikita",
+      "Ujala"
+    ],
+    "history": [
+      {
+        "role": "user",
+        "content": "Who owns the RBAC active role bug?"
+      },
+      {
+        "role": "bot",
+        "content": "Poonam Bagh owns the RBAC active role bug."
+      }
     ]
   }
 ]
