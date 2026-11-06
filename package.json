@@ -20,6 +20,7 @@
     "eval": "tsx scripts/evaluate-rag.ts",
     "eval:retrieval": "tsx scripts/evaluate-retrieval.ts",
     "eval:faithfulness": "tsx scripts/evaluate-faithfulness.ts",
+    "eval:isolation": "tsx scripts/eval-isolation.ts",
     "diag:latency": "tsx scripts/diag-latency.ts",
     "diag:latency2": "tsx scripts/diag-latency-2.ts",
     "diag:latency3": "tsx scripts/diag-latency-3.ts",

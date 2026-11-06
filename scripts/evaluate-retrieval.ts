@@ -9,19 +9,11 @@
 
 import "../src/lib/dns-hook";
 import "dotenv/config";
-import fs from "node:fs";
 import path from "node:path";
 
 import { buildNotionContextWithConfidence } from "../src/lib/rag/build-context";
 import { runHybridChunkRetrieval } from "../src/lib/rag/hybrid-search";
-
-interface GoldenItem {
-  id: string;
-  query: string;
-  expected_chunk_ids?: string[];
-  expected_page_titles?: string[];
-  expected_answer_claims?: string[];
-}
+import { readGoldenDataset } from "./golden-dataset";
 
 export interface RetrievalQueryResult {
   id: string;
@@ -70,11 +62,7 @@ export function ndcgAtK(hits: boolean[], totalExpected: number): number {
 
 export async function evaluateRetrieval(datasetPath?: string) {
   const file = datasetPath || path.join(process.cwd(), "eval", "golden-dataset.json");
-  if (!fs.existsSync(file)) {
-    throw new Error(`Golden dataset file not found at: ${file}`);
-  }
-
-  const dataset: GoldenItem[] = JSON.parse(fs.readFileSync(file, "utf-8"));
+  const dataset = readGoldenDataset(file);
   const results: RetrievalQueryResult[] = [];
 
   let idx = 0;
@@ -104,7 +92,6 @@ export async function evaluateRetrieval(datasetPath?: string) {
     }
 
     const totalExpected = Math.max(
-      item.expected_chunk_ids?.length || 0,
       item.expected_page_titles?.length || 0,
       1
     );
@@ -113,12 +100,6 @@ export async function evaluateRetrieval(datasetPath?: string) {
     // at its first (highest-ranked) occurrence in the retrieval results.
     const seenTargets = new Set<string>();
     const relevanceVector = hits.map((hit) => {
-      if (item.expected_chunk_ids?.includes(hit.chunk_id)) {
-        const target = `chunk:${hit.chunk_id}`;
-        if (seenTargets.has(target)) return false;
-        seenTargets.add(target);
-        return true;
-      }
       if (hit.title && item.expected_page_titles?.length) {
         const titleLower = hit.title.toLowerCase();
         const match = item.expected_page_titles.findIndex((expected) =>
