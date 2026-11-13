@@ -1320,12 +1320,11 @@ const createNewChat = async () => {
             )}
             <div className="flex-1 overflow-hidden">
               <p className="text-sm font-medium truncate">{session.user?.name}</p>
-              <p
-                className="mt-1 text-[10px] text-white/45 leading-snug truncate"
-                title={formatSyncDisplay(lastSyncedAt)}
-              >
-                {isSyncing ? "Sync in progress…" : formatSyncDisplay(lastSyncedAt)}
-              </p>
+              {canManageKnowledgeBase && (
+                <p className="mt-1 text-[10px] text-white/45 leading-snug truncate">
+                  {isSyncing ? "Sync in progress…" : formatSyncDisplay(lastSyncedAt)}
+                </p>
+              )}
             </div>
           </div>
 
