@@ -1320,11 +1320,6 @@ const createNewChat = async () => {
             )}
             <div className="flex-1 overflow-hidden">
               <p className="text-sm font-medium truncate">{session.user?.name}</p>
-              {canManageKnowledgeBase && (
-                <p className="mt-1 text-[10px] text-white/45 leading-snug truncate">
-                  {isSyncing ? "Sync in progress…" : formatSyncDisplay(lastSyncedAt)}
-                </p>
-              )}
             </div>
           </div>
 
@@ -1374,6 +1369,12 @@ const createNewChat = async () => {
                 >
                   Full rebuild (all pages)…
                 </button>
+                <div className="px-1 pt-1">
+                  <p className="text-[10px] font-medium text-white/45">Last synced</p>
+                  <p className="mt-0.5 text-[11px] text-white/65 truncate">
+                    {formatSyncDisplay(lastSyncedAt)}
+                  </p>
+                </div>
             </div>
           )}
         </div>
