@@ -1309,21 +1309,6 @@ const createNewChat = async () => {
             </button>
           </div>
 
-          <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
-            {session.user?.image ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={session.user.image} alt="User" className="w-10 h-10 rounded-full" />
-            ) : (
-              <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-bold">
-                {session.user?.name?.[0]}
-              </div>
-            )}
-            <div className="flex-1 overflow-hidden">
-              <p className="text-sm font-medium truncate">{session.user?.name}</p>
-              <p className="text-xs text-white/45 truncate">{session.user?.email}</p>
-            </div>
-          </div>
-
           {canManageKnowledgeBase && (
             <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3 space-y-3">
                 <button
@@ -1448,7 +1433,21 @@ const createNewChat = async () => {
           </div>
         </div>
 
-        <div className="p-4 border-t border-white/10">
+        <div className="mt-auto p-4 border-t border-white/10 space-y-3">
+          <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
+            {session.user?.image ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={session.user.image} alt="User" className="w-10 h-10 rounded-full" />
+            ) : (
+              <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-bold">
+                {session.user?.name?.[0]}
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate">{session.user?.name}</p>
+              <p className="text-xs text-white/45 truncate">{session.user?.email}</p>
+            </div>
+          </div>
           <button
             type="button"
             onClick={() => setShowLogoutConfirm(true)}
