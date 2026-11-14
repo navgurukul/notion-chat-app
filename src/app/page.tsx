@@ -347,6 +347,7 @@ export default function ChatPage() {
   const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const lastMessageContent = messages[messages.length - 1]?.content;
   const botMessageIndexRef = useRef<number | null>(null);
   const pendingBotMessageIndexRef = useRef<number | null>(null);
   const chatInFlightRef = useRef(false);
@@ -592,7 +593,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages.length, lastMessageContent]);
 
   const refreshChatSessions = async () => {
     const response = await fetch("/api/chats");
