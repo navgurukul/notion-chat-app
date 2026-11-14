@@ -580,6 +580,7 @@ export default function ChatPage() {
             content: message.content,
             created_at: message.created_at,
             emotion: message.emotion,
+            feedback: message.feedback,
           })),
         );
         setThinkingByMessage({});
