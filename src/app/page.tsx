@@ -1320,6 +1320,7 @@ const createNewChat = async () => {
             )}
             <div className="flex-1 overflow-hidden">
               <p className="text-sm font-medium truncate">{session.user?.name}</p>
+              <p className="text-xs text-white/45 truncate">{session.user?.email}</p>
             </div>
           </div>
 
@@ -1448,7 +1449,6 @@ const createNewChat = async () => {
         </div>
 
         <div className="p-4 border-t border-white/10">
-          <p className="text-xs text-white/35 truncate text-center mb-2">{session.user?.email}</p>
           <button
             type="button"
             onClick={() => setShowLogoutConfirm(true)}
