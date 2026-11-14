@@ -740,7 +740,7 @@ const createNewChat = async () => {
     if (isRegenerate) {
       botIndex = baseMessages.length - 1;
       setMessages((prev) => {
-        const next = [...prev];
+        const next = prev.slice(0, botIndex + 1);
         if (next[botIndex]) {
           next[botIndex] = { ...next[botIndex], content: "" };
         }
@@ -970,24 +970,22 @@ const createNewChat = async () => {
     await executeChatFlow(trimmed, historyUpToEdited);
   };
 
-  const handleRegenerate = async () => {
-    if (isLoading || !activeSessionId || messages.length < 2) return;
+  const handleRegenerate = async (botIndex: number) => {
+    if (isLoading || !activeSessionId || botIndex < 1) return;
 
-    const lastMsg = messages[messages.length - 1];
-    if (lastMsg.role !== "bot") return;
-
-    const secondLastMsg = messages[messages.length - 2];
-    if (secondLastMsg.role !== "user") return;
+    const botMessage = messages[botIndex];
+    const userMessage = messages[botIndex - 1];
+    if (botMessage?.role !== "bot" || userMessage?.role !== "user") return;
 
     try {
-      if (lastMsg.id) {
-        const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${lastMsg.id}`, {
+      if (botMessage.id) {
+        const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${encodeURIComponent(botMessage.id)}`, {
           method: "DELETE",
         });
         if (!response.ok) throw new Error("Failed to delete message for regeneration");
       }
 
-      await executeChatFlow(secondLastMsg.content, undefined, true);
+      await executeChatFlow(userMessage.content, messages.slice(0, botIndex + 1), true);
     } catch (error) {
       console.error("Failed to regenerate response:", error);
     }
@@ -1718,11 +1716,11 @@ const createNewChat = async () => {
                         </span>
                       </button>
 
-                      {/* Regenerate (last message only) */}
-                      {idx === messages.length - 1 && !isLoading && (
+                      {/* Regenerate this response */}
+                      {!isLoading && messages[idx - 1]?.role === "user" && (
                         <button
                           type="button"
-                          onClick={handleRegenerate}
+                          onClick={() => handleRegenerate(idx)}
                           className="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors relative group"
                         >
                           <RefreshCw className="w-3.5 h-3.5" />
