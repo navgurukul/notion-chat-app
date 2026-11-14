@@ -1451,7 +1451,11 @@ const createNewChat = async () => {
           <button
             type="button"
             onClick={() => setShowLogoutConfirm(true)}
-            className="w-full p-3 rounded-xl flex items-center justify-center gap-2 border border-white/10 bg-white/5 text-white/70 hover:text-white hover:bg-white/[0.08] transition-colors font-medium text-sm"
+            className={`w-full p-3 rounded-xl flex items-center justify-center gap-2 border transition-colors font-medium text-sm ${
+              theme === "light"
+                ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-800"
+                : "border-red-500/20 bg-red-500/10 text-red-300 hover:bg-red-500/20 hover:text-red-200"
+            }`}
           >
             <LogOut className="w-4 h-4" />
             Log out
