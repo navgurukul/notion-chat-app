@@ -36,6 +36,7 @@ interface Message {
   id?: string;
   role: "user" | "bot";
   content: string;
+  created_at?: string;
   emotion?: string;
   feedback?: "good" | "bad" | null;
 }
@@ -470,6 +471,7 @@ export default function ChatPage() {
       id: message.id,
       role: message.role,
       content: message.content,
+      created_at: message.created_at,
       emotion: message.emotion,
       feedback: message.feedback,
     }));
@@ -575,6 +577,7 @@ export default function ChatPage() {
             id: message.id,
             role: message.role,
             content: message.content,
+            created_at: message.created_at,
             emotion: message.emotion,
           })),
         );
@@ -1540,6 +1543,16 @@ const createNewChat = async () => {
                 thinkingEntry?.status === "retrieving"
                   ? "Searching Notion..."
                   : "Generating answer...";
+              const responseTimestamp = msg.role === "bot" && msg.created_at
+                ? new Date(
+                    /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(msg.created_at)
+                      ? msg.created_at.replace(" ", "T")
+                      : `${msg.created_at.replace(" ", "T")}Z`,
+                  ).toLocaleString(undefined, {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })
+                : null;
 
               return (
                 <div key={idx} className="space-y-2 group/msg">
@@ -1719,6 +1732,9 @@ const createNewChat = async () => {
                         </button>
                       )}
                     </div>
+                  )}
+                  {responseTimestamp && msg.content.trim() && (
+                    <p className="mt-1 px-1 text-[11px] text-white/40">{responseTimestamp}</p>
                   )}
                 </div>
               );
