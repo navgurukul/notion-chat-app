@@ -36,6 +36,7 @@ interface Message {
   id?: string;
   role: "user" | "bot";
   content: string;
+  created_at?: string;
   emotion?: string;
   feedback?: "good" | "bad" | null;
 }
@@ -346,6 +347,7 @@ export default function ChatPage() {
   const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const lastMessageContent = messages[messages.length - 1]?.content;
   const botMessageIndexRef = useRef<number | null>(null);
   const pendingBotMessageIndexRef = useRef<number | null>(null);
   const chatInFlightRef = useRef(false);
@@ -470,6 +472,7 @@ export default function ChatPage() {
       id: message.id,
       role: message.role,
       content: message.content,
+      created_at: message.created_at,
       emotion: message.emotion,
       feedback: message.feedback,
     }));
@@ -575,7 +578,9 @@ export default function ChatPage() {
             id: message.id,
             role: message.role,
             content: message.content,
+            created_at: message.created_at,
             emotion: message.emotion,
+            feedback: message.feedback,
           })),
         );
         setThinkingByMessage({});
@@ -589,7 +594,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages.length, lastMessageContent]);
 
   const refreshChatSessions = async () => {
     const response = await fetch("/api/chats");
@@ -737,7 +742,7 @@ const createNewChat = async () => {
     if (isRegenerate) {
       botIndex = baseMessages.length - 1;
       setMessages((prev) => {
-        const next = [...prev];
+        const next = prev.slice(0, botIndex + 1);
         if (next[botIndex]) {
           next[botIndex] = { ...next[botIndex], content: "" };
         }
@@ -967,24 +972,22 @@ const createNewChat = async () => {
     await executeChatFlow(trimmed, historyUpToEdited);
   };
 
-  const handleRegenerate = async () => {
-    if (isLoading || !activeSessionId || messages.length < 2) return;
+  const handleRegenerate = async (botIndex: number) => {
+    if (isLoading || !activeSessionId || botIndex < 1) return;
 
-    const lastMsg = messages[messages.length - 1];
-    if (lastMsg.role !== "bot") return;
-
-    const secondLastMsg = messages[messages.length - 2];
-    if (secondLastMsg.role !== "user") return;
+    const botMessage = messages[botIndex];
+    const userMessage = messages[botIndex - 1];
+    if (botMessage?.role !== "bot" || userMessage?.role !== "user") return;
 
     try {
-      if (lastMsg.id) {
-        const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${lastMsg.id}`, {
+      if (botMessage.id) {
+        const response = await fetch(`/api/chats/${activeSessionId}/messages?messageId=${encodeURIComponent(botMessage.id)}`, {
           method: "DELETE",
         });
         if (!response.ok) throw new Error("Failed to delete message for regeneration");
       }
 
-      await executeChatFlow(secondLastMsg.content, undefined, true);
+      await executeChatFlow(userMessage.content, messages.slice(0, botIndex + 1), true);
     } catch (error) {
       console.error("Failed to regenerate response:", error);
     }
@@ -1309,26 +1312,6 @@ const createNewChat = async () => {
             </button>
           </div>
 
-          <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
-            {session.user?.image ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={session.user.image} alt="User" className="w-10 h-10 rounded-full" />
-            ) : (
-              <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-bold">
-                {session.user?.name?.[0]}
-              </div>
-            )}
-            <div className="flex-1 overflow-hidden">
-              <p className="text-sm font-medium truncate">{session.user?.name}</p>
-              <p
-                className="mt-1 text-[10px] text-white/45 leading-snug truncate"
-                title={formatSyncDisplay(lastSyncedAt)}
-              >
-                {isSyncing ? "Sync in progress…" : formatSyncDisplay(lastSyncedAt)}
-              </p>
-            </div>
-          </div>
-
           {canManageKnowledgeBase && (
             <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3 space-y-3">
                 <button
@@ -1375,6 +1358,12 @@ const createNewChat = async () => {
                 >
                   Full rebuild (all pages)…
                 </button>
+                <div className="px-1 pt-1">
+                  <p className="text-[10px] font-medium text-white/45">Last synced</p>
+                  <p className="mt-0.5 text-[11px] text-white/65 truncate">
+                    {formatSyncDisplay(lastSyncedAt)}
+                  </p>
+                </div>
             </div>
           )}
         </div>
@@ -1447,12 +1436,29 @@ const createNewChat = async () => {
           </div>
         </div>
 
-        <div className="p-4 border-t border-white/10">
-          <p className="text-xs text-white/35 truncate text-center mb-2">{session.user?.email}</p>
+        <div className="mt-auto p-4 border-t border-white/10 space-y-3">
+          <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
+            {session.user?.image ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={session.user.image} alt="User" className="w-10 h-10 rounded-full" />
+            ) : (
+              <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-bold">
+                {session.user?.name?.[0]}
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate">{session.user?.name}</p>
+              <p className="text-xs text-white/45 truncate">{session.user?.email}</p>
+            </div>
+          </div>
           <button
             type="button"
             onClick={() => setShowLogoutConfirm(true)}
-            className="w-full p-3 rounded-xl flex items-center justify-center gap-2 border border-white/10 bg-white/5 text-white/70 hover:text-white hover:bg-white/[0.08] transition-colors font-medium text-sm"
+            className={`w-full p-3 rounded-xl flex items-center justify-center gap-2 border transition-colors font-medium text-sm ${
+              theme === "light"
+                ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-800"
+                : "border-red-500/20 bg-red-500/10 text-red-300 hover:bg-red-500/20 hover:text-red-200"
+            }`}
           >
             <LogOut className="w-4 h-4" />
             Log out
@@ -1537,6 +1543,16 @@ const createNewChat = async () => {
                 thinkingEntry?.status === "retrieving"
                   ? "Searching Notion..."
                   : "Generating answer...";
+              const responseTimestamp = msg.role === "bot" && msg.created_at
+                ? new Date(
+                    /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(msg.created_at)
+                      ? msg.created_at.replace(" ", "T")
+                      : `${msg.created_at.replace(" ", "T")}Z`,
+                  ).toLocaleString(undefined, {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })
+                : null;
 
               return (
                 <div key={idx} className="space-y-2 group/msg">
@@ -1702,11 +1718,11 @@ const createNewChat = async () => {
                         </span>
                       </button>
 
-                      {/* Regenerate (last message only) */}
-                      {idx === messages.length - 1 && !isLoading && (
+                      {/* Regenerate this response */}
+                      {!isLoading && messages[idx - 1]?.role === "user" && (
                         <button
                           type="button"
-                          onClick={handleRegenerate}
+                          onClick={() => handleRegenerate(idx)}
                           className="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition-colors relative group"
                         >
                           <RefreshCw className="w-3.5 h-3.5" />
@@ -1716,6 +1732,9 @@ const createNewChat = async () => {
                         </button>
                       )}
                     </div>
+                  )}
+                  {responseTimestamp && msg.content.trim() && (
+                    <p className="mt-1 px-1 text-[11px] text-white/40">{responseTimestamp}</p>
                   )}
                 </div>
               );
