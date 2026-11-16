@@ -1,0 +1,10 @@
+# Chat sharing
+
+- **Who can open a link:** Any signed-in NG user who has the link can view it. Signed-out users are sent to login first and return to the shared chat. Non-NG accounts, wrong links, and revoked links see “This shared chat is not available.”
+- **What is shared:** The title is read live from the chat, not from the snapshot. The snapshot holds each message’s role, content, and time. The share stores a token hash, not the raw link token. The snapshot has no feedback, emotion, owner details or other chats. Message content is copied as stored. If an answer contains source names or text from private pages, every NG user with the link can see it.
+- **Lifecycle:** Each chat has one active link. The full link is shown only when first created (or reshared); save it then. Resharing creates a new link and disables the old one. Stop sharing revokes the active link. Deleting the chat removes its share links and snapshots.
+- **Routes:** `GET`, `POST`, and `DELETE /api/chats/{sessionId}/share` check status, create/reshare, and stop sharing. `GET /api/shared/{token}` returns the shared snapshot. The read-only page is `/shared/{token}`.
+- **Tables and schema:** `chat_shares` stores share records and token hashes; `shared_chat_messages` stores snapshot messages. If these tables or their schema change, bump `CURRENT_SCHEMA_HASH` in `src/lib/db/postgres.ts` from `v11_chat_shares` to a new value so schema setup runs again.
+- **Automated check:** Run `npm run test:chat-share` with the app’s database environment configured. The check uses and removes test rows. The test file exists at `scripts/test-chat-share.ts`, but this command is not currently registered in `package.json`.
+- **Manual check:** Create a link and open it in a signed-in NG account; confirm title, roles, content, and times. Signed out, confirm login then return to the shared chat; with a non-NG account, confirm unavailable. Reshare and confirm the old link fails and the new one works; stop sharing and confirm the active link fails; delete a test chat and confirm its links no longer work.
+- **Not built yet:** Link expiry, per-person access, and rate limiting.
