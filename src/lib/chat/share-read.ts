@@ -19,7 +19,8 @@ export async function getSharedChatByToken(token: string): Promise<SharedChat | 
     content: string | null;
     createdAt: string | null;
   }>(
-    `SELECT cs.title, scm.role, scm.content, scm.created_at::text AS "createdAt"
+    `SELECT cs.title, scm.role, scm.content,
+            to_char(scm.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt"
      FROM chat_shares share
      JOIN chat_sessions cs ON cs.id = share.session_id
      LEFT JOIN shared_chat_messages scm ON scm.share_id = share.id
