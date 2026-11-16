@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Check, Copy, X } from "lucide-react";
 
 type ChatShareDialogProps = {
   sessionId: string | null;
@@ -15,13 +15,61 @@ export default function ChatShareDialog({ sessionId, isOpen, onClose }: ChatShar
   const [view, setView] = useState<ShareView>("loading");
   const [token, setToken] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
+  const [copied, setCopied] = useState(false);
   const createControllerRef = useRef<AbortController | null>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsVisible(false);
+      return;
+    }
+    const frame = requestAnimationFrame(() => setIsVisible(true));
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusable = () => Array.from(dialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    ));
+    focusable()[0]?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, onClose, view, isCreating]);
 
   useEffect(() => {
     if (!isOpen || !sessionId) {
       createControllerRef.current?.abort();
       createControllerRef.current = null;
       setToken(null);
+      setCopied(false);
       setView("loading");
       setIsCreating(false);
       return;
@@ -29,6 +77,7 @@ export default function ChatShareDialog({ sessionId, isOpen, onClose }: ChatShar
 
     const controller = new AbortController();
     setToken(null);
+    setCopied(false);
     setView("loading");
     setIsCreating(false);
 
@@ -82,11 +131,17 @@ export default function ChatShareDialog({ sessionId, isOpen, onClose }: ChatShar
 
   if (!isOpen) return null;
 
+  const copyLink = async () => {
+    if (!token) return;
+    await navigator.clipboard.writeText(`${window.location.origin}/shared/${token}`);
+    setCopied(true);
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 transition-opacity duration-200 ${isVisible ? "opacity-100" : "opacity-0"}`}>
       <button
         type="button"
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
         onClick={close}
         aria-label="Close share dialog"
       />
@@ -94,14 +149,21 @@ export default function ChatShareDialog({ sessionId, isOpen, onClose }: ChatShar
         role="dialog"
         aria-modal="true"
         aria-labelledby="chat-share-title"
-        className="relative z-10 w-full max-w-md rounded-2xl border border-white/10 bg-[#1a1a1a] p-5 shadow-2xl sm:p-8"
+        ref={dialogRef}
+        tabIndex={-1}
+        className={`relative z-10 w-full max-w-lg rounded-2xl border border-white/10 bg-[#1a1a1a] p-5 shadow-2xl transition-all duration-200 sm:p-7 ${isVisible ? "scale-100 opacity-100" : "scale-[0.98] opacity-0"}`}
       >
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <h2 id="chat-share-title" className="text-xl font-bold">Share this chat</h2>
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <h2 id="chat-share-title" className="text-xl font-semibold">Share chat</h2>
+            <p className="mt-2 max-w-md text-sm leading-relaxed text-white/55">
+              Anyone at NavGurukul with the link can view this chat. It is read only.
+            </p>
+          </div>
           <button
             type="button"
             onClick={close}
-            className="shrink-0 text-white/40 transition-colors hover:text-white"
+            className="shrink-0 rounded-lg p-2 text-white/45 transition-colors hover:bg-white/10 hover:text-white"
             aria-label="Close"
           >
             <X className="h-5 w-5" />
@@ -111,36 +173,51 @@ export default function ChatShareDialog({ sessionId, isOpen, onClose }: ChatShar
         {view === "loading" && <p className="text-sm text-white/60">Loading…</p>}
         {view === "error" && <p role="alert" className="text-sm text-red-400">Something went wrong. Please try again.</p>}
         {view === "already-shared" && (
-          <p className="text-sm leading-relaxed text-white/70">
-            This chat already has a link. It can&apos;t be shown again.
-          </p>
-        )}
-        {view === "create" && (
-          <div className="space-y-5">
-            <p className="text-sm leading-relaxed text-white/70">
-              Anyone at NavGurukul with this link can view this chat. It is read only.
-            </p>
+          <div className="space-y-4">
+            <div className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm leading-relaxed text-white/60">
+              This chat already has a link. It can&apos;t be shown again.
+            </div>
             <button
               type="button"
               onClick={createLink}
               disabled={isCreating}
-              className="w-full rounded-xl bg-blue-600 px-4 py-3 font-medium transition-colors hover:bg-blue-500 disabled:opacity-50"
+              className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-medium transition-colors hover:bg-blue-500 disabled:opacity-50"
             >
-              {isCreating ? "Creating link…" : "Create link"}
+              {isCreating ? "Creating link…" : "Create new link"}
+            </button>
+          </div>
+        )}
+        {view === "create" && (
+          <div>
+            <button
+              type="button"
+              onClick={createLink}
+              disabled={isCreating}
+              className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-medium transition-colors hover:bg-blue-500 disabled:opacity-50"
+            >
+              {isCreating ? "Creating link…" : "Create share link"}
             </button>
           </div>
         )}
         {view === "link" && token && (
-          <div className="space-y-3">
-            <p className="text-sm leading-relaxed text-white/70">
-              This link is shown only once. Copy it now.
-            </p>
-            <input
-              aria-label="Share link"
-              readOnly
-              value={`${window.location.origin}/shared/${token}`}
-              className="w-full min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white/80 outline-none"
-            />
+          <div>
+            <div className="flex flex-col gap-2 rounded-xl border border-white/10 bg-black/20 p-2 sm:flex-row">
+              <input
+                aria-label="Share link"
+                readOnly
+                value={`${window.location.origin}/shared/${token}`}
+                className="min-w-0 flex-1 rounded-lg bg-transparent px-2 py-2 text-sm text-white/75 outline-none"
+              />
+              <button
+                type="button"
+                onClick={copyLink}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 hover:text-white"
+              >
+                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                {copied ? "Copied" : "Copy link"}
+              </button>
+            </div>
+            <p className="mt-3 text-xs text-white/45">This link is shown only once. Copy it now.</p>
           </div>
         )}
       </section>
