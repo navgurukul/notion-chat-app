@@ -9,6 +9,8 @@ type RouteContext = {
   params: Promise<{ sessionId: string }>;
 };
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function noStore(response: NextResponse) {
   response.headers.set("Cache-Control", "no-store");
   return response;
@@ -34,12 +36,22 @@ async function getUserId() {
   return { userId: user.id };
 }
 
+function validSessionIdResponse(sessionId: string) {
+  if (!UUID_PATTERN.test(sessionId)) {
+    return noStore(NextResponse.json({ error: "Chat not found" }, { status: 404 }));
+  }
+  return null;
+}
+
 export async function GET(_req: Request, context: RouteContext) {
   try {
     const auth = await getUserId();
     if ("response" in auth) return auth.response;
 
     const { sessionId } = await context.params;
+    const invalidSessionId = validSessionIdResponse(sessionId);
+    if (invalidSessionId) return invalidSessionId;
+
     const result = await getChatShareStatus(sessionId, auth.userId);
     return noStore(NextResponse.json(result));
   } catch (error) {
@@ -53,10 +65,18 @@ export async function POST(req: Request, context: RouteContext) {
     if ("response" in auth) return auth.response;
 
     const bodyText = await req.text();
-    const body = bodyText ? JSON.parse(bodyText) : {};
+    let body;
+    try {
+      body = bodyText ? JSON.parse(bodyText) : {};
+    } catch {
+      return noStore(NextResponse.json({ error: "Invalid request body" }, { status: 400 }));
+    }
     const reshare = typeof body?.reshare === "boolean" ? body.reshare : false;
 
     const { sessionId } = await context.params;
+    const invalidSessionId = validSessionIdResponse(sessionId);
+    if (invalidSessionId) return invalidSessionId;
+
     const result = await createOrReshareChatLink(sessionId, auth.userId, reshare);
     return noStore(NextResponse.json(result));
   } catch (error) {
@@ -70,6 +90,9 @@ export async function DELETE(_req: Request, context: RouteContext) {
     if ("response" in auth) return auth.response;
 
     const { sessionId } = await context.params;
+    const invalidSessionId = validSessionIdResponse(sessionId);
+    if (invalidSessionId) return invalidSessionId;
+
     const result = await revokeChatShareLink(sessionId, auth.userId);
     return noStore(NextResponse.json(result));
   } catch (error) {
