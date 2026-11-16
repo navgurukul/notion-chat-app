@@ -70,9 +70,10 @@ export default async function SharedChatPage({ params }: SharedPageProps) {
                       </div>
                     </div>
                     <time className="mt-1 px-1 text-xs text-white/40" dateTime={message.createdAt}>
-                      {new Date(message.createdAt).toLocaleString(undefined, {
+                      {new Date(message.createdAt).toLocaleString("en-IN", {
                         dateStyle: "medium",
                         timeStyle: "short",
+                        timeZone: "Asia/Kolkata",
                       })}
                     </time>
                   </div>
