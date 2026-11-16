@@ -1500,7 +1500,7 @@ const createNewChat = async () => {
             <button
               type="button"
               onClick={() => setShareSessionId(activeSessionId)}
-              className={`${sidebarOpen ? "" : "ml-auto "}inline-flex items-center gap-2 rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm font-medium text-white/75 transition-colors hover:bg-white/10 hover:text-white`}
+              className="ml-auto inline-flex items-center gap-2 rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm font-medium text-white/75 transition-colors hover:bg-white/10 hover:text-white"
               title="Share chat"
               aria-label="Share chat"
             >
@@ -1524,7 +1524,7 @@ const createNewChat = async () => {
           <button
             type="button"
             onClick={toggleTheme}
-            className={`p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors shrink-0 theme-toggle ${sidebarOpen ? "ml-auto" : ""}`}
+            className="p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors shrink-0 theme-toggle"
             title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
             aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
           >
