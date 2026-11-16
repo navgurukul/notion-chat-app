@@ -1484,18 +1484,6 @@ const createNewChat = async () => {
             </button>
           )}
           <h2 className="text-lg font-medium">Chat Assistant</h2>
-          {activeSessionId && messages.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setShareSessionId(activeSessionId)}
-              className="ml-auto inline-flex items-center gap-2 rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm font-medium text-white/75 transition-colors hover:bg-white/10 hover:text-white"
-              title="Share chat"
-              aria-label="Share chat"
-            >
-              <Share2 className="h-4 w-4" />
-              <span className="hidden sm:inline">Share</span>
-            </button>
-          )}
           {!sidebarOpen && (
             <button
               type="button"
@@ -1509,10 +1497,22 @@ const createNewChat = async () => {
               <span>New Chat</span>
             </button>
           )}
+          {activeSessionId && messages.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShareSessionId(activeSessionId)}
+              className="ml-auto inline-flex items-center gap-2 rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm font-medium text-white/75 transition-colors hover:bg-white/10 hover:text-white"
+              title="Share chat"
+              aria-label="Share chat"
+            >
+              <Share2 className="h-4 w-4" />
+              <span className="hidden sm:inline">Share</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={toggleTheme}
-            className="p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors shrink-0 theme-toggle"
+            className={`${activeSessionId && messages.length > 0 ? "" : "ml-auto "}p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors shrink-0 theme-toggle`}
             title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
             aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
           >
