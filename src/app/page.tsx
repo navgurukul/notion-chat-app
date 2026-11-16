@@ -3,10 +3,11 @@
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef, memo } from "react";
-import { Send, LogOut, MessageSquare, ChevronsUpDown, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw, ThumbsUp, ThumbsDown, Copy, Check, Mic, MicOff, Sun, Moon } from "lucide-react";
+import { Send, LogOut, MessageSquare, ChevronsUpDown, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, Share2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw, ThumbsUp, ThumbsDown, Copy, Check, Mic, MicOff, Sun, Moon } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { hasKnowledgeBaseAccess } from "@/lib/shared/access";
+import ChatShareDialog from "@/components/ChatShareDialog";
 import {
   extractFinalAnswer,
   stripInternalReasoning,
@@ -341,6 +342,7 @@ export default function ChatPage() {
   const [thinkingByMessage, setThinkingByMessage] = useState<ThinkingByMessage>({});
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [chatPendingDelete, setChatPendingDelete] = useState<ChatSession | null>(null);
+  const [shareSessionId, setShareSessionId] = useState<string | null>(null);
   const [showFullSyncConfirm, setShowFullSyncConfirm] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMode, setSyncMode] = useState<"incremental" | "full" | null>(null);
@@ -1420,6 +1422,18 @@ const createNewChat = async () => {
                 </button>
                 <button
                   type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShareSessionId(chat.id);
+                  }}
+                  className="shrink-0 rounded-md p-2 text-white/30 transition-all hover:bg-blue-500/10 hover:text-blue-300 focus:opacity-100 md:mr-0 md:opacity-0 md:group-hover:opacity-100"
+                  title="Share chat"
+                  aria-label={`Share ${chat.title || "chat"}`}
+                >
+                  <Share2 className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
                   onClick={(e) => requestDeleteChat(chat, e)}
                   disabled={isLoadingChats || isLoading}
                   className="shrink-0 p-2 mr-1 rounded-md text-white/30 hover:text-red-400 hover:bg-red-500/10 opacity-70 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 transition-all disabled:opacity-40"
@@ -1769,6 +1783,11 @@ const createNewChat = async () => {
           </p>
         </div>
       </main>
+      <ChatShareDialog
+        sessionId={shareSessionId}
+        isOpen={shareSessionId !== null}
+        onClose={() => setShareSessionId(null)}
+      />
     </div>
   );
 }
