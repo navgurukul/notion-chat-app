@@ -1422,18 +1422,6 @@ const createNewChat = async () => {
                 </button>
                 <button
                   type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShareSessionId(chat.id);
-                  }}
-                  className="shrink-0 rounded-md p-2 text-white/30 transition-all hover:bg-blue-500/10 hover:text-blue-300 focus:opacity-100 md:mr-0 md:opacity-0 md:group-hover:opacity-100"
-                  title="Share chat"
-                  aria-label={`Share ${chat.title || "chat"}`}
-                >
-                  <Share2 className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
                   onClick={(e) => requestDeleteChat(chat, e)}
                   disabled={isLoadingChats || isLoading}
                   className="shrink-0 p-2 mr-1 rounded-md text-white/30 hover:text-red-400 hover:bg-red-500/10 opacity-70 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 transition-all disabled:opacity-40"
