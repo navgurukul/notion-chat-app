@@ -319,7 +319,7 @@ async function runColumnMigrations(
   }
 }
 
-const CURRENT_SCHEMA_HASH = "v10_content_trgm";
+const CURRENT_SCHEMA_HASH = "v11_chat_shares";
 
 export async function ensureSchema() {
   if (schemaReady) return;
@@ -418,9 +418,43 @@ export async function ensureSchema() {
       `,
       );
 
+      await safeCreateTable(
+        client,
+        `
+        CREATE TABLE IF NOT EXISTS chat_shares (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          session_id UUID NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+          token_hash TEXT NOT NULL UNIQUE,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          revoked_at TIMESTAMP
+        );
+      `,
+      );
+
+      await client.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS chat_shares_one_active_per_session_idx
+        ON chat_shares(session_id)
+        WHERE revoked_at IS NULL;
+      `);
+
+      await safeCreateTable(
+        client,
+        `
+        CREATE TABLE IF NOT EXISTS shared_chat_messages (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          share_id UUID NOT NULL REFERENCES chat_shares(id) ON DELETE CASCADE,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          created_at TIMESTAMP NOT NULL
+        );
+      `,
+      );
+
       await client.query(`
         CREATE INDEX IF NOT EXISTS chat_messages_session_id_idx ON chat_messages(session_id);
         CREATE INDEX IF NOT EXISTS chat_messages_session_created_idx ON chat_messages(session_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS chat_shares_session_id_idx ON chat_shares(session_id);
+        CREATE INDEX IF NOT EXISTS shared_chat_messages_share_id_created_idx ON shared_chat_messages(share_id, created_at);
       `);
 
       await reconcileNotionPagesSchema(client);

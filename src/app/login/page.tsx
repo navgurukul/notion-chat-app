@@ -7,6 +7,11 @@ import { useRouter } from "next/navigation";
 import { LogIn } from "lucide-react";
 import { hasNavgurukulDomainAccess } from "@/lib/shared/navgurukul-domain";
 
+function getCallbackUrl() {
+  const requested = new URLSearchParams(window.location.search).get("callbackUrl");
+  return requested?.startsWith("/") && !requested.startsWith("//") ? requested : "/";
+}
+
 export default function LoginPage() {
   const { status, data } = useSession();
   const router = useRouter();
@@ -17,7 +22,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (status === "authenticated") {
-      if (allowed) router.push("/");
+      if (allowed) router.push(getCallbackUrl());
     }
   }, [status, allowed, router]);
 
@@ -47,7 +52,7 @@ export default function LoginPage() {
         </div>
 
         <button
-          onClick={() => signIn("google", { callbackUrl: "/" })}
+          onClick={() => signIn("google", { callbackUrl: getCallbackUrl() })}
           className="w-full py-4 px-6 rounded-xl bg-white text-black font-semibold flex items-center justify-center gap-3 hover:bg-white/90 transition-all active:scale-[0.98]"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24">

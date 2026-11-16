@@ -3,10 +3,11 @@
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef, memo } from "react";
-import { Send, LogOut, MessageSquare, ChevronsUpDown, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw, ThumbsUp, ThumbsDown, Copy, Check, Mic, MicOff, Sun, Moon } from "lucide-react";
+import { Send, LogOut, MessageSquare, ChevronsUpDown, Bot, User, Loader2, AlertTriangle, X, RefreshCw, CheckCircle, XCircle, Plus, Trash2, Share2, PanelLeftClose, PanelLeftOpen, Square, Pencil, RotateCcw, ThumbsUp, ThumbsDown, Copy, Check, Mic, MicOff, Sun, Moon } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { hasKnowledgeBaseAccess } from "@/lib/shared/access";
+import ChatShareDialog from "@/components/ChatShareDialog";
 import {
   extractFinalAnswer,
   stripInternalReasoning,
@@ -341,6 +342,7 @@ export default function ChatPage() {
   const [thinkingByMessage, setThinkingByMessage] = useState<ThinkingByMessage>({});
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [chatPendingDelete, setChatPendingDelete] = useState<ChatSession | null>(null);
+  const [shareSessionId, setShareSessionId] = useState<string | null>(null);
   const [showFullSyncConfirm, setShowFullSyncConfirm] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMode, setSyncMode] = useState<"incremental" | "full" | null>(null);
@@ -1487,7 +1489,7 @@ const createNewChat = async () => {
               type="button"
               onClick={createNewChat}
               disabled={isLoadingChats || isLoading}
-              className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"
+              className={`${activeSessionId && messages.length > 0 ? "" : "ml-auto "}inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50`}
               title="New Chat"
               aria-label="New Chat"
             >
@@ -1495,10 +1497,22 @@ const createNewChat = async () => {
               <span>New Chat</span>
             </button>
           )}
+          {activeSessionId && messages.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShareSessionId(activeSessionId)}
+              className="ml-auto inline-flex items-center gap-2 rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm font-medium text-white/75 transition-colors hover:bg-white/10 hover:text-white"
+              title="Share chat"
+              aria-label="Share chat"
+            >
+              <Share2 className="h-4 w-4" />
+              <span className="hidden sm:inline">Share</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={toggleTheme}
-            className={`p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors shrink-0 theme-toggle ${sidebarOpen ? "ml-auto" : ""}`}
+            className={`${activeSessionId && messages.length > 0 ? "" : "ml-auto "}p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors shrink-0 theme-toggle`}
             title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
             aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
           >
@@ -1769,6 +1783,11 @@ const createNewChat = async () => {
           </p>
         </div>
       </main>
+      <ChatShareDialog
+        sessionId={shareSessionId}
+        isOpen={shareSessionId !== null}
+        onClose={() => setShareSessionId(null)}
+      />
     </div>
   );
 }
