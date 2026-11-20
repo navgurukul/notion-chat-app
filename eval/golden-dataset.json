@@ -535,5 +535,45 @@
         "content": "Poonam Bagh owns the RBAC active role bug."
       }
     ]
+  },
+  {
+    "question": "my tasks",
+    "expected_behavior": "clarify"
+  },
+  {
+    "question": "When will the project be completed?",
+    "expected_behavior": "clarify"
+  },
+  {
+    "question": "tell me about it",
+    "expected_behavior": "clarify"
+  },
+  {
+    "question": "who is working on this?",
+    "expected_behavior": "clarify"
+  },
+  {
+    "question": "When will the Oscar project be completed?",
+    "expected_behavior": "answer",
+    "expectedAnswer": "The Oscar project's completion timing should be based on the project status information in Notion.",
+    "relevantPages": [
+      "Oscar MVP"
+    ]
+  },
+  {
+    "question": "What is the AI Art Challenge app?",
+    "expected_behavior": "answer",
+    "expectedAnswer": "AI Art Challenge is a gamified AI prompting learning app targeting students aged 16 to 24",
+    "relevantPages": [
+      "AI art challenge"
+    ]
+  },
+  {
+    "question": "What is the bug with View Submissions in Admin?",
+    "expected_behavior": "answer",
+    "expectedAnswer": "In Admin Course Submissions Practice Problems each card always shows the first chapter coding submissions",
+    "relevantPages": [
+      "ADMIN – “View Submissions” Always Shows First Chapter’s Coding Submissions"
+    ]
   }
 ]
