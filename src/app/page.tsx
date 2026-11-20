@@ -14,25 +14,6 @@ import {
   stripStreamTags,
 } from "@/lib/chat/stream-tags";
 
-type SpeechRecognitionResultLike = ArrayLike<{ transcript: string }> & { isFinal: boolean };
-type SpeechRecognitionLike = {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  start: () => void;
-  stop: () => void;
-  onresult: ((event: { resultIndex: number; results: ArrayLike<SpeechRecognitionResultLike> }) => void) | null;
-  onerror: ((event: { error?: string }) => void) | null;
-  onend: (() => void) | null;
-};
-
-declare global {
-  interface Window {
-    SpeechRecognition?: new () => SpeechRecognitionLike;
-    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
-  }
-}
-
 interface Message {
   id?: string;
   role: "user" | "bot";
@@ -149,13 +130,14 @@ const ChatInputForm = memo(function ChatInputForm({
   onStopClick: () => void;
 }) {
   const [text, setText] = useState("");
-  const [speechSupported, setSpeechSupported] = useState(false);
-  const [isListening, setIsListening] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [speechError, setSpeechError] = useState("");
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const textRef = useRef("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const voiceBaseTextRef = useRef("");
-  const voiceFinalTextRef = useRef("");
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -166,83 +148,86 @@ const ChatInputForm = memo(function ChatInputForm({
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }, [text]);
 
-  const stopVoiceInput = () => {
-    recognitionRef.current?.stop();
-    setIsListening(false);
-  };
-
   useEffect(() => {
-    setSpeechSupported(Boolean(window.SpeechRecognition || window.webkitSpeechRecognition));
+    setVoiceSupported(Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder));
   }, []);
 
-  useEffect(() => () => recognitionRef.current?.stop(), []);
+  const releaseMicrophone = () => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  };
 
-  const toggleVoiceInput = () => {
-    if (isListening) {
+  useEffect(() => () => {
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+  }, []);
+
+  const stopVoiceInput = () => {
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    setIsRecording(false);
+  };
+
+  const toggleVoiceInput = async () => {
+    if (isRecording) {
       stopVoiceInput();
       return;
     }
-
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-    const recognition = new SpeechRecognition();
-    let receivedTranscript = false;
-    let recognitionFailed = false;
-    voiceBaseTextRef.current = text;
-    voiceFinalTextRef.current = "";
-    recognition.lang = "en-IN";
-    recognition.interimResults = true;
-    recognition.continuous = true;
-    recognition.onresult = (event) => {
-      let interimText = "";
-      for (let index = event.resultIndex; index < event.results.length; index += 1) {
-        const result = event.results[index];
-        const transcript = result[0]?.transcript ?? "";
-        if (result.isFinal) {
-          voiceFinalTextRef.current += transcript;
-        } else {
-          interimText += transcript;
-        }
-      }
-      const transcript = `${voiceFinalTextRef.current}${interimText}`;
-      if (transcript.trim()) {
-        receivedTranscript = true;
-        setSpeechError("");
-        const baseText = voiceBaseTextRef.current;
-        setText(`${baseText}${baseText && !baseText.endsWith(" ") ? " " : ""}${transcript}`);
-      }
-    };
-    recognition.onerror = (event) => {
-      recognitionFailed = true;
-      const message = event.error === "not-allowed" || event.error === "service-not-allowed"
-        ? "Microphone or speech recognition access was denied. Check your browser permissions."
-        : event.error === "audio-capture"
-          ? "No microphone was found. Check your microphone connection and permissions."
-          : "Voice input failed in this browser. Check microphone access or try another browser.";
-      setSpeechError(message);
-      setIsListening(false);
-    };
-    recognition.onend = () => {
-      setIsListening(false);
-      if (!receivedTranscript && !recognitionFailed) {
-        setSpeechError("No transcript was received. Check microphone permission, then try again or use another browser.");
-      }
-    };
-    recognitionRef.current = recognition;
     setSpeechError("");
-    setIsListening(true);
     try {
-      recognition.start();
-    } catch {
-      setIsListening(false);
-      setSpeechError("Voice input could not start. Please try again.");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const mimeType = ["audio/webm", "audio/mp4", "audio/ogg"].find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      const chunks: Blob[] = [];
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) chunks.push(event.data);
+      };
+      recorder.onerror = () => {
+        releaseMicrophone();
+        setIsRecording(false);
+        setSpeechError("Recording failed. Check microphone access and try again.");
+      };
+      recorder.onstop = async () => {
+        releaseMicrophone();
+        setIsRecording(false);
+        if (!chunks.length) return;
+        setIsTranscribing(true);
+        try {
+          const audio = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+          const formData = new FormData();
+          formData.append("audio", audio, `recording.${audio.type.includes("mp4") ? "mp4" : audio.type.includes("ogg") ? "ogg" : "webm"}`);
+          const response = await fetch("/api/stt/transcribe", { method: "POST", body: formData });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || "Transcription failed. Please try again.");
+          const transcript = String(result.text || "").trim();
+          if (!transcript) throw new Error("No speech was detected. Try again or type your message.");
+          const baseText = textRef.current;
+          const updated = `${baseText}${baseText && !baseText.endsWith(" ") ? " " : ""}${transcript}`;
+          textRef.current = updated;
+          setText(updated);
+        } catch (error) {
+          setSpeechError(error instanceof Error ? error.message : "Transcription failed. Please try again.");
+        } finally {
+          setIsTranscribing(false);
+        }
+      };
+      recorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      releaseMicrophone();
+      setIsRecording(false);
+      setSpeechError(error instanceof Error && error.name === "NotAllowedError"
+        ? "Microphone access was denied. Check your browser permissions."
+        : "Could not start recording. Check your microphone and try again.");
     }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!text.trim() || isLoading || !activeSessionId) return;
+    if (!text.trim() || isLoading || isRecording || isTranscribing || !activeSessionId) return;
     const val = text.trim();
+    textRef.current = "";
     setText("");
     onSubmit(val);
   };
@@ -250,22 +235,23 @@ const ChatInputForm = memo(function ChatInputForm({
   return (
     <>
     <form onSubmit={handleSubmit} className="max-w-4xl mx-auto relative group">
-      <div className={`relative rounded-2xl border bg-white/5 transition-all focus-within:bg-white/[0.07] ${isListening ? "border-red-400/40 shadow-[0_0_0_3px_rgba(248,113,113,0.08)]" : "border-white/10 focus-within:border-blue-500/50"}`}>
+      <div className={`relative rounded-2xl border bg-white/5 transition-all focus-within:bg-white/[0.07] ${isRecording ? "border-red-400/40 shadow-[0_0_0_3px_rgba(248,113,113,0.08)]" : "border-white/10 focus-within:border-blue-500/50"}`}>
       <textarea
         ref={textareaRef}
         value={text}
         onChange={(e) => {
+          textRef.current = e.target.value;
           setText(e.target.value);
           setSpeechError("");
         }}
         onKeyDown={(e) => {
           if (e.key !== "Enter" || e.shiftKey) return;
           e.preventDefault();
-          if (isListening) stopVoiceInput();
+          if (isRecording) stopVoiceInput();
           else if (text.trim() && !isLoading) e.currentTarget.form?.requestSubmit();
         }}
         disabled={!activeSessionId || isLoadingChats}
-        placeholder={isListening ? "Listening… speak now" : activeSessionId ? "Ask anything..." : "Creating chat..."}
+        placeholder={isRecording ? "Recording… speak now" : isTranscribing ? "Transcribing audio…" : activeSessionId ? "Ask anything..." : "Creating chat..."}
         rows={1}
         className="w-full min-h-[54px] max-h-40 resize-none overflow-hidden bg-transparent py-4 pl-4 pr-24 text-sm text-white placeholder:text-white/30 focus:outline-none sm:text-base"
       />
@@ -273,12 +259,12 @@ const ChatInputForm = memo(function ChatInputForm({
         <button
           type="button"
           onClick={toggleVoiceInput}
-          disabled={!speechSupported || !activeSessionId || isLoadingChats}
-          className={`absolute right-[52px] top-1/2 -translate-y-1/2 p-2.5 rounded-xl transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isListening ? "bg-red-500/15 text-red-300 hover:bg-red-500/25" : "text-white/55 hover:bg-white/10 hover:text-white"}`}
-          title={!speechSupported ? "Voice input isn’t supported in this browser" : isListening ? "Stop recording (Enter)" : "Record a voice message"}
-          aria-label={!speechSupported ? "Voice input isn’t supported in this browser" : isListening ? "Stop recording (Enter)" : "Record a voice message"}
+          disabled={!voiceSupported || !activeSessionId || isLoadingChats || isTranscribing}
+          className={`absolute right-[52px] top-1/2 -translate-y-1/2 p-2.5 rounded-xl transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isRecording ? "bg-red-500/15 text-red-300 hover:bg-red-500/25" : "text-white/55 hover:bg-white/10 hover:text-white"}`}
+          title={!voiceSupported ? "Voice recording isn’t supported in this browser" : isRecording ? "Stop recording (Enter)" : "Record a voice message"}
+          aria-label={!voiceSupported ? "Voice recording isn’t supported in this browser" : isRecording ? "Stop recording (Enter)" : "Record a voice message"}
         >
-          {isListening ? <Square className="w-4 h-4 fill-current" /> : <Mic className="w-5 h-5" />}
+          {isRecording ? <Square className="w-4 h-4 fill-current" /> : <Mic className="w-5 h-5" />}
         </button>
       )}
       {isLoading ? (
@@ -301,7 +287,7 @@ const ChatInputForm = memo(function ChatInputForm({
       ) : (
         <button
           type="submit"
-          disabled={!text.trim() || !activeSessionId}
+          disabled={!text.trim() || !activeSessionId || isRecording || isTranscribing}
           className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 transition-all font-semibold"
           title="Send message"
         >
@@ -312,7 +298,8 @@ const ChatInputForm = memo(function ChatInputForm({
     </form>
     <div className="max-w-4xl mx-auto min-h-5 px-2 pt-1 text-xs text-white/55 flex items-center justify-between" aria-live="polite">
       <span>{speechError}</span>
-      {isListening && <span className="inline-flex items-center gap-1.5 text-red-300/80"><span className="h-1.5 w-1.5 rounded-full bg-red-400 animate-pulse" />Recording · Enter to stop</span>}
+      {isRecording && <span className="inline-flex items-center gap-1.5 text-red-300/80"><span className="h-1.5 w-1.5 rounded-full bg-red-400 animate-pulse" />Recording · Enter to stop</span>}
+      {isTranscribing && <span className="inline-flex items-center gap-1.5 text-white/50"><Loader2 className="h-3 w-3 animate-spin" />Transcribing audio</span>}
     </div>
     </>
   );
