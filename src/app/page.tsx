@@ -14,6 +14,24 @@ import {
   stripStreamTags,
 } from "@/lib/chat/stream-tags";
 
+type LiveSpeechResult = ArrayLike<{ transcript: string }> & { isFinal: boolean };
+type LiveSpeechRecognition = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start: () => void;
+  stop: () => void;
+  onresult: ((event: { results: ArrayLike<LiveSpeechResult> }) => void) | null;
+  onerror: (() => void) | null;
+};
+
+declare global {
+  interface Window {
+    SpeechRecognition?: new () => LiveSpeechRecognition;
+    webkitSpeechRecognition?: new () => LiveSpeechRecognition;
+  }
+}
+
 interface Message {
   id?: string;
   role: "user" | "bot";
@@ -133,10 +151,14 @@ const ChatInputForm = memo(function ChatInputForm({
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [livePreviewSupported, setLivePreviewSupported] = useState(false);
   const [speechError, setSpeechError] = useState("");
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const recognitionRef = useRef<LiveSpeechRecognition | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const textRef = useRef("");
+  const voiceBaseTextRef = useRef("");
+  const liveVoiceActiveRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -150,6 +172,7 @@ const ChatInputForm = memo(function ChatInputForm({
 
   useEffect(() => {
     setVoiceSupported(Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder));
+    setLivePreviewSupported(Boolean(window.SpeechRecognition || window.webkitSpeechRecognition));
   }, []);
 
   const releaseMicrophone = () => {
@@ -159,11 +182,14 @@ const ChatInputForm = memo(function ChatInputForm({
 
   useEffect(() => () => {
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    recognitionRef.current?.stop();
     streamRef.current?.getTracks().forEach((track) => track.stop());
   }, []);
 
   const stopVoiceInput = () => {
+    liveVoiceActiveRef.current = false;
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    recognitionRef.current?.stop();
     setIsRecording(false);
   };
 
@@ -173,6 +199,8 @@ const ChatInputForm = memo(function ChatInputForm({
       return;
     }
     setSpeechError("");
+    voiceBaseTextRef.current = textRef.current;
+    liveVoiceActiveRef.current = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -184,11 +212,15 @@ const ChatInputForm = memo(function ChatInputForm({
         if (event.data.size) chunks.push(event.data);
       };
       recorder.onerror = () => {
+        liveVoiceActiveRef.current = false;
+        recognitionRef.current?.stop();
         releaseMicrophone();
         setIsRecording(false);
         setSpeechError("Recording failed. Check microphone access and try again.");
       };
       recorder.onstop = async () => {
+        liveVoiceActiveRef.current = false;
+        recognitionRef.current?.stop();
         releaseMicrophone();
         setIsRecording(false);
         if (!chunks.length) return;
@@ -202,7 +234,7 @@ const ChatInputForm = memo(function ChatInputForm({
           if (!response.ok) throw new Error(result.error || "Transcription failed. Please try again.");
           const transcript = String(result.text || "").trim();
           if (!transcript) throw new Error("No speech was detected. Try again or type your message.");
-          const baseText = textRef.current;
+          const baseText = voiceBaseTextRef.current;
           const updated = `${baseText}${baseText && !baseText.endsWith(" ") ? " " : ""}${transcript}`;
           textRef.current = updated;
           setText(updated);
@@ -213,8 +245,36 @@ const ChatInputForm = memo(function ChatInputForm({
         }
       };
       recorder.start();
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        try {
+          const recognition = new SpeechRecognition();
+          recognition.lang = navigator.language || "en-US";
+          recognition.interimResults = true;
+          recognition.continuous = true;
+          recognition.onresult = (event) => {
+            if (!liveVoiceActiveRef.current) return;
+            const transcript = Array.from(event.results)
+              .map((result) => result[0]?.transcript ?? "")
+              .join("");
+            if (!transcript.trim()) return;
+            const baseText = voiceBaseTextRef.current;
+            const preview = `${baseText}${baseText && !baseText.endsWith(" ") ? " " : ""}${transcript}`;
+            textRef.current = preview;
+            setText(preview);
+          };
+          recognition.onerror = () => {
+            // Live preview is best-effort; the recorded audio is still transcribed on stop.
+          };
+          recognitionRef.current = recognition;
+          recognition.start();
+        } catch {
+          recognitionRef.current = null;
+        }
+      }
       setIsRecording(true);
     } catch (error) {
+      liveVoiceActiveRef.current = false;
       releaseMicrophone();
       setIsRecording(false);
       setSpeechError(error instanceof Error && error.name === "NotAllowedError"
@@ -239,6 +299,7 @@ const ChatInputForm = memo(function ChatInputForm({
       <textarea
         ref={textareaRef}
         value={text}
+        readOnly={isRecording || isTranscribing}
         onChange={(e) => {
           textRef.current = e.target.value;
           setText(e.target.value);
@@ -298,7 +359,7 @@ const ChatInputForm = memo(function ChatInputForm({
     </form>
     <div className="max-w-4xl mx-auto min-h-5 px-2 pt-1 text-xs text-white/55 flex items-center justify-between" aria-live="polite">
       <span>{speechError}</span>
-      {isRecording && <span className="inline-flex items-center gap-1.5 text-red-300/80"><span className="h-1.5 w-1.5 rounded-full bg-red-400 animate-pulse" />Recording · Enter to stop</span>}
+      {isRecording && <span className="inline-flex items-center gap-1.5 text-red-300/80"><span className="h-1.5 w-1.5 rounded-full bg-red-400 animate-pulse" />{livePreviewSupported ? "Live preview · Enter to stop" : "Recording · transcript appears after stop"}</span>}
       {isTranscribing && <span className="inline-flex items-center gap-1.5 text-white/50"><Loader2 className="h-3 w-3 animate-spin" />Transcribing audio</span>}
     </div>
     </>
