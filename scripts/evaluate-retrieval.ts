@@ -62,7 +62,7 @@ export function ndcgAtK(hits: boolean[], totalExpected: number): number {
 
 export async function evaluateRetrieval(datasetPath?: string) {
   const file = datasetPath || path.join(process.cwd(), "eval", "golden-dataset.json");
-  const dataset = readGoldenDataset(file);
+  const dataset = readGoldenDataset(file).filter((item) => item.expected_behavior === "answer");
   const results: RetrievalQueryResult[] = [];
 
   let idx = 0;
@@ -132,7 +132,7 @@ export async function evaluateRetrieval(datasetPath?: string) {
 
 async function main() {
   console.log("🔍 Running Retrieval Evaluation (Recall@5, Precision@5, NDCG@5)...");
-  const results = await evaluateRetrieval();
+  const results = await evaluateRetrieval(process.argv[2]);
 
   console.log("\nPer-Query Retrieval Metrics:");
   console.table(

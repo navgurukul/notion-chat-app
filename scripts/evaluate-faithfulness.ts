@@ -55,7 +55,7 @@ INSTRUCTIONS:
 
 export async function evaluateFaithfulness(datasetPath?: string) {
   const file = datasetPath || path.join(process.cwd(), "eval", "golden-dataset.json");
-  const dataset = readGoldenDataset(file);
+  const dataset = readGoldenDataset(file).filter((item) => item.expected_behavior === "answer");
   const results: FaithfulnessQueryResult[] = [];
 
   for (const item of dataset) {
@@ -132,7 +132,7 @@ ${generatedAnswer}
 
 async function main() {
   console.log("⚖️  Running Generation Faithfulness Evaluation (LLM-as-a-Judge)...");
-  const results = await evaluateFaithfulness();
+  const results = await evaluateFaithfulness(process.argv[2]);
 
   console.log("\nPer-Query Faithfulness Metrics:");
   console.table(
