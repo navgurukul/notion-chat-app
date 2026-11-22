@@ -7,25 +7,21 @@ import {
   getSessionState,
   updateSessionState,
 } from "@/lib/chat/store";
-import { MAX_MESSAGE_LENGTH } from "@/lib/chat/constants";
 import {
   sanitizeChatHistory,
   extractReferencedTitle,
   isNotionLinkRequest,
 } from "@/lib/chat/query-tools";
-import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { resolveQuery } from "@/lib/query/resolve-query";
 import { getGenderOfPerson } from "@/lib/query/entity-resolver";
-import { analyzeUserEmotion } from "@/lib/chat/emotion";
-import type { ParsedQuery } from "@/lib/query/types";
 import { lookupPageLinkByTitle } from "@/lib/sql/answers";
 import { buildNotionContextWithConfidence, extractContextPageLinks } from "@/lib/rag/build-context";
-import { extractLastEntityFromHistory, jsonAnswer, detectSmalltalkType, tryFastPathRegexRoute } from "./smalltalk";
+import { extractLastEntityFromHistory, jsonAnswer, tryFastPathRegexRoute } from "./smalltalk";
 import { trySqlAnswer } from "./sql-answer";
 import { tryRagAnswer } from "./rag-answer";
 import { PipelineContext, PipelineTelemetry, LATENCY_BUDGETS } from "./telemetry";
-import { detectAndHandleCorrection, isCorrectionMessage } from "./correction";
-import type { ChatHistoryItem } from "@/lib/ai/openai";
+
+const MAX_MESSAGE_LENGTH = 2000;
 
 export type ChatRequestBody = {
   message?: unknown;
@@ -142,72 +138,6 @@ async function tryNotionLinkAnswer(ctx: PipelineContext, emotion?: string, signa
   return null;
 }
 
-function countSmalltalkRepeats(history: ChatHistoryItem[], smalltalkType: ReturnType<typeof detectSmalltalkType>, maxUserTurns = 8) {
-  if (!smalltalkType) return 0;
-  const userTurns = history
-    .filter(h => h.role === "user")
-    .map(h => h.content)
-    .slice(-maxUserTurns);
-
-  return userTurns.filter(t => detectSmalltalkType(t) === smalltalkType).length;
-}
-
-function buildSmalltalkWarmPoolFallback(type: ReturnType<typeof detectSmalltalkType>, userName?: string, message?: string) {
-  const fast = message ? tryFastPathRegexRoute(message, userName) : null;
-  if (fast && fast.kind === "smalltalk") return fast.answer;
-  return type
-    ? "Hi! What would you like to check in NavGurukul’s Notion today?"
-    : "Hi! How can I help you today?";
-}
-
-async function tryWarmReplyOrFallback(opts: {
-  message: string;
-  history: ChatHistoryItem[];
-  sessionId: string | null;
-  userName?: string;
-  smalltalkType: ReturnType<typeof detectSmalltalkType>;
-  userEmotion?: string;
-  signal?: AbortSignal;
-}): Promise<Response> {
-  const fallbackAnswer = buildSmalltalkWarmPoolFallback(opts.smalltalkType, opts.userName ?? undefined, opts.message);
-
-  const warmPrompt = `User message: ${opts.message}
-
-Smalltalk type: ${opts.smalltalkType}
-${opts.userName ? `Address the user as ${opts.userName}.` : ""}
-
-Write a single short, friendly warm reply (1-2 sentences). Do NOT repeat the exact same response as before.
-If relevant, ask a lightweight next question about what they'd like to check in NavGurukul Notion.`;
-
-  try {
-    return await streamOpenAIAnswer(
-      warmPrompt,
-      "",
-      opts.history,
-      opts.sessionId,
-      "smalltalk" as any,
-      opts.signal,
-      {
-        tStart: 0,
-        normalization: 0,
-        intentClassification: 0,
-        sqlAnswerAttempt: 0,
-        queryReformulation: 0,
-        queryExpansion: 0,
-        retrieval: 0,
-        expandedQueryCount: 0,
-        contextChars: 0,
-        topScore: 0,
-        avgScore: 0,
-        confidenceOk: true,
-        historyEntityUsed: false,
-      },
-      opts.userEmotion,
-    );
-  } catch {
-    return jsonAnswer(opts.sessionId, fallbackAnswer, opts.userEmotion, opts.signal);
-  }
-}
 
 export async function runChatPipeline(session: Session, body: ChatRequestBody, signal?: AbortSignal) {
   const tStart = performance.now();
@@ -237,21 +167,6 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
               await addChatMessage(sessionId, "user", rawMessage, "neutral");
             }
 
-            const stType = detectSmalltalkType(rawMessage);
-            const repeats = countSmalltalkRepeats(history, stType);
-            if (repeats >= 3) {
-              response = await tryWarmReplyOrFallback({
-                message: rawMessage,
-                history,
-                sessionId,
-                userName: session.user?.name ?? undefined,
-                smalltalkType: stType,
-                userEmotion: "neutral",
-                signal,
-              });
-              return response;
-            }
-
             await addChatMessage(sessionId, "bot", fastPath.answer, "neutral");
           }
         } catch (err) {
@@ -279,9 +194,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       return NextResponse.json({ answer, emotion: "neutral", sessionId: attachedSessionId });
     }
 
-    // 2. Preprocessing & Parallel Emotion Detection
-    const lastEntities = await extractLastEntityFromHistory(history);
-    const emotionPromise = analyzeUserEmotion(rawMessage).catch(() => ({ emotion: "neutral" as const, isFunny: false, explanation: "Fallback" }));
+    // 2. Preprocessing
 
     // Fast LLM-friendly utility: current date/time (general question)
     const utilityDateTimeRegex = /\b(today\s*['’]?\s*s\s+date|today\s+date|today\s+is\s+date|what\s+date\s+is\s+it\s+today|what\s+is\s+today\s*['’]?\s*s\s+date|what\s+day\s+is\s+it\s+today|day\s+today|current\s+time|what\s+time\s+is\s+it|time\s+now|current\s+date)\b/i;
@@ -296,14 +209,12 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
           ? `Current time is **${time}** (local to the server).`
           : `Today is **${weekday}**, **${isoDate}** (local to the server).`;
 
-      const emotionResult = await emotionPromise;
-      const userEmotion = emotionResult.emotion;
-      const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, userEmotion, body.isRegenerate);
+      const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, "neutral", body.isRegenerate);
       if (attachedSessionId) {
-        await addChatMessage(attachedSessionId, "bot", answer, userEmotion).catch(err => console.error("[DB Write Error] Failed to save utility bot message:", err));
+        await addChatMessage(attachedSessionId, "bot", answer, "neutral").catch(err => console.error("[DB Write Error] Failed to save utility bot message:", err));
       }
 
-      return NextResponse.json({ answer, emotion: userEmotion, sessionId: attachedSessionId });
+      return NextResponse.json({ answer, emotion: "neutral", sessionId: attachedSessionId });
     }
 
     const attachedSessionId = await attachSession(session, body.sessionId, rawMessage, "neutral", body.isRegenerate);
@@ -313,6 +224,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
     let dbStatePerson: string | undefined;
     let dbStateLastMale: string | undefined;
     let dbStateLastFemale: string | undefined;
+    let dbStateHasEntity = false;
     if (attachedSessionId) {
       const dbState = await getSessionState(attachedSessionId);
       if (dbState) {
@@ -322,8 +234,11 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
         if (dbState.lastProject) dbStateProject = dbState.lastProject;
         if (dbState.lastMale) dbStateLastMale = dbState.lastMale;
         if (dbState.lastFemale) dbStateLastFemale = dbState.lastFemale;
+        dbStateHasEntity = Boolean(dbStateProject || dbStatePerson || dbStateLastMale || dbStateLastFemale);
       }
     }
+
+    const lastEntities = dbStateHasEntity ? {} : await extractLastEntityFromHistory(history);
 
     const mergedEntities = {
       lastProject: dbStateProject || lastEntities.lastProject,
@@ -332,32 +247,13 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       lastFemale: dbStateLastFemale,
     };
 
-    // correction
-    let finalQuery = rawMessage;
-    let isWrongAnswerRetry = false;
-    const correction = await detectAndHandleCorrection(rawMessage, history, attachedSessionId, {
-      lastPerson: mergedEntities.lastPerson,
-      lastProject: mergedEntities.lastProject,
-    });
-
-    if (correction) {
-      if (correction.clarifyingQuestion) {
-        const emotionResult = await emotionPromise;
-        return jsonAnswer(attachedSessionId, correction.clarifyingQuestion, emotionResult.emotion, signal);
-      }
-      if (correction.rewrittenMessage) {
-        finalQuery = correction.rewrittenMessage;
-        if (correction.correctedPerson) mergedEntities.lastPerson = correction.correctedPerson;
-        if (correction.correctedProject) mergedEntities.lastProject = correction.correctedProject;
-      }
-      if (correction.isWrongAnswerRetry) isWrongAnswerRetry = true;
-    }
+    const finalQuery = rawMessage;
 
     // 3. Intent classification & emotion resolution in parallel
     telemetry.startStep("intent_classifier_ms");
     const parsedPromise = resolveQuery(finalQuery, history, sessionDisplayName || undefined, mergedEntities);
-    const [parsed, emotionResult] = await Promise.all([parsedPromise, emotionPromise]);
-    const userEmotion = emotionResult.emotion;
+    const parsed = await parsedPromise;
+    const userEmotion = "neutral";
     telemetry.endStep("intent_classifier_ms");
     telemetry.setIntent(parsed.kind, parsed.confidence, parsed.source);
     if (parsed.source !== "regex") telemetry.incrementLlmCalls();
@@ -368,73 +264,25 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       const currentState = (await getSessionState(attachedSessionId)) || {};
       let changed = false;
 
-      if (resolvedEntities) {
-        if (
-          resolvedEntities.person?.value &&
-          resolvedEntities.person.confidence &&
-          resolvedEntities.person.confidence >= 0.7
-        ) {
-          currentState.activePerson = {
-            id: resolvedEntities.person.value,
-            name: resolvedEntities.person.value,
-            confidence: resolvedEntities.person.confidence,
-            source: "retrieval",
-          };
-          currentState.lastPerson = resolvedEntities.person.value;
-          const gender = await getGenderOfPerson(resolvedEntities.person.value);
-          if (gender === "female") {
-            currentState.lastFemale = resolvedEntities.person.value;
-          } else {
-            currentState.lastMale = resolvedEntities.person.value;
-          }
-          changed = true;
-        } else if (parsed?.personName) {
-          currentState.lastPerson = parsed.personName;
-          const gender = await getGenderOfPerson(parsed.personName);
-          if (gender === "female") {
-            currentState.lastFemale = parsed.personName;
-          } else {
-            currentState.lastMale = parsed.personName;
-          }
-          changed = true;
-        }
-        if (resolvedEntities.page?.value) {
-          currentState.activeProject = {
-            id: resolvedEntities.page.value,
-            name: resolvedEntities.page.value,
-            confidence: resolvedEntities.page.quality === "EXACT" ? 1.0 : 0.85,
-            source: "retrieval",
-          };
-          currentState.lastProject = resolvedEntities.page.value;
-          changed = true;
-        } else if (parsed?.docTitle) {
-          currentState.lastProject = parsed.docTitle;
-          changed = true;
-        }
-      } else {
-        if (parsed?.personName) {
-          currentState.lastPerson = parsed.personName;
-          const gender = await getGenderOfPerson(parsed.personName);
-          if (gender === "female") {
-            currentState.lastFemale = parsed.personName;
-          } else {
-            currentState.lastMale = parsed.personName;
-          }
-          changed = true;
-        }
-        if (parsed?.docTitle) {
-          currentState.lastProject = parsed.docTitle;
-          changed = true;
-        }
-      }
-
-      if (currentState.lastRewrittenQuery !== finalQuery) {
-        currentState.lastRewrittenQuery = finalQuery;
+      const person = resolvedEntities?.person?.value && resolvedEntities.person.confidence && resolvedEntities.person.confidence >= 0.7
+        ? resolvedEntities.person.value
+        : parsed.personName;
+      if (person) {
+        currentState.lastPerson = person;
+        const gender = await getGenderOfPerson(person);
+        if (gender === "female") currentState.lastFemale = person;
+        else currentState.lastMale = person;
+        if (resolvedEntities?.person?.value === person) currentState.activePerson = {
+          id: person, name: person, confidence: resolvedEntities.person.confidence!, source: "retrieval",
+        };
         changed = true;
       }
-
-      if (finalQuery === rawMessage && !isCorrectionMessage(rawMessage)) {
-        currentState.lastUserQueryPreCorrection = rawMessage;
+      const project = resolvedEntities?.page?.value || parsed.docTitle;
+      if (project) {
+        currentState.lastProject = project;
+        if (resolvedEntities?.page?.value) currentState.activeProject = {
+          id: project, name: project, confidence: resolvedEntities.page.quality === "EXACT" ? 1 : 0.85, source: "retrieval",
+        };
         changed = true;
       }
 
@@ -452,7 +300,6 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
       sessionName: sessionDisplayName || undefined,
       reformulatedQuery: parsed.reformulatedQuery,
       telemetry,
-      isWrongAnswerRetry,
     };
 
     // 6. Notion link
@@ -460,55 +307,6 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
     if (linkResponse) {
       telemetry.setExecutionPath("Notion Link");
       response = linkResponse;
-      return response;
-    }
-
-    // 7. Smalltalk (non-fastpath)
-    if (parsed.kind === "smalltalk") {
-      const stType = detectSmalltalkType(rawMessage);
-      const repeats = countSmalltalkRepeats(history, stType);
-
-      telemetry.setExecutionPath("Smalltalk/Fastpath");
-      telemetry.incrementLlmCalls();
-
-      if (attachedSessionId) await saveState().catch((err: any) => console.error("Error saving session state:", err));
-
-      if (repeats >= 3) {
-        return await tryWarmReplyOrFallback({
-          message: rawMessage,
-          history,
-          sessionId: attachedSessionId,
-          userName: session.user?.name ?? undefined,
-          smalltalkType: stType,
-          userEmotion,
-          signal,
-        });
-      }
-
-      response = await streamOpenAIAnswer(
-        ctx.message,
-        "",
-        ctx.history,
-        ctx.sessionId,
-        parsed.kind,
-        signal,
-        {
-          tStart,
-          normalization: 0,
-          intentClassification: 0,
-          sqlAnswerAttempt: 0,
-          queryReformulation: 0,
-          queryExpansion: 0,
-          retrieval: 0,
-          expandedQueryCount: 0,
-          contextChars: 0,
-          topScore: 0,
-          avgScore: 0,
-          confidenceOk: true,
-          historyEntityUsed: false,
-        },
-        userEmotion,
-      );
       return response;
     }
 
@@ -541,7 +339,7 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
 
     // 9. RAG
     telemetry.startStep("rag_ms");
-    const ragResponse = await tryRagAnswer(parsed, ctx, session, {
+    const ragResponse = await tryRagAnswer(parsed, ctx, {
       tStart,
       dNormalization: 0,
       dResolveQuery: 0,
