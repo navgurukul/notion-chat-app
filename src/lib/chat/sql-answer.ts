@@ -6,20 +6,10 @@ import {
   shouldFallbackToRag,
 } from "@/lib/chat/routing-policy";
 import { logChatRoute } from "./telemetry";
-import { streamOpenAIAnswer } from "@/lib/chat/stream-response";
+import { isSynthesisRequest, streamOpenAIAnswer } from "@/lib/chat/stream-response";
 import { jsonAnswer } from "./smalltalk";
 import { buildClarificationAnswer } from "@/lib/chat/clarification";
 import { lazyResolveSqlEntities } from "@/lib/query/entity-resolver";
-
-export function isSynthesisRequest(message: string): boolean {
-  if (/\b(role|job|responsibilit|position|designation|title|summariz|summary|overview|analy[sz]|explain|opinion|think)\b/i.test(message)) {
-    return true;
-  }
-  if (/\bwhat\s+(?:do|does|did)\s+.*\b(do|handle|manage)\b/i.test(message)) {
-    return true;
-  }
-  return false;
-}
 
 export async function trySqlAnswer(
   parsed: ParsedQuery,
@@ -100,23 +90,7 @@ export async function trySqlAnswer(
         ctx.sessionId,
         finalParsed.kind,
         signal,
-        timings
-          ? {
-              tStart: timings.tStart,
-              normalization: Math.round(timings.dNormalization),
-              intentClassification: Math.round(timings.dResolveQuery),
-              sqlAnswerAttempt: Math.round(performance.now() - timings.tStart),
-              queryReformulation: 0,
-              queryExpansion: 0,
-              retrieval: 0,
-              expandedQueryCount: 1,
-              contextChars: directAnswer.length,
-              topScore: 1.0,
-              avgScore: 1.0,
-              confidenceOk: true,
-              historyEntityUsed: false,
-            }
-          : undefined,
+        timings?.tStart,
         emotion,
       );
     }
