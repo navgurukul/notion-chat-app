@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { isSessionResponse, requireSession } from "@/lib/auth/session";
-import { createOrReshareChatLink } from "@/lib/chat/share-link";
-import { revokeChatShareLink } from "@/lib/chat/share-revoke";
-import { getChatShareStatus } from "@/lib/chat/share-status";
+import { createOrReshareChatLink } from "@/lib/chat/share/share-link";
+import { revokeChatShareLink } from "@/lib/chat/share/share-revoke";
+import { getChatShareStatus } from "@/lib/chat/share/share-status";
 import { getOrCreateUser } from "@/lib/chat/store";
 
 type RouteContext = {
