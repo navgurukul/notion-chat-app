@@ -272,8 +272,9 @@ export async function runChatPipeline(session: Session, body: ChatRequestBody, s
         const gender = await getGenderOfPerson(person);
         if (gender === "female") currentState.lastFemale = person;
         else currentState.lastMale = person;
-        if (resolvedEntities?.person?.value === person) currentState.activePerson = {
-          id: person, name: person, confidence: resolvedEntities.person.confidence!, source: "retrieval",
+        const resolvedPerson = resolvedEntities?.person;
+        if (resolvedPerson && resolvedPerson.value === person) currentState.activePerson = {
+          id: person, name: person, confidence: resolvedPerson.confidence!, source: "retrieval",
         };
         changed = true;
       }
