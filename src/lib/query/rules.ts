@@ -244,6 +244,15 @@ function parseQueryByRulesInternal(question: string): RulesQuery {
   const qn = preprocessQuestion(question);
   const q = normalize(qn);
 
+  // Broad first-person requests refer to the signed-in user's own Notion
+  // activity. Keep this ahead of workspace directory rules below.
+  if (
+    /\b(?:all|any)\s+(?:the\s+)?(?:data|information|records|details|work|pages|tasks|projects)\b.*\b(?:related\s+to|about|for)\s+(?:me|myself)\b/i.test(q) ||
+    /\b(?:what|which)\s+(?:data|information|records|details|pages|tasks|projects)\b.*\b(?:related\s+to|about|for)\s+(?:me|myself)\b/i.test(q)
+  ) {
+    return { kind: "worked_on_list", personName: "me", raw: question, parserConfidence: 0.95 };
+  }
+
   const activityQuery = parseActivityQuery(qn, q);
   if (activityQuery) return activityQuery;
 
