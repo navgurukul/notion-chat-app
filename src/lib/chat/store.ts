@@ -260,13 +260,6 @@ export interface ActiveEntity {
   source: "rules" | "retrieval" | "llm";
 }
 
-export type PendingClarification = {
-  type: "person" | "project";
-  candidates: string[];
-  lastUserQueryPreCorrection: string;
-  oldEntityRaw?: string;
-};
-
 export type ConversationState = {
   activeProject?: ActiveEntity;
   activePerson?: ActiveEntity;
@@ -277,9 +270,6 @@ export type ConversationState = {
   lastIntent?: string;
   lastYear?: number;
   lastPage?: string;
-  lastRewrittenQuery?: string;
-  lastUserQueryPreCorrection?: string;
-  pendingClarification?: PendingClarification;
 };
 
 // Note: Single-instance in-memory cache assumption. If deploying multi-region or on multi-instance serverless,

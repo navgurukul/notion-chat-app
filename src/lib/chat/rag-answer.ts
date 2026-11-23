@@ -1,4 +1,3 @@
-import type { Session } from "next-auth";
 import type { ParsedQuery } from "@/lib/query/types";
 import { PipelineContext, logChatRoute, logRetrievalDiagnostics } from "./telemetry";
 import { shouldExpandRagQuery } from "@/lib/chat/routing-policy";
@@ -119,7 +118,6 @@ function buildRagSearchPlan(parsed: ParsedQuery, ctx: PipelineContext): RagSearc
 export async function tryRagAnswer(
   parsed: ParsedQuery,
   ctx: PipelineContext,
-  session: Session,
   timings: {
     tStart: number;
     dNormalization: number;
@@ -320,18 +318,7 @@ export async function tryRagAnswer(
 
     logRetrievalDiagnostics(finalParsed, searchQueries, confidence, chunkHits);
 
-    if (!notionContext.trim()) {
-      return jsonAnswer(
-        ctx.sessionId,
-        ctx.sqlCandidate
-          ? `Exact answer confirm nahi kar paya. Notion me sabse close match ye mila:\n\n${ctx.sqlCandidate}`
-          : `Notion me nahi mila. Page ka exact naam try karo, ya page owner se pucho.`,
-        userEmotion,
-        signal,
-      );
-    }
-
-    if (!confidence.ok) {
+    if (!notionContext.trim() || !confidence.ok) {
       return jsonAnswer(
         ctx.sessionId,
         ctx.sqlCandidate
@@ -352,21 +339,7 @@ export async function tryRagAnswer(
       ctx.sessionId,
       finalParsed.kind,
       signal,
-      {
-        tStart: timings.tStart,
-        normalization: Math.round(timings.dNormalization),
-        intentClassification: Math.round(timings.dResolveQuery),
-        sqlAnswerAttempt: Math.round(timings.dSqlAnswer),
-        queryReformulation: 0,
-        queryExpansion: 0,
-        retrieval: 0,
-        expandedQueryCount: searchQueries.length,
-        contextChars: notionContext.length,
-        topScore: confidence.topScore,
-        avgScore: confidence.avgScore,
-        confidenceOk: confidence.ok,
-        historyEntityUsed: isVagueFollowUp && (!!lastProject || !!lastPerson),
-      },
+      timings.tStart,
       userEmotion,
     );
   } catch (error) {

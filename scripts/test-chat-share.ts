@@ -4,10 +4,10 @@
  */
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
-import { createOrReshareChatLink } from "@/lib/chat/share-link";
-import { getChatShareStatus } from "@/lib/chat/share-status";
-import { revokeChatShareLink } from "@/lib/chat/share-revoke";
-import { hashShareToken } from "@/lib/chat/share-token";
+import { createOrReshareChatLink } from "@/lib/chat/share/share-link";
+import { getChatShareStatus } from "@/lib/chat/share/share-status";
+import { revokeChatShareLink } from "@/lib/chat/share/share-revoke";
+import { hashShareToken } from "@/lib/chat/share/share-token";
 import { pool, query } from "@/lib/db/postgres";
 
 const marker = `chat-share-test-${randomUUID()}`;

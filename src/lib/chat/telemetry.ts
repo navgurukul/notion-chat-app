@@ -41,6 +41,7 @@ export type PipelineTrace = {
     intent_classifier_ms?: number;
     sql_ms?: number;
     rag_ms?: number;
+    retrieval_ms?: number;
     reformulation_ms?: number;
     total_ms?: number;
   };
@@ -66,38 +67,6 @@ export type PipelineContext = {
   isWrongAnswerRetry?: boolean;
   sqlCandidate?: string;
 };
-
-export type PipelineTimings = {
-  normalization: number;
-  intentClassification: number;
-  sqlAnswerAttempt: number;
-  queryReformulation: number;
-  queryExpansion: number;
-  retrieval: number;
-  expandedQueryCount: number;
-  contextChars: number;
-  topScore: number;
-  avgScore: number;
-  confidenceOk: boolean;
-  historyEntityUsed: boolean;
-};
-
-export function createEmptyTimings(): PipelineTimings {
-  return {
-    normalization: 0,
-    intentClassification: 0,
-    sqlAnswerAttempt: 0,
-    queryReformulation: 0,
-    queryExpansion: 0,
-    retrieval: 0,
-    expandedQueryCount: 0,
-    contextChars: 0,
-    topScore: 0,
-    avgScore: 0,
-    confidenceOk: true,
-    historyEntityUsed: false,
-  };
-}
 
 // Latency Budgets (in milliseconds)
 //

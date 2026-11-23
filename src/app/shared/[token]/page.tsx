@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { authOptions } from "@/lib/auth/options";
-import { getSharedChatByToken } from "@/lib/chat/share-read";
+import { getSharedChatByToken } from "@/lib/chat/share/share-read";
 import { hasNavgurukulDomainAccess } from "@/lib/shared/navgurukul-domain";
 
 export const metadata: Metadata = {

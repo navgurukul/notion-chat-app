@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { generateShareToken, hashShareToken } from "../src/lib/chat/share-token";
+import { generateShareToken, hashShareToken } from "../src/lib/chat/share/share-token";
 
 const token = generateShareToken();
 const secondToken = generateShareToken();

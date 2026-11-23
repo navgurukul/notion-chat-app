@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { isSessionResponse, requireSession } from "@/lib/auth/session";
 import { hasNavgurukulDomainAccess } from "@/lib/shared/navgurukul-domain";
-import { getSharedChatByToken } from "@/lib/chat/share-read";
+import { getSharedChatByToken } from "@/lib/chat/share/share-read";
 
 type RouteContext = {
   params: Promise<{ token: string }>;

@@ -75,6 +75,11 @@ For a question or statement asking whether a named person holds a role at NavGur
 - Otherwise say **Unknown** and explain that the synced Notion context does not confirm the role.
 `.trimStart();
 
+export function isSynthesisRequest(message: string): boolean {
+  return /\b(role|job|responsibilit|position|designation|title|summariz|summary|overview|analy[sz]|explain|opinion|think)\b/i.test(message) ||
+    /\bwhat\s+(?:do|does|did)\s+.*\b(do|handle|manage)\b/i.test(message);
+}
+
 function isBooleanQuestion(message: string): boolean {
   const normalized = message.trim().toLowerCase();
   return /^(is|does|are|was|were|has|have|had|can|should|will|do|did)\b/i.test(normalized) ||
@@ -91,8 +96,7 @@ function buildEnrichedContext(
   queryKind: QueryKind | null,
   message: string,
 ): string {
-  const isSynthesis = /\b(role|job|responsibilit|position|designation|title|summariz|summary|overview|analy[sz]|explain|opinion|think)\b/i.test(message) ||
-    /\bwhat\s+(?:do|does|did)\s+.*\b(do|handle|manage)\b/i.test(message);
+  const isSynthesis = isSynthesisRequest(message);
 
   let directive = BASE_DIRECTIVE;
   if (isSynthesis) {
@@ -120,21 +124,7 @@ export async function streamOpenAIAnswer(
   sessionId: string | null,
   queryKind: QueryKind | null = null,
   signal?: AbortSignal,
-  telemetryMetadata?: {
-    tStart: number;
-    normalization: number;
-    intentClassification: number;
-    sqlAnswerAttempt: number;
-    queryReformulation: number;
-    queryExpansion: number;
-    retrieval: number;
-    expandedQueryCount: number;
-    contextChars: number;
-    topScore: number;
-    avgScore: number;
-    confidenceOk: boolean;
-    historyEntityUsed: boolean;
-  },
+  tStart = performance.now(),
   userEmotion?: string,
 ) {
   const enrichedContext = buildEnrichedContext(notionContext, queryKind, message);
@@ -184,47 +174,13 @@ export async function streamOpenAIAnswer(
         controller.enqueue(encoder.encode(errorText));
       } finally {
         const tEnd = performance.now();
-        const totalDuration = tEnd - (telemetryMetadata?.tStart ?? tStreamStart);
-        const ttft = firstTokenTime > 0 ? (firstTokenTime - (telemetryMetadata?.tStart ?? tStreamStart)) : 0;
-
-        if (telemetryMetadata) {
-          console.log(
-            "[telemetry]",
-            JSON.stringify({
-              kind: queryKind,
-              expandedQueryCount: telemetryMetadata.expandedQueryCount,
-              contextChars: telemetryMetadata.contextChars,
-              topScore: telemetryMetadata.topScore,
-              avgScore: telemetryMetadata.avgScore,
-              confidenceOk: telemetryMetadata.confidenceOk,
-              historyEntityUsed: telemetryMetadata.historyEntityUsed,
-              durations: {
-                normalization: telemetryMetadata.normalization,
-                intentClassification: telemetryMetadata.intentClassification,
-                sqlAnswerAttempt: telemetryMetadata.sqlAnswerAttempt,
-                queryReformulation: telemetryMetadata.queryReformulation,
-                queryExpansion: telemetryMetadata.queryExpansion,
-                retrieval: telemetryMetadata.retrieval,
-                getChatStream: Math.round(dGetChatStream),
-                ttft: Math.round(ttft),
-                total: Math.round(totalDuration),
-              },
-              ts: Date.now(),
-            }),
-          );
-        } else {
-          console.log(
-            "[telemetry]",
-            JSON.stringify({
-              kind: queryKind,
-              durations: {
-                getChatStream: Math.round(dGetChatStream),
-                total: Math.round(totalDuration),
-              },
-              ts: Date.now(),
-            }),
-          );
-        }
+        const totalDuration = tEnd - tStart;
+        const ttft = firstTokenTime > 0 ? firstTokenTime - tStart : 0;
+        console.log("[telemetry]", JSON.stringify({
+          kind: queryKind,
+          durations: { getChatStream: Math.round(dGetChatStream), ttft: Math.round(ttft), total: Math.round(totalDuration) },
+          ts: Date.now(),
+        }));
 
         const answerForStorage = extractFinalAnswer(rawAnswer);
         if (sessionId && answerForStorage && !signal?.aborted) {

@@ -12,6 +12,56 @@ import "dotenv/config";
 import path from "node:path";
 import { evaluateRetrieval } from "./evaluate-retrieval";
 import { evaluateFaithfulness } from "./evaluate-faithfulness";
+import { runChatPipeline } from "../src/lib/chat/pipeline";
+import { readGoldenDataset } from "./golden-dataset";
+import type { Session } from "next-auth";
+
+type ClarificationResult = { id: string; query: string; clarified: boolean };
+
+async function isClarificationResponse(response: unknown): Promise<boolean> {
+  if (!response || typeof response !== "object") return false;
+  if ((response as { type?: unknown }).type === "clarification") return true;
+
+  const maybeResponse = response as {
+    clone?: () => { json?: () => Promise<unknown> };
+    json?: () => Promise<unknown>;
+  };
+  try {
+    const body = typeof maybeResponse.clone === "function"
+      ? maybeResponse.clone()
+      : maybeResponse;
+    if (typeof body.json !== "function") return false;
+    const payload = await body.json();
+    return Boolean(payload && typeof payload === "object" &&
+      (payload as { type?: unknown }).type === "clarification");
+  } catch {
+    return false;
+  }
+}
+
+async function evaluateClarification(datasetPath: string): Promise<ClarificationResult[]> {
+  const cases = readGoldenDataset(datasetPath).filter((item) => item.expected_behavior === "clarify");
+  const session = {
+    user: { name: "Evaluation", email: "evaluation@example.invalid" },
+    expires: new Date(Date.now() + 60_000).toISOString(),
+  } as Session;
+
+  const results: ClarificationResult[] = [];
+  for (const item of cases) {
+    let clarified = false;
+    try {
+      const response = await runChatPipeline(session, {
+        message: item.query,
+        history: item.history ?? [],
+      });
+      clarified = await isClarificationResponse(response);
+    } catch (error) {
+      console.warn(`[eval-clarification] Pipeline failed for "${item.query}":`, error);
+    }
+    results.push({ id: item.id, query: item.query, clarified });
+  }
+  return results;
+}
 
 async function main() {
   const startTime = Date.now();
@@ -19,7 +69,8 @@ async function main() {
   console.log("🚀 STARTING RAG SYSTEM EVALUATION BENCHMARK SUITE");
   console.log("=======================================================\n");
 
-  const datasetPath = path.join(process.cwd(), "eval", "golden-dataset.json");
+  const datasetPath = process.argv[2] || path.join(process.cwd(), "eval", "golden-dataset.json");
+  const answerCaseCount = readGoldenDataset(datasetPath).filter((item) => item.expected_behavior === "answer").length;
 
   // Step 1: Retrieval Evaluation
   console.log("1️⃣  Evaluating Retrieval Pipeline (Recall@5, Precision@5, NDCG@5)...");
@@ -50,13 +101,18 @@ async function main() {
     console.log("\n⚠️  Skipping Faithfulness evaluation (OPENAI_API_KEY not set).");
   }
 
+  console.log("\n3️⃣  Evaluating Clarification Behavior...");
+  const clarificationResults = await evaluateClarification(datasetPath);
+  const clarificationPasses = clarificationResults.filter((result) => result.clarified).length;
+  console.log("✓ Clarification evaluation complete.");
+
   const durationSec = ((Date.now() - startTime) / 1000).toFixed(2);
 
   // Step 3: Final Benchmark Report
   console.log("\n=======================================================");
   console.log("📊 FINAL RAG EVALUATION BENCHMARK SUMMARY");
   console.log("=======================================================");
-  console.log(` Dataset Size:         ${retrievalResults.length} Queries`);
+  console.log(` Answer Cases:         ${answerCaseCount} Queries`);
   console.log(` Benchmark Run Time:   ${durationSec}s`);
   console.log("-------------------------------------------------------");
   console.log(` 🔹 Recall@5:           ${(avgRecall * 100).toFixed(1)}%`);
@@ -65,6 +121,7 @@ async function main() {
   if (faithfulnessRan) {
     console.log(` 🔹 Faithfulness Score: ${(avgFaithfulness * 100).toFixed(1)}%`);
   }
+  console.log(` 🔹 Clarification Pass Rate: ${clarificationPasses}/${clarificationResults.length}`);
   console.log("=======================================================\n");
 }
 
