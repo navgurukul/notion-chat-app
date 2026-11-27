@@ -170,7 +170,7 @@ export default function ChatShareDialog({ sessionId, isOpen, onClose }: ChatShar
 
   const stopSharing = async () => {
     if (!sessionId || actionLockRef.current) return;
-    if (!window.confirm("Stop sharing? The current link will stop working.")) return;
+    // if (!window.confirm("Stop sharing? The current link will stop working.")) return;
     actionLockRef.current = true;
     const controller = new AbortController();
     createControllerRef.current = controller;
@@ -262,7 +262,7 @@ export default function ChatShareDialog({ sessionId, isOpen, onClose }: ChatShar
               {isCreating ? "Creating link…" : "Create new link"}
             </button>
             {actionError && <p role="alert" className="text-sm text-red-400">Something went wrong. Please try again.</p>}
-            <button type="button" onClick={stopSharing} disabled={isCreating} className="w-full rounded-xl border border-white/10 bg-white/[0.06] px-4 py-3 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 disabled:opacity-50">Stop sharing</button>
+            {/* <button type="button" onClick={stopSharing} disabled={isCreating} className="w-full rounded-xl border border-white/10 bg-white/[0.06] px-4 py-3 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 disabled:opacity-50">Stop sharing</button> */}
           </div>
         )}
         {view === "create" && (
@@ -300,7 +300,7 @@ export default function ChatShareDialog({ sessionId, isOpen, onClose }: ChatShar
             {copyFallback && <p role="status" className="mt-2 text-xs text-white/60">Press Ctrl+C to copy</p>}
             {actionError && <p role="alert" className="mt-2 text-sm text-red-400">Something went wrong. Please try again.</p>}
             <p className="mt-3 text-xs text-white/45">This link is shown only once. Copy it now.</p>
-            <button type="button" onClick={stopSharing} disabled={isCreating} className="mt-4 w-full rounded-xl border border-white/10 bg-white/[0.06] px-4 py-3 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 disabled:opacity-50">Stop sharing</button>
+            {/* <button type="button" onClick={stopSharing} disabled={isCreating} className="mt-4 w-full rounded-xl border border-white/10 bg-white/[0.06] px-4 py-3 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 disabled:opacity-50">Stop sharing</button> */}
           </div>
         )}
       </section>
